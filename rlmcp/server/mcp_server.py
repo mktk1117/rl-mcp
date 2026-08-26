@@ -650,6 +650,28 @@ def create_mcp_server(
     """Restore parameters to the values they had when training started."""
     return _call(handle, "reset_parameters", keys=keys)
 
+  @mcp.tool()
+  def reset_environments(
+      env_ids: Optional[List[int]] = None,
+      where: Optional[Dict[str, Any]] = None,
+      rationale: str = "",
+  ) -> Dict[str, Any]:
+    """Start fresh episodes in some or all environments.
+
+    Episodes, not parameter values -- ``reset_parameters`` is the other one.
+    Use this after an edit that left the robots in a state worth clearing, or
+    to see a policy from the start of an episode instead of mid-recovery.
+
+    Args:
+      env_ids: explicit environment indices; omit for every environment.
+      where: pick them by description instead, in whatever vocabulary this
+        run's extensions provide -- e.g. {"terrain": "pyramid_stairs"}. See
+        ``get_training_status`` for what this environment supports.
+      rationale: why; recorded in the event log.
+    """
+    return _call(handle, "reset_envs", env_ids=env_ids, where=where,
+                 rationale=rationale)
+
   # Seeing the robot.
 
   @mcp.tool()

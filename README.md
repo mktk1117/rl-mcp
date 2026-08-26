@@ -57,6 +57,7 @@ rlmcp set reward.action_rate_l2.weight -0.25 --why "ankles chattering at 15 Hz"
 rlmcp commands                                 # what this run accepts
 rlmcp run set_terrain terrains='["flat","random_rough"]' max_level=4
 rlmcp curriculum advance --why "flat is solved"
+rlmcp reset-envs --where terrain=pyramid_stairs  # fresh episodes, on the stairs only
 rlmcp checkpoint before-experiment             # ... and `rlmcp load` to undo
 rlmcp pause / rlmcp resume / rlmcp stop
 ```
@@ -313,6 +314,37 @@ session is itself a session: it publishes into `<run>/rlmcp/play/<stamp>/` and
 can be steered from another shell while you watch it, but it is marked as a play
 session so it never becomes the answer to "the latest session here".
 
+### Steering the thing you are watching
+
+A play session answers the same commands a training run does — `set`, `run`,
+`shot`, `video`, `trace`, `diagnose`, `metrics`, `pause`, `resume` — against
+the directory it printed at startup. Three of them are what make watching a
+policy an investigation rather than a screening:
+
+```bash
+rlmcp --session <play dir> reset-envs                    # see the opening again
+rlmcp --session <play dir> run load_policy checkpoint=model_2000.pt
+rlmcp --session <play dir> stop                          # close it from a shell
+```
+
+`reset-envs` restarts episodes, so you can watch the start of a behaviour
+instead of waiting for the robot to fail into one; it is a core command and is
+just as useful mid-training. `stop` ends the session the way closing the window
+does — the viewer unwinds, the session records its end, and nobody is shown a
+traceback for having asked.
+
+`load_policy` is the interesting one. The point is comparison: the conditions
+you restored and the camera you set up survive, and only the weights change.
+It refuses without touching the running policy if the file is missing or if the
+weights load but cannot act on this environment — a swap that half-applies is
+worse than one that does not happen. And because a checkpoint from another run
+may have been trained at another rung, the response always names the stage it
+trained at next to the stage the environment is in. When those disagree the
+conditions are deliberately *not* changed — comparing two policies needs the
+environment to hold still — and the payload says so loudly. Pass `replay=true`
+to restore that checkpoint's own conditions instead. `run list_policies` names
+the checkpoints sitting beside the one currently acting.
+
 ## What can be tuned live
 
 `list_parameters` discovers everything from the running environment — for the G1
@@ -330,6 +362,9 @@ rough task that is 97 knobs:
 Values are shape- and type-checked, applied between rollout batches (never
 mid-step), and every change is written to the session event log with the
 rationale the caller gave. `reset_parameters` restores the startup values.
+(`rlmcp reset-envs` is the other reset and does an unrelated thing: it starts
+fresh *episodes*, leaving every parameter where it is. Narrow it with
+`--env-id` or with the same `--where` query `shot` takes.)
 Magnitudes are *not* second-guessed. The only bounds the adapter declares are
 the ones true by a parameter's definition — `gamma` and `lam` live in `[0, 1]`,
 a learning rate or a gradient-norm ceiling cannot be negative. Everything else
@@ -625,7 +660,10 @@ for `shot` and `video` and does not need the environment's own render mode.
 **`rlmcp stop` arrives as an exception.** rsl_rl's `learn()` has no stop hook,
 so the request is raised as `TrainingStopped` inside it. Catch it and save: an
 aborted run that left no checkpoint has nothing to replay, and a clip of the
-final policy is the deliverable.
+final policy is the deliverable. (`TrainingStopped` is a
+`rlmcp.core.controller.SessionStopped`, which is the same signal named for what
+it is rather than for the loop it usually interrupts — a play session's viewer
+loop is stopped by the same object. Catching either name works.)
 
 Launch it with your package importable:
 

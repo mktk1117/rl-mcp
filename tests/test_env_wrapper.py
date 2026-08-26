@@ -147,3 +147,23 @@ def test_a_record_run_binds_the_session_to_the_record(wrapper_cls, tmp_path):
   assert wrapper.rlmcp.records is not None
   reloaded = open_store(tmp_path / "records").get_record(record.id)
   assert reloaded is not None
+
+
+def test_a_stop_unwinds_as_the_core_signal_under_the_backend_name(wrapper_cls,
+                                                                  tmp_path):
+  """`TrainingStopped` is what the training entrypoints catch, and a play
+  session's viewer loop is not a training entrypoint. Both catch the same
+  object: the backend name is the core signal, so neither side has to learn
+  about the other."""
+  from rlmcp.adapters.mjlab.env_wrapper import TrainingStopped
+  from rlmcp.core.controller import SessionStopped
+
+  assert issubclass(TrainingStopped, SessionStopped)
+
+  wrapper = wrapper_cls(wrappable_env(), session_dir=tmp_path / "session")
+  wrapper.rlmcp.run_command("stop_training", reason="seen enough")
+
+  with pytest.raises(SessionStopped) as caught:
+    wrapper._service(iteration=1)
+
+  assert "seen enough" in str(caught.value)

@@ -34,7 +34,7 @@ import torch
 
 from rlmcp.adapters.mjlab.runner_adapter import MjlabRunnerAdapter
 from rlmcp.adapters.mjlab.sim_adapter import MjlabSimAdapter
-from rlmcp.core.controller import RlMcp
+from rlmcp.core.controller import RlMcp, SessionStopped
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.adapters.mjlab.viz_check import check_marker_colors
 from rlmcp.core.palette import format_report
@@ -43,11 +43,17 @@ from rlmcp.extensions import discover as discover_extensions
 CurriculumArg = Union[None, str, StageSchedule, Sequence[Any]]
 
 
-class TrainingStopped(RuntimeError):
+class TrainingStopped(SessionStopped):
   """Raised inside the training loop when an agent asks training to stop.
 
   The training entrypoint is expected to catch this, save a final checkpoint and
   exit cleanly -- rsl_rl's ``learn()`` has no stop hook of its own.
+
+  It is a :class:`~rlmcp.core.controller.SessionStopped`, which is the same
+  signal named for what it is rather than for the loop it usually interrupts:
+  the wrapper services a play session too, where there is no training to stop
+  and no checkpoint to save, and ``rlmcp play`` catches the base class. Nothing
+  that catches ``TrainingStopped`` needs to change.
   """
 
 

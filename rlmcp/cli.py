@@ -8,6 +8,7 @@ system debuggable without an LLM in the loop::
     rlmcp params --contains foot
     rlmcp set reward.foot_slip.weight -0.3 --why "feet skating on slopes"
     rlmcp diagnose --seconds 4 --where terrain=pyramid_stairs
+    rlmcp reset-envs --where terrain=pyramid_stairs   # fresh episodes, there only
     rlmcp commands                       # what this run accepts, extensions included
     rlmcp run set_terrain terrains='["flat","random_rough"]' max_level=4
     rlmcp curriculum advance
@@ -730,6 +731,19 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("reset", help="Restore parameters to their startup values")
   p.add_argument("keys", nargs="*")
 
+  p = sub.add_parser(
+      "reset-envs",
+      help="Start fresh episodes in some or all environments",
+      description="Restarts episodes, not parameter values -- 'reset' is the "
+                  "one that puts the knobs back. With no arguments every "
+                  "environment restarts.",
+  )
+  p.add_argument("--env-id", type=int, action="append", dest="env_ids", metavar="N",
+                 help="Reset only this environment. Repeatable.")
+  p.add_argument("--where", nargs="*", metavar="KEY=VALUE",
+                 help="Reset the envs matching a description, e.g. terrain=pyramid_stairs")
+  p.add_argument("--why", default="", help="Rationale recorded in the event log")
+
   p = sub.add_parser("metrics", help="Show recent metric values")
   p.add_argument("names", nargs="*")
   p.add_argument("--last-n", type=int, default=30)
@@ -836,7 +850,7 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("events", help="Show recent session events")
   p.add_argument("--last-n", type=int, default=25)
 
-  p = sub.add_parser("stop", help="Stop training cleanly")
+  p = sub.add_parser("stop", help="Stop a run -- or a play session -- cleanly")
   p.add_argument("--why", default="")
 
   rec = sub.add_parser("record", help="Run records: plans, outcomes, lineage")
@@ -1126,6 +1140,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                  value=_parse_value(args.value), rationale=args.why)
   if cmd == "reset":
     return _call(session, "reset_parameters", timeout, keys=args.keys or None)
+  if cmd == "reset-envs":
+    return _call(session, "reset_envs", timeout, env_ids=args.env_ids or None,
+                 where=_kv_pairs(args.where) or None, rationale=args.why)
   if cmd == "metrics":
     return _call(session, "get_metrics", timeout, names=args.names or None,
                  last_n=args.last_n)

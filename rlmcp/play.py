@@ -26,6 +26,21 @@ task under the policy while you watch it. It writes itself down as a *play*
 session, which session discovery skips, so it never becomes the answer to
 "the latest session here".
 
+Three of those controls are what make watching a policy an investigation rather
+than a screening:
+
+* ``rlmcp reset-envs`` starts fresh episodes, so you can see the opening of a
+  behaviour again instead of waiting for the robot to fail into one. That verb
+  is core, not play -- it is just as useful mid-training.
+* ``rlmcp stop`` ends the session the way closing the window does: the viewer
+  unwinds, the session records its end, and nobody is shown a traceback for
+  having asked.
+* ``rlmcp run load_policy checkpoint=<other.pt>`` swaps the acting policy
+  between steps. The point is comparison: the conditions you restored and the
+  camera you set up survive, and only the weights change. See
+  :class:`PolicySwap` for what happens when the new checkpoint was trained
+  somewhere else on the ladder.
+
 Nothing above the ``run_play`` entry point imports a simulator, torch or an
 encoder, so ``rlmcp --help`` stays as cheap as it has always been.
 """
@@ -36,12 +51,14 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from rlmcp.core.extensions import Extension
 from rlmcp.core.replay import (
     Conditions,
     apply_conditions,
     read_conditions,
+    read_events,
     with_overrides,
 )
 
@@ -184,6 +201,32 @@ def task_for(session_dir: Optional[Path]) -> str:
   return str(session_info(session_dir).get("task") or "")
 
 
+def stage_at_iteration(session_dir: Optional[Path], iteration: int) -> str:
+  """The curriculum stage a run was on at ``iteration``; '' if it had none.
+
+  A checkpoint's file name carries the iteration it was saved at, and the
+  session's log carries the iteration at which each stage was entered. Put
+  together they answer the only question a policy swap has to ask: was the
+  policy about to start acting trained under the conditions currently applied?
+
+  A checkpoint whose name says nothing (``iteration`` below zero) reads as the
+  end of the run, which is where an unnamed checkpoint usually comes from.
+  """
+  if session_dir is None:
+    return ""
+  current = ""
+  for event in read_events(session_dir):
+    if event.get("kind") != "curriculum_stage":
+      continue
+    entered = int(event.get("iteration") or 0)
+    if iteration >= 0 and entered > iteration:
+      break
+    name = str(event.get("to") or "")
+    if name:
+      current = name
+  return current
+
+
 def packages_to_import(cfg: PlayConfig) -> List[str]:
   """Packages that must be imported before the task registry knows the task.
 
@@ -198,6 +241,290 @@ def packages_to_import(cfg: PlayConfig) -> List[str]:
     if name and name not in found:
       found.append(name)
   return found
+
+
+# Swapping the policy.
+
+
+class SwappablePolicy:
+  """The callable in the rollout, pointing at whichever policy is current.
+
+  A viewer is handed a policy once, at construction, and then calls it forever.
+  So the thing it is handed is this: an object that forwards, and that can be
+  made to forward somewhere else. Nothing downstream is told about the change,
+  because from the loop's point of view nothing changed -- the same object is
+  still being called with the same observations.
+
+  The assignment happens inside a command handler, which the controller runs at
+  a service boundary between steps, so no step ever sees half a swap.
+  """
+
+  def __init__(self, policy: Any, checkpoint: Path | str):
+    self.policy = policy
+    self.checkpoint = Path(checkpoint)
+    self.swaps: List[Dict[str, Any]] = []
+
+  def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    return self.policy(*args, **kwargs)
+
+  def __getattr__(self, name: str) -> Any:
+    # Reached only for names this object does not have, so a viewer that pokes
+    # at the policy itself still finds what it is looking for.
+    try:
+      policy = self.__dict__["policy"]
+    except KeyError:  # pragma: no cover - only during a half-built copy.
+      raise AttributeError(name) from None
+    return getattr(policy, name)
+
+  def swap(self, policy: Any, checkpoint: Path | str) -> Path:
+    """Point at a new policy; returns the checkpoint that was acting before."""
+    previous = self.checkpoint
+    self.policy = policy
+    self.checkpoint = Path(checkpoint)
+    return previous
+
+  def __repr__(self) -> str:  # pragma: no cover - debugging aid.
+    return f"SwappablePolicy({self.checkpoint.name})"
+
+
+class PolicySwap(Extension):
+  """``load_policy``: change the acting policy without restarting the session.
+
+  Registered by ``rlmcp play`` against its own controller rather than living in
+  the core, because the thing being swapped only exists in a play session: an
+  inference policy inside a rollout that no runner owns. A training run's
+  weights belong to its runner, and putting different ones there is
+  ``load_checkpoint``, which is a different operation with different
+  consequences. An :class:`~rlmcp.core.extensions.Extension` is the sanctioned
+  way to contribute a verb the core does not know, and it is the right shape
+  here rather than a play-owned registration: going through the extension
+  registry is what makes ``load_policy`` reachable from ``rlmcp run``, from MCP
+  ``run_command`` and from a curriculum stage at once, and what puts the acting
+  checkpoint into ``rlmcp status`` for free.
+
+  **Conditions.** A checkpoint from another run may have been trained at
+  another rung of the curriculum, and loading its weights without its
+  conditions reproduces exactly the bug :mod:`rlmcp.core.replay` exists to
+  prevent -- a good policy shown failing at a task it was never asked to do.
+  Three answers were possible; this one holds the conditions still and says so
+  loudly, because the reason to swap a policy mid-session is to compare it
+  against the last one, and a comparison whose environment changed underneath
+  it measures nothing. Re-restoring is one argument away (``replay=true``), and
+  every response carries the stage the checkpoint trained at next to the stage
+  the environment is in, so the mismatch cannot be missed by anything reading
+  the payload.
+
+  Everything the swap needs is injected, so the command is exercisable without
+  a simulator: ``load`` turns a path into a policy, ``probe`` makes a policy act
+  once before anything depends on it, ``restore`` replays a set of conditions.
+  """
+
+  name = "play_policy"
+
+  def __init__(
+      self,
+      holder: SwappablePolicy,
+      load: Callable[[Path], Any],
+      session_dir: Optional[Path | str] = None,
+      stage: str = "",
+      restore: Optional[Callable[[Conditions], Dict[str, Any]]] = None,
+      probe: Optional[Callable[[Any], None]] = None,
+  ):
+    super().__init__(env=None)
+    self.holder = holder
+    self.session_dir = Path(session_dir) if session_dir else None
+    self.stage = stage or ""
+    self._load = load
+    self._restore = restore
+    self._probe = probe
+
+  def available(self) -> bool:
+    return True
+
+  def commands(self) -> Dict[str, Callable[..., Any]]:
+    return {
+        "load_policy": self.cmd_load_policy,
+        "list_policies": self.cmd_list_policies,
+    }
+
+  def describe(self) -> Dict[str, Any]:
+    return {
+        "checkpoint": str(self.holder.checkpoint),
+        "iteration": checkpoint_iteration(self.holder.checkpoint),
+        "stage": self.stage or None,
+        "swaps": len(self.holder.swaps),
+    }
+
+  # Commands.
+
+  def cmd_load_policy(
+      self, checkpoint: str, replay: bool = False, stage: str = ""
+  ) -> Dict[str, Any]:
+    """Act with a different checkpoint's weights from the next step onwards.
+
+    ``checkpoint`` is a .pt file, or a run directory to take the latest from.
+    ``replay`` restores the conditions *that* checkpoint was trained under
+    before swapping, which is what you want when it comes from another run and
+    not what you want when you are comparing two policies on one environment.
+    ``stage`` picks which of its stages to restore, and means nothing without
+    ``replay``.
+
+    Refuses without touching the running policy if the file is missing, if the
+    weights do not fit this task, or if they load but cannot produce an action
+    here. A swap that half-applies is worse than one that does not happen.
+    """
+    path = find_checkpoint(checkpoint)
+    origin = session_for(path)
+    report = self._conditions_report(path, origin)
+
+    # Load and prove the fit first: until the last two statements of this
+    # method, nothing the loop touches has moved.
+    policy = self._load(path)
+    self._fit_or_refuse(policy, path)
+
+    if replay:
+      wanted = stage or report["checkpoint_stage"] or ""
+      report.update(self._replay_from(origin, wanted))
+    elif stage:
+      raise PlayError(
+          "stage means nothing without replay=true: it names which of the "
+          "checkpoint's own stages to restore, and without replay no "
+          "conditions are restored at all."
+      )
+
+    previous = self.holder.swap(policy, path)
+    entry = {
+        "checkpoint": str(path),
+        "iteration": checkpoint_iteration(path),
+        "previous_checkpoint": str(previous),
+        "trained_session": str(origin) if origin else None,
+        "conditions": report,
+    }
+    self.holder.swaps.append(entry)
+    if self.context is not None:
+      self.context.append_event("load_policy", entry)
+    return {"loaded": True, **entry}
+
+  def cmd_list_policies(self) -> Dict[str, Any]:
+    """Checkpoints that can be loaded here: the acting one and its siblings."""
+    current = self.holder.checkpoint
+    found = {current}
+    parent = current.parent
+    for directory in (parent, parent / "checkpoints",
+                      parent.parent, parent.parent / "checkpoints"):
+      try:
+        found.update(p for p in directory.glob(_CHECKPOINT_GLOB) if p.is_file())
+      except OSError:
+        continue
+    return {
+        "current": str(current),
+        "checkpoints": [
+            {
+                "path": str(p),
+                "iteration": checkpoint_iteration(p),
+                "current": p == current,
+            }
+            for p in sorted(found, key=lambda p: (checkpoint_iteration(p), p.name))
+        ],
+    }
+
+  # The conditions question.
+
+  def _conditions_report(
+      self, path: Path, origin: Optional[Path]
+  ) -> Dict[str, Any]:
+    """Where this checkpoint was trained, against where the environment is.
+
+    Always present in the response, mismatch or not, and so is ``warning`` --
+    null when there is nothing to say. An agent reading the payload should
+    never have to infer from a missing key that the two agree.
+    """
+    trained = stage_at_iteration(origin, checkpoint_iteration(path))
+    same_run = origin is not None and self.session_dir is not None and (
+        Path(origin) == self.session_dir
+    )
+    known = origin is not None
+    report: Dict[str, Any] = {
+        "replayed": False,
+        "applied_stage": self.stage or None,
+        "checkpoint_stage": trained or None,
+        "same_run": bool(same_run),
+        # None, not False: "nobody can tell" is not the same answer as "they
+        # disagree", and an agent deciding what to do next needs the difference.
+        "match": (trained == self.stage) if known else None,
+        "warning": None,
+    }
+    if not known:
+      report["warning"] = (
+          f"There is no rlmcp session beside {path.name}, so there is no way "
+          "to tell what conditions it was trained under. The environment is "
+          f"left at '{self.stage or '(no curriculum)'}'; if the policy looks "
+          "broken, suspect that before suspecting the policy."
+      )
+    elif not report["match"]:
+      report["warning"] = (
+          f"{path.name} was trained at curriculum stage "
+          f"'{trained or '(no curriculum)'}', and this environment is set up "
+          f"for '{self.stage or '(no curriculum)'}'. The weights were loaded; "
+          "the conditions were NOT changed, which is deliberate -- comparing "
+          "two policies needs the environment to hold still. So this is a "
+          "policy doing a task it was not trained on, which looks exactly like "
+          "a bad policy. Pass replay=true to restore its own conditions "
+          "instead."
+      )
+    return report
+
+  def _replay_from(self, origin: Optional[Path], stage: str) -> Dict[str, Any]:
+    """Restore the conditions the new checkpoint's own run was in.
+
+    Failures to restore are reported, not raised: ``apply_conditions`` is
+    best-effort by design, and a stage whose command no longer exists is worth
+    saying out loud rather than worth abandoning the swap over.
+    """
+    if origin is None:
+      raise PlayError(
+          "replay=true needs the run this checkpoint came from, and there is "
+          "no rlmcp session beside it. Load it without replay to keep the "
+          "conditions this session already has."
+      )
+    if self._restore is None:
+      raise PlayError("This session cannot restore conditions.")
+    conditions = read_conditions(origin, stage or None)
+    restored = self._restore(conditions)
+    self.session_dir = Path(origin)
+    self.stage = conditions.stage or ""
+    return {
+        "replayed": True,
+        "applied_stage": self.stage or None,
+        "match": True,
+        "restored_parameters": len(restored.get("parameters") or {}),
+        "restored_calls": len(restored.get("calls") or []),
+        "restore_errors": list(restored.get("errors") or []),
+        "warning": None,
+    }
+
+  def _fit_or_refuse(self, policy: Any, path: Path) -> None:
+    """Make the new policy act once, while the old one is still driving.
+
+    Weights can load into a runner and still be the wrong shape for the
+    environment in front of them -- a task whose observation width changed
+    loads clean and fails on the first step, deep inside a viewer, with the old
+    policy already discarded. Acting once here turns that into a refusal.
+
+    A probe that cannot run (an environment that will not hand over an
+    observation) is not a reason to refuse; the swap goes ahead unproven.
+    """
+    if self._probe is None:
+      return
+    try:
+      self._probe(policy)
+    except Exception as exc:
+      raise PlayError(
+          f"{path.name} loaded, but could not produce an action for this "
+          f"environment ({type(exc).__name__}: {exc}). Its observations or "
+          "actions do not match the task running here. The policy in the loop "
+          "is unchanged."
+      ) from exc
 
 
 # Playing.
@@ -225,7 +552,24 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
   env, lab, agent_cfg, vec_env = _build_env(cfg, task, session_dir)
 
   conditions, restored = _restore_conditions(cfg, lab, session_dir)
-  policy = _load_policy(cfg, task, vec_env, checkpoint, agent_cfg)
+  policy = SwappablePolicy(
+      _load_policy(cfg, task, vec_env, checkpoint, agent_cfg), checkpoint
+  )
+  # Registered against this session's own controller, so `load_policy` is one
+  # more command a play session answers -- see PolicySwap for why it lives here
+  # and not in the core.
+  lab.add_extension(
+      PolicySwap(
+          holder=policy,
+          load=lambda path: _load_policy(cfg, task, vec_env, path, agent_cfg),
+          session_dir=session_dir,
+          stage=conditions.stage,
+          restore=lambda restored_conditions: apply_conditions(
+              lab, restored_conditions
+          ),
+          probe=_policy_probe(vec_env),
+      )
+  )
 
   result: Dict[str, Any] = {
       "mode": cfg.mode,
@@ -253,7 +597,57 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
       vec_env.close()
     except Exception:
       pass
+  if policy.swaps:
+    # The checkpoint named at the top is the one this ran up with; say which
+    # one it finished on rather than leaving that to be inferred.
+    result["policy_swaps"] = policy.swaps
+    result["final_checkpoint"] = str(policy.checkpoint)
   return result
+
+
+def _stop_state(lab: Any, error: Optional[BaseException] = None) -> str:
+  """Why a stepping loop ended, or '' if nobody asked it to end.
+
+  Two ways a requested stop reaches the loop that was running the policy, and
+  they must read the same afterwards. Usually it unwinds:
+  :class:`~rlmcp.core.controller.SessionStopped` is raised out of the wrapper's
+  ``step`` at a service boundary and ``error`` is that exception. But a viewer
+  that catches everything inside its own loop swallows it and returns normally,
+  and the reason a session ended should not depend on how thoroughly somebody
+  else's loop catches things -- so with no exception in hand the controller's
+  own flag is consulted instead.
+  """
+  if error is not None:
+    return str(error) or "stop requested"
+  if lab.should_stop():
+    return lab.stop_reason or "stop requested"
+  return ""
+
+
+def _policy_probe(vec_env: Any) -> Optional[Callable[[Any], None]]:
+  """A callable that makes a policy act once on this environment's observations.
+
+  Returns None when the environment cannot be asked for one, in which case
+  :meth:`PolicySwap._fit_or_refuse` has nothing to check and says so by
+  swapping anyway -- a check that cannot run is not evidence of a problem.
+  """
+  getter = getattr(vec_env, "get_observations", None)
+  if not callable(getter):
+    return None
+
+  def probe(policy: Any) -> None:
+    import torch
+
+    try:
+      obs = getter()
+    except Exception:
+      return  # The environment will not answer right now; not the policy's fault.
+    if isinstance(obs, tuple):
+      obs = obs[0]
+    with torch.no_grad():
+      policy(obs)
+
+  return probe
 
 
 def _choose_gl_backend(cfg: PlayConfig) -> None:
@@ -457,16 +851,27 @@ def _record(
   import numpy as np
   import torch
 
+  from rlmcp.core.controller import SessionStopped
+
   lab = env.rlmcp
   step_dt = float(getattr(env.unwrapped, "step_dt", 0.02))
   steps = max(1, int(round(cfg.seconds / step_dt)))
   fps = int(cfg.fps or round(1.0 / step_dt))
 
   frames: List[Any] = []
+  stopped = ""
   obs, _ = vec_env.reset()
   with torch.no_grad():
     for _ in range(steps):
-      obs, _, _, _ = vec_env.step(policy(obs))
+      try:
+        obs, _, _, _ = vec_env.step(policy(obs))
+      except SessionStopped as stop:
+        # `rlmcp stop` landed at a service boundary inside that step. The
+        # frames already recorded are still evidence, so the clip is written
+        # short rather than thrown away, and nobody is shown a traceback for
+        # having asked the session to end.
+        stopped = _stop_state(lab, stop)
+        break
       try:
         frames.append(np.asarray(lab.sim.render(0)).astype(np.uint8))
       except Exception as exc:
@@ -478,6 +883,8 @@ def _record(
             "installed; a headless machine needs an EGL-capable mujoco build."
         ) from exc
 
+  if not frames and stopped:
+    raise PlayError(f"Stopped before any frame was rendered ({stopped}).")
   if not frames:
     raise PlayError(f"Rendered no frames in {steps} steps.")
 
@@ -504,6 +911,8 @@ def _record(
       "seconds": round(len(frames) / max(fps, 1), 2),
       "size_mb": round(out.stat().st_size / 1e6, 2),
       "metrics": _headline(env),
+      "stopped": bool(stopped),
+      "stop_reason": stopped or None,
   }
 
 
@@ -542,7 +951,17 @@ def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any
   Both block until the window (or the browser tab) is closed, which is the
   point: this is a person looking at a robot. Neither is a hard dependency, so
   an install without them is told what it has rather than shown a traceback.
+
+  ``rlmcp stop`` is the other way out, for the person who is not at the window
+  -- an agent, or a shell on the far end of an ssh connection. It arrives as a
+  :class:`~rlmcp.core.controller.SessionStopped` raised out of the wrapper's
+  ``step`` at a service boundary, unwinds the viewer's loop, and is caught
+  here: from the caller's side that is the same clean exit closing the window
+  gives, and ``run_play`` closes the environment either way, which is what
+  writes the session's end.
   """
+  from rlmcp.core.controller import SessionStopped
+
   try:
     from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
   except ImportError as exc:
@@ -551,10 +970,16 @@ def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any
         "works and needs nothing but an offscreen renderer."
     ) from exc
 
+  lab = env.rlmcp
   if not cfg.quiet:
+    session = lab.session.dir
     print(
         f"[rlmcp-play] steer it from another shell:\n"
-        f"[rlmcp-play]   rlmcp --session {env.rlmcp.session.dir} status",
+        f"[rlmcp-play]   rlmcp --session {session} status\n"
+        f"[rlmcp-play]   rlmcp --session {session} reset-envs\n"
+        f"[rlmcp-play]   rlmcp --session {session} run load_policy "
+        f"checkpoint=<other.pt>\n"
+        f"[rlmcp-play]   rlmcp --session {session} stop",
         flush=True,
     )
   viewer_cls = NativeMujocoViewer if cfg.mode == "native" else ViserPlayViewer
@@ -567,8 +992,21 @@ def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any
         f"--mode {cfg.mode} needs a package this environment does not have "
         f"({exc}). --mode video still works."
     ) from exc
-  viewer.run()
-  return {"viewer": cfg.mode, "closed": True}
+
+  try:
+    viewer.run()
+  except SessionStopped as stop:
+    stopped = _stop_state(lab, stop)
+  else:
+    stopped = _stop_state(lab)
+  if stopped and not cfg.quiet:
+    print(f"[rlmcp-play] stopped: {stopped}", flush=True)
+  return {
+      "viewer": cfg.mode,
+      "closed": True,
+      "stopped": bool(stopped),
+      "stop_reason": stopped or None,
+  }
 
 
 # Command line.
@@ -648,10 +1086,13 @@ __all__ = [
     "MODES",
     "PlayConfig",
     "PlayError",
+    "PolicySwap",
+    "SwappablePolicy",
     "add_arguments",
     "config_from_args",
     "find_checkpoint",
     "run_play",
     "session_for",
+    "stage_at_iteration",
     "task_for",
 ]
