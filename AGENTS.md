@@ -43,6 +43,7 @@ without the variable set; it is a scratch directory, not the records.
 | screenshot by rendering + slicing video frames | `rlmcp shot` (add `--where key=value` to pick envs) |
 | judge smoothness from reward curves | `rlmcp diagnose` (measures HF power share, jerk, effort) |
 | tell the user "it improved" | `rlmcp video` / `rlmcp plot`, then show them |
+| look at a policy whose run has already exited | `rlmcp play` — it restores the conditions the checkpoint trained under first |
 | compare a metric across several runs | `rlmcp record compare`, or `rlmcp record graph` for the lineage |
 | keep the record of an experiment in a scratch file | `rlmcp record new` / `rlmcp record close` — it belongs **in** the records |
 

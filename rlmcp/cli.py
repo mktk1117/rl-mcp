@@ -656,6 +656,35 @@ def _parse_metrics(items: Optional[List[str]]) -> List[List[str]]:
   return out
 
 
+def _play_command(args: argparse.Namespace) -> int:
+  """``rlmcp play`` -- a checkpoint, not a session.
+
+  The only command here that builds an environment of its own, because the run
+  it is looking at has already exited. It needs no trainer and no session; a
+  bare ``rlmcp play`` still means "the run I was just working on", which is the
+  newest session's run directory.
+  """
+  from rlmcp.core.replay import parse_overrides
+  from rlmcp.play import PlayError, config_from_args, run_play
+
+  target = args.checkpoint
+  if not target:
+    target = str(_resolve_session(args).dir)
+
+  try:
+    config = config_from_args(args, parse_overrides(args.set))
+    config.checkpoint = target
+    result = run_play(config)
+  except (PlayError, KeyError, ValueError) as exc:
+    # KeyError is read_conditions refusing a stage this run never entered, and
+    # ValueError a malformed --set; both are the caller's to fix, and neither
+    # is worth a traceback.
+    _emit({"ok": False, "error": str(exc).strip("'")}, command="play")
+    return 1
+  _emit({"ok": True, "result": result}, command="play")
+  return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(prog="rlmcp", description=__doc__.splitlines()[0])
   parser.add_argument("--session", help="Path to a session directory")
@@ -726,6 +755,20 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument("--env-id", type=int)
   p.add_argument("--where", nargs="*", metavar="KEY=VALUE",
                  help="Pick an env by description, e.g. terrain=pyramid_stairs level=2")
+
+  p = sub.add_parser(
+      "play",
+      help="Play a saved checkpoint: render a clip, or open a viewer",
+      description="Replay a checkpoint under the conditions it was trained on. "
+                  "Needs no live trainer -- this is how a finished run gets "
+                  "looked at.",
+  )
+  # Cheap to import: everything in rlmcp.play that needs a simulator, torch or
+  # an encoder imports it inside a function, so the CLI stays standard-library
+  # only until somebody actually asks to play something.
+  from rlmcp.play import add_arguments as play_arguments
+
+  play_arguments(p)
 
   p = sub.add_parser("trace", help="Record per-step joint signals")
   p.add_argument("--seconds", type=float, default=4.0)
@@ -959,7 +1002,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     roots = [args.root] if args.root else list(DEFAULT_ROOTS)
     seen, rows = set(), []
     for root in roots:
-      for session in iter_sessions(root):  # Newest first, by started_at.
+      # Everything here, play sessions included: this is the command for
+      # finding out what exists, so it should not hide anything.
+      for session in iter_sessions(root, include_play=True):  # Newest first.
         if str(session.dir) in seen:
           continue
         seen.add(str(session.dir))
@@ -986,6 +1031,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
   if cmd == "record":
     return _record_command(args)
+
+  if cmd == "play":
+    return _play_command(args)
 
   if cmd == "extensions" and not args.available:
     # A static question about what is installed; no session needed.
