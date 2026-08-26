@@ -14,6 +14,9 @@ maintain and nothing here assumes a particular agent product.
 **This file is about working *in* this repository.** To *use* rlmcp, read
 [docs/tools.md](docs/tools.md) — every command and MCP tool, one entry each —
 and [docs/mcp-server.md](docs/mcp-server.md) if you are driving over MCP.
+[docs/tuning.md](docs/tuning.md) is the workflow for driving a training run
+well: verify the task before training, watch the right numbers, diagnose
+before touching a weight.
 
 ## This repo is the tool. The records are somewhere else.
 

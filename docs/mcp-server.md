@@ -183,6 +183,9 @@ shell. It restores the conditions the checkpoint trained under first. See
 
 ## Prompting tips for the agent driving this
 
+The long version of these rules — what to verify before launch, which numbers
+to trust, and how to read a symptom into a lever — is [tuning.md](tuning.md).
+
 - **Diagnose before tuning.** The verdict names the lever to pull. A reward tweak
   justified by a measurement beats one justified by a hunch.
 - **Always pass `rationale`.** It costs nothing and turns the event log into

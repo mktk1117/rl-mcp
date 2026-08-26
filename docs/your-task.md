@@ -171,8 +171,10 @@ Full guide: [records.md](records.md).
 
 ## Working with an agent
 
-Point your agent at the repository and let it read [tools.md](tools.md) and
-[mcp-server.md](mcp-server.md). The short version of what it needs to know:
+Point your agent at the repository and let it read [tools.md](tools.md),
+[mcp-server.md](mcp-server.md) and [tuning.md](tuning.md) — the last one is
+the workflow it should follow: verify the task before training, watch the
+right numbers, diagnose before touching a weight. The short version:
 
 - Do not parse `metrics.jsonl` or `status.json` by hand. `status`, `metrics` and
   `plot` exist.

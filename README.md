@@ -168,6 +168,7 @@ The explicit-curriculum version of the same run is in
 | --- | --- |
 | [docs/tools.md](docs/tools.md) | **Every tool, one entry each.** Shell command, MCP call, what comes back, and the traps. Start here for either audience. |
 | [docs/mcp-server.md](docs/mcp-server.md) | Agents: setup, session pinning, liveness, deferred jobs, a worked steering session. |
+| [docs/tuning.md](docs/tuning.md) | The tuning loop: verify the task first, watch the right numbers, read symptoms into levers. The distilled findings of two campaigns. |
 | [docs/your-task.md](docs/your-task.md) | Putting rlmcp on your own task, in five steps. |
 | [docs/curriculum.md](docs/curriculum.md) | Writing the stage ladder. |
 | [docs/extensions.md](docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
