@@ -310,6 +310,17 @@ class FakeRunnerAdapter(RunnerAdapter):
     return False
 
 
+@pytest.fixture(autouse=True)
+def _isolated_registry(monkeypatch, tmp_path_factory):
+  """Every test gets a private, empty registry.
+
+  Session.create registers the sessions it makes; without this, the suite
+  would write the developer's real ~/.local/state/rlmcp and, worse, tests
+  would see each other's (and the developer's actual) runs.
+  """
+  monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path_factory.mktemp("xdg-state")))
+
+
 @pytest.fixture
 def fake_sim() -> FakeSimAdapter:
   return FakeSimAdapter()

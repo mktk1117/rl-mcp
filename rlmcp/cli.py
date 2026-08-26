@@ -59,15 +59,96 @@ def _search_roots(args: argparse.Namespace) -> Tuple[List[str], str]:
 
 def _resolve_session(args: argparse.Namespace) -> Session:
   if getattr(args, "session", None):
-    return Session.open(args.session)
+    return _remember(Session.open(args.session))
   env_dir = os.environ.get("RLMCP_SESSION")
   if env_dir:
-    return Session.open(env_dir)
+    return _remember(Session.open(env_dir))
   roots, origin = _search_roots(args)
   for root in roots:
     found = Session.find_latest(root)
     if found is not None:
-      return found
+      return _remember(found)
+  if origin == "default":
+    # Nothing under the cwd. Before refusing, ask the registry: trainers,
+    # servers and past resolutions announce themselves there precisely so a
+    # bare command works from any directory. An explicit --root or
+    # RLMCP_ROOT is never widened this way -- a scoped question answered
+    # from outside its scope is how a reader ends up on the wrong run.
+    found, how = _registry_fallback()
+    if found is not None:
+      print(
+          cli_output.note(
+              f"[rlmcp] no session under {Path.cwd()}; "
+              f"using {found.dir} ({how})"
+          ),
+          file=sys.stderr,
+      )
+      return _remember(found)
+  _refuse_no_session(roots, origin)
+  raise AssertionError("unreachable")  # _refuse_no_session always exits.
+
+
+def _remember(session: Session) -> Session:
+  """File the resolved session in the registry; recent runs stay findable."""
+  from rlmcp import registry
+
+  registry.register(registry.KIND_SEEN, session_dir=session.dir,
+                    session_kind=session.info().get("kind"))
+  return session
+
+
+def _registry_fallback() -> Tuple[Optional[Session], str]:
+  """The newest session the registry can still vouch for, with provenance.
+
+  Live registrants outrank dead ones -- "what is running?" is the question a
+  bare command asks -- and within each class newest registration wins. Play
+  sessions are skipped, the same way :meth:`Session.find_latest` skips them.
+  """
+  from rlmcp import registry
+  from rlmcp.session import PLAY_SESSION_KIND
+
+  rows = registry.entries()
+  for live in (True, False):
+    for row in rows:
+      if row["pid_alive"] is not live:
+        continue
+      if row.get("session_kind") == PLAY_SESSION_KIND:
+        continue
+      state = "running" if live else "now gone"
+      who = {
+          registry.KIND_TRAINER:
+              f"registered by its trainer, pid {row.get('pid')}, {state}",
+          registry.KIND_SERVER:
+              f"registered by an rlmcp-server, pid {row.get('pid')}, {state}",
+          registry.KIND_SEEN: "the run last looked at from this machine",
+      }.get(row.get("kind"), f"registered by {row.get('kind')}")
+      if row.get("session_exists"):
+        try:
+          found = Session.open(row["session_dir"])
+        except FileNotFoundError:
+          continue
+        return found, who
+      if row.get("root_exists"):
+        found = Session.find_latest(row["root"])
+        if found is not None:
+          if row.get("kind") == registry.KIND_SERVER:
+            return found, (
+                f"newest under '{row['root']}', which an rlmcp-server "
+                f"(pid {row.get('pid')}, {state}) is watching"
+            )
+          return found, f"newest under '{row['root']}', from the registry"
+  return None, ""
+
+
+def _refuse_no_session(roots: List[str], origin: str) -> None:
+  """Exit with a report: where the search went, and what would point it right.
+
+  In JSON mode the refusal is a payload on stdout -- an agent that captured
+  stdout must get something to parse, the same ``ok: false`` envelope every
+  other failure wears -- and the exit code stays 1 either way.
+  """
+  from rlmcp import registry
+
   if origin == "default":
     looked = (
         f"under the current directory ({Path.cwd()}) -- its ./logs, "
@@ -75,12 +156,40 @@ def _resolve_session(args: argparse.Namespace) -> Session:
     )
   else:
     looked = f"under '{roots[0]}' (from {origin})"
-  raise SystemExit(
-      f"No rlmcp session found {looked}.\n"
+
+  rows = registry.entries()
+  servers = [r for r in rows if r["kind"] == registry.KIND_SERVER and r["pid_alive"]]
+  if servers:
+    watching = servers[0].get("session_dir") or servers[0].get("root")
+    known = (
+        f"An rlmcp-server (pid {servers[0]['pid']}) is running, watching "
+        f"'{watching}', but no session was found there either"
+    )
+  elif not rows:
+    known = (
+        "The registry is empty -- trainers and MCP servers announce "
+        "themselves when they start, and none has yet"
+    )
+  elif origin != "default":
+    known = (
+        f"The registry knows {len(rows)} session(s) elsewhere; run plain "
+        "`rlmcp sessions` (no --root) to see them"
+    )
+  else:
+    known = (
+        f"Nothing in the registry still points at a readable session "
+        f"({len(rows)} stale entries)"
+    )
+  hint = (
       "A session is the <run_dir>/rlmcp directory a training run writes. "
       "Point at one with --session <dir> or --root <logs dir>, or set "
       "RLMCP_SESSION / RLMCP_ROOT."
   )
+  if _MODE != "text":
+    _emit({"ok": False, "error": "No rlmcp session found.",
+           "looked": looked, "registry": known, "hint": hint})
+    raise SystemExit(1)
+  raise SystemExit(f"No rlmcp session found {looked}.\n{known}.\n{hint}")
 
 
 # Resolved once in main(), read by _emit. Module state rather than a threaded
@@ -1043,30 +1152,82 @@ def main(argv: Optional[List[str]] = None) -> int:
   _OPEN = cli_output.resolve_open(getattr(args, "open_policy", None))
 
   if cmd == "sessions":
-    roots, _ = _search_roots(args)
+    from rlmcp import registry
+    from rlmcp.session import PLAY_SESSION_KIND
+
+    roots, origin = _search_roots(args)
     seen, rows = set(), []
+    newest: Optional[Session] = None
+    newest_started = 0.0
+
+    def add(session: Session) -> None:
+      nonlocal newest, newest_started
+      if str(session.dir) in seen:
+        return
+      seen.add(str(session.dir))
+      info = session.info()
+      live = session.liveness_info()
+      rows.append(
+          {
+              "session": str(session.dir),
+              "task": info.get("task"),
+              "num_envs": info.get("num_envs"),
+              "started_at": info.get("started_at"),
+              "state": live["state"],
+              "alive": live["pid_alive"],
+              "iteration": session.status().get("iteration"),
+              "heartbeat_age_s": live["heartbeat_age_s"],
+          }
+      )
+      started = info.get("started_at") or 0.0
+      if info.get("kind") != PLAY_SESSION_KIND and (
+          newest is None or started > newest_started):
+        newest, newest_started = session, started
+
     for root in roots:
       # Everything here, play sessions included: this is the command for
       # finding out what exists, so it should not hide anything.
       for session in iter_sessions(root, include_play=True):  # Newest first.
-        if str(session.dir) in seen:
+        add(session)
+
+    # The registry widens the answer beyond the cwd -- but only the default
+    # search: an explicit --root or RLMCP_ROOT is a scoped question, and a
+    # scoped question deserves a scoped answer.
+    reg_rows = registry.entries() if origin == "default" else []
+    for row in reg_rows:
+      if row.get("session_exists"):
+        try:
+          add(Session.open(row["session_dir"]))
+        except FileNotFoundError:
           continue
-        seen.add(str(session.dir))
-        info = session.info()
-        live = session.liveness_info()
-        rows.append(
-            {
-                "session": str(session.dir),
-                "task": info.get("task"),
-                "num_envs": info.get("num_envs"),
-                "started_at": info.get("started_at"),
-                "state": live["state"],
-                "alive": live["pid_alive"],
-                "iteration": session.status().get("iteration"),
-                "heartbeat_age_s": live["heartbeat_age_s"],
-            }
-        )
+      elif row.get("root_exists"):
+        for session in iter_sessions(row["root"], include_play=True):
+          add(session)
+    if reg_rows:
+      # Merged sources arrive in source order; restore newest-first.
+      rows.sort(key=lambda r: -(r.get("started_at") or 0.0))
+
     _emit(rows, command="sessions")
+    if newest is not None:
+      # What "the run I was just working on" resolves to next time, anywhere.
+      _remember(newest)
+    for server in (r for r in reg_rows
+                   if r["kind"] == registry.KIND_SERVER and r["pid_alive"]):
+      where = server.get("session_dir") or server.get("root")
+      print(cli_output.note(
+          f"[rlmcp] rlmcp-server pid {server['pid']} is running, "
+          f"watching '{where}'"), file=sys.stderr)
+    if not rows:
+      searched = ", ".join(str(r) for r in roots)
+      where = (f"searched {searched} under {Path.cwd()}"
+               if origin == "default" else
+               f"searched {roots[0]} (from {origin})")
+      extra = ("; the registry adds nothing" if origin == "default" else "")
+      print(cli_output.note(f"[rlmcp] {where}{extra}"), file=sys.stderr)
+      print(cli_output.note(
+          "[rlmcp] a training run registers itself when it starts; "
+          "--root <dir> or RLMCP_ROOT points the search somewhere specific"),
+          file=sys.stderr)
     return 0
 
   if cmd == "analyze":
