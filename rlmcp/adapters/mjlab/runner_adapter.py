@@ -161,12 +161,71 @@ class MjlabRunnerAdapter(RunnerAdapter):
     save(str(path), infos)
     return str(path)
 
+  def _module_tree(self) -> List[Any]:
+    """Every ``nn.Module`` reachable from the runner or its algorithm.
+
+    Read from instance dictionaries rather than ``dir()`` so that evaluating a
+    property cannot run training code as a side effect of looking for tensors.
+    """
+    import torch.nn as nn
+
+    found: Dict[int, Any] = {}
+
+    def collect(obj: Any) -> None:
+      if isinstance(obj, nn.Module):
+        for module in obj.modules():
+          found.setdefault(id(module), module)
+
+    for root in (self.runner, getattr(self.runner, "alg", None)):
+      if root is None:
+        continue
+      collect(root)
+      try:
+        attributes = list(vars(root).values())
+      except TypeError:  # __slots__, or a C extension object.
+        attributes = []
+      for attribute in attributes:
+        collect(attribute)
+    return list(found.values())
+
+  def _thaw_inference_buffers(self) -> int:
+    """Replace inference-tensor buffers with ordinary ones, values unchanged.
+
+    rsl_rl collects rollouts inside ``torch.inference_mode()``, and the
+    empirical observation normalizer *reassigns* a buffer in that block
+    (``self._std = torch.sqrt(self._var)``), so the new tensor is born an
+    inference tensor. Rollback runs at the iteration boundary -- outside
+    inference mode, which is the only place it can run without racing the
+    simulator -- and torch refuses any in-place write to such a tensor there::
+
+        Inplace update to inference tensor outside InferenceMode is not allowed.
+        You can make a clone to get a normal tensor before doing inplace update.
+
+    ``load_state_dict`` writes in place, so every rollback failed on the first
+    such buffer. Cloning outside inference mode yields a normal tensor holding
+    the same values, which is what the error message itself recommends.
+
+    Buffers only, deliberately. A ``Parameter`` cannot be swapped the same way:
+    the optimizer's ``param_groups`` hold references to the original objects, so
+    replacing one would quietly stop it being optimized. Parameters are updated
+    in place by the optimizer and never become inference tensors in the first
+    place -- if that ever changes, it needs its own fix, not this one.
+    """
+    thawed = 0
+    for module in self._module_tree():
+      for name, buffer in list(module.named_buffers(recurse=False)):
+        if buffer is not None and buffer.is_inference():
+          setattr(module, name, buffer.clone())
+          thawed += 1
+    return thawed
+
   def load_checkpoint(self, path: str) -> Dict[str, Any]:
     load = getattr(self.runner, "load", None)
     if not callable(load):
       raise NotSupported("Runner does not implement load().")
     if not Path(path).exists():
       raise FileNotFoundError(f"No checkpoint at '{path}'.")
+    self._thaw_inference_buffers()
     infos = load(str(path))
     return infos if isinstance(infos, dict) else {}
 

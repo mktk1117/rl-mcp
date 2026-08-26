@@ -1035,3 +1035,123 @@ def test_unknown_hyperparameter_raises_naming_what_exists():
     adapter.set_hyperparameter("rl.warmup_steps", 100)
   assert "warmup_steps" in str(excinfo.value)
   assert "learning_rate" in str(excinfo.value)
+
+
+# --- Checkpoint rollback across the inference-mode boundary -----------------
+#
+# rsl_rl collects rollouts inside torch.inference_mode(), and its empirical
+# normalizer reassigns a buffer there (`self._std = torch.sqrt(self._var)`), so
+# that buffer is born an inference tensor. Rollback runs outside inference mode
+# -- the only point it can run without racing the simulator -- where torch
+# refuses to write to one. These fakes reproduce that exact shape; the fixture
+# is not a mock of the fix, it is a mock of rsl_rl.
+
+
+class _FakeNormalizer(torch.nn.Module):
+  """Mirrors rsl_rl's EmpiricalNormalization buffer handling."""
+
+  def __init__(self, width: int = 4):
+    super().__init__()
+    self.register_buffer("_mean", torch.zeros(1, width))
+    self.register_buffer("_var", torch.ones(1, width))
+    self.register_buffer("_std", torch.ones(1, width))
+
+  def update(self, batch: torch.Tensor) -> None:
+    self._mean += 0.1 * (batch.mean(0, keepdim=True) - self._mean)
+    self._var += 0.1 * (batch.var(0, keepdim=True) - self._var)
+    # Reassignment, not an in-place write: this is the line that makes `_std`
+    # an inference tensor when it runs inside inference_mode().
+    self._std = torch.sqrt(self._var)
+
+
+class _FakePolicy(torch.nn.Module):
+  def __init__(self, width: int = 4):
+    super().__init__()
+    self.obs_normalizer = _FakeNormalizer(width)
+    self.linear = torch.nn.Linear(width, 2)
+
+
+class _FakeRunner:
+  """A runner shaped like rsl_rl's: modules hang off `alg`, load() is strict."""
+
+  def __init__(self, width: int = 4):
+    self.alg = SimpleNamespace(_raw_actor=_FakePolicy(width))
+    self.current_learning_iteration = 0
+
+  def save(self, path, infos=None):
+    torch.save({"model": self.alg._raw_actor.state_dict(), "infos": infos}, path)
+
+  def load(self, path):
+    saved = torch.load(path, weights_only=False)
+    self.alg._raw_actor.load_state_dict(saved["model"], strict=True)
+    return saved["infos"]
+
+  def collect_a_rollout(self) -> None:
+    with torch.inference_mode():
+      self.alg._raw_actor.obs_normalizer.update(torch.randn(8, 4))
+
+
+def test_rollback_survives_buffers_reassigned_in_inference_mode(tmp_path):
+  """The bug: every rollback failed once a rollout had touched the normalizer."""
+  runner = _FakeRunner()
+  checkpoint = tmp_path / "before-experiment.pt"
+  runner.save(str(checkpoint), {"tag": "before-experiment"})
+  saved_std = runner.alg._raw_actor.obs_normalizer._std.clone()
+
+  runner.collect_a_rollout()
+
+  # Precondition: the fake really does reproduce the trap, so this test cannot
+  # pass for the wrong reason if rsl_rl's normalizer changes shape.
+  normalizer = runner.alg._raw_actor.obs_normalizer
+  assert normalizer._std.is_inference()
+  with pytest.raises(RuntimeError, match="inference tensor"):
+    runner.load(str(checkpoint))
+
+  infos = MjlabRunnerAdapter(runner).load_checkpoint(str(checkpoint))
+
+  assert infos == {"tag": "before-experiment"}
+  restored = runner.alg._raw_actor.obs_normalizer._std
+  assert not restored.is_inference()
+  assert torch.equal(restored, saved_std)
+
+
+def test_thaw_leaves_ordinary_buffers_alone(tmp_path):
+  """It is a no-op on a run that has not entered inference mode yet."""
+  runner = _FakeRunner()
+  adapter = MjlabRunnerAdapter(runner)
+  before = runner.alg._raw_actor.obs_normalizer._std
+
+  assert adapter._thaw_inference_buffers() == 0
+  assert runner.alg._raw_actor.obs_normalizer._std is before
+
+
+def test_thaw_does_not_replace_parameters(tmp_path):
+  """Parameters must keep their identity -- the optimizer holds references."""
+  runner = _FakeRunner()
+  runner.collect_a_rollout()
+  weight = runner.alg._raw_actor.linear.weight
+
+  MjlabRunnerAdapter(runner)._thaw_inference_buffers()
+
+  assert runner.alg._raw_actor.linear.weight is weight
+
+
+def test_thaw_finds_modules_without_evaluating_properties():
+  """Module discovery must not trigger a property that runs training code."""
+
+  class _Exploding:
+    @property
+    def boom(self):
+      raise AssertionError("a property was evaluated while looking for tensors")
+
+  runner = _FakeRunner()
+  runner.alg = SimpleNamespace(_raw_actor=runner.alg._raw_actor, extra=_Exploding())
+  runner.collect_a_rollout()
+
+  assert MjlabRunnerAdapter(runner)._thaw_inference_buffers() == 1
+
+
+def test_load_checkpoint_still_reports_a_missing_file(tmp_path):
+  """Thawing runs before the load, but must not mask the file check."""
+  with pytest.raises(FileNotFoundError):
+    MjlabRunnerAdapter(_FakeRunner()).load_checkpoint(str(tmp_path / "nope.pt"))
