@@ -328,6 +328,72 @@ cannot claim `validated` at all. Records are plain files — the store assigns
 ids transactionally, never reuses them, and two writers cannot silently
 overwrite each other.
 
+## The lineage graph, and the page that draws it
+
+A list of runs tells you what you did. It does not tell you what you learned,
+because the thing you learned lives in the *differences* between runs. So the
+records are kept as a graph, and `rlmcp record graph` draws it:
+
+```bash
+rlmcp record graph                         # writes records/lineage.html, opens it
+rlmcp record graph --png --out tree.png    # a picture an agent reads in one call
+```
+
+The HTML is one self-contained file. No server, no build step — open it from a
+path. Click a node and you get what that run claimed, what it measured, and the
+**recipe**: every config change folded from the root down to that node. The
+recipe is never stored, only computed, so it cannot drift from the edges.
+
+Two kinds of edge, because they are two different claims:
+
+| edge | means |
+| --- | --- |
+| **config** (`--parent`) | this run's settings are the parent's, plus a listed change |
+| **warm start** (`--weights`) | this run started from that run's policy weights |
+
+They are drawn separately because they often disagree. A run can take its config
+from the run before it and its weights from six runs back, and a tool that draws
+one edge from the other data will draw it wrong.
+
+### What the graph shows: in-hand reorientation, 001 to 010
+
+Ten runs teaching a SharpaWave hand to reorient a cube. Read the verdicts, not
+just the arrows:
+
+```
+001 baseline ............... falsified   froze in a pinch grip, 0.25 goals
+ └─ 002 progress shaping ... validated   ~24 goals/episode
+     └─ 003 palm-up fix .... interrupted wrong hand — this was a Shadow Hand
+         └─ 004 sharpa ..... interrupted per-env origins bug, hands stacked
+             └─ 005 fixed .. falsified   the freeze is back: 0.98 survival, 0.02 goals
+                 └─ 006 curriculum ..... falsified   freeze broken, but now it throws the cube
+                     └─ 007 re-priced .. falsified   pricing was never the constraint
+                         └─ 008 EMA filter ......... validated   ← the unlock
+                             └─ 009 dwell + terminate .... interrupted  precision ceiling too tight
+                                 └─ 010 0.4 rad band ..... validated   solved
+```
+
+**What this means:** six of these ten runs did not work, and the graph is why
+that was affordable.
+
+Runs **005, 006 and 007** are the interesting part. Each was falsified, and
+together they are worth more than any one success. 005 showed the policy freezing
+— perfect survival, no rotation. 006 broke the freeze with a curriculum that made
+dropping cheap, and overshot: the hand started throwing the cube away. 007 priced
+dropping in between, and *also* failed. Three runs, one conclusion the graph makes
+unavoidable: reward pricing was not the binding constraint. 007 had pre-registered
+exactly that alternative in its falsifier — the action interface — and 008 changed
+only that, a moving-average filter on the joint targets, and the task opened up.
+
+The three `interrupted` nodes are not failures of anything. 003 and 004 were setup
+mistakes (the wrong hand, a scene bug); 009 was a deliberate stop to fix a
+too-tight success band. Keeping them separate from `falsified` matters, because a
+hypothesis that was never really tested must not be counted as one that lost.
+
+`falsified` is a good verdict here. A run that kills its hypothesis in twenty
+minutes is information-dense, and the graph is what turns three of them in a row
+into an answer.
+
 ## Install
 
 ```bash

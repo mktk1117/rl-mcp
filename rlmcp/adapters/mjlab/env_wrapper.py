@@ -74,7 +74,7 @@ class RlMcpEnvWrapper:
     self.service_every_steps = max(1, int(service_every_steps))
 
     sim_adapter = MjlabSimAdapter(self.unwrapped, robot_name=robot_name)
-    session_dir = Path(session_dir) if session_dir else Path.cwd() / "rlmcp_session"
+    session_dir = Path(session_dir) if session_dir else Path.cwd() / "rlmcp"
 
     from rlmcp.records.link import open_link
 
