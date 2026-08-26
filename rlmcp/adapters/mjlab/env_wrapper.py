@@ -108,7 +108,7 @@ class RlMcpEnvWrapper:
     ):
       self.rlmcp.add_extension(extension)
 
-    lab.start(
+    records.start(
         str(self.rlmcp.session.dir), self.rlmcp.parameters.get_snapshot()
     )
 
