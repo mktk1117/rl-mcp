@@ -53,12 +53,17 @@ htmlcov/
 # experiment dirtied the tool's history, mostly with training logs and video.
 # An in-tree ./records remains the scratch default for a quick local try.
 #
-# Both forms on purpose: `records/` matches a real directory, and a bare
-# `records` also matches a symlink pointing at the tasks checkout -- which is
+# Both forms on purpose: `/records/` matches a real directory, and a bare
+# `/records` also matches a symlink pointing at the tasks checkout -- which is
 # what you end up with when you want the lineage viewer to serve those records
 # from this directory. git treats that symlink as a file, so the
 # trailing-slash form alone lets it through.
-records/
+#
+# Both are anchored to the repository root. Unanchored, `records/` also matches
+# `rlmcp/records/` -- the package that holds the record schema and the viewer --
+# so every *new* file added there was silently ignored while the ones already
+# tracked kept showing up, which is the most confusing shape this mistake has.
+/records/
 /records
 
 # A run's raw log is not its record, and is regenerable by re-running.
@@ -67,3 +72,7 @@ MUJOCO_LOG.TXT
 
 # Ad-hoc uv runs resolve fresh from pyproject; no lockfile is managed
 uv.lock
+
+# Agent worktrees of this repository, created under .claude/. They are
+# checkouts, not content: committing one embeds a git repo inside this one.
+.claude/worktrees/

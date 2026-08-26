@@ -16,6 +16,10 @@
 :root[data-theme=dark]{--bg:#0E151C;--surface:#17212B;--ink:#E2EAF1;--muted:#94A4B4;
   --faint:#6E7F90;--line:#293542;--cfg:#5A6B7D;}
 *{box-sizing:border-box}
+/* An id selector outranks the UA's [hidden] rule, so a view whose layout is
+   declared by id (#params is a flex column) stays on screen while "hidden"
+   and paints over the one that is meant to be showing. */
+[hidden]{display:none !important}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
   font-size:15px;display:flex;flex-direction:column;overflow:hidden}
@@ -31,9 +35,103 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--sel);outline-of
   color:var(--muted);cursor:pointer}
 .chip.on{color:#fff;border-color:transparent}
 .chip .n{opacity:.72;margin-left:5px}
-main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 372px;min-height:0}
+main{flex:1;display:grid;min-height:0;position:relative;
+  grid-template-columns:minmax(0,1fr) clamp(372px, var(--panel, 34vw), 780px)}
 @media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:1fr auto}}
-#cy{width:100%;height:100%;background:var(--bg)}
+/* Drag the seam: the graph and the record want different widths on different
+   questions, and neither answer is right for the whole session. */
+#grip{position:absolute;top:0;bottom:0;width:9px;margin-left:-5px;cursor:col-resize;z-index:5}
+#grip:hover,#grip.drag{background:linear-gradient(90deg,transparent 3px,
+  var(--sel) 3px,var(--sel) 6px,transparent 6px)}
+body.resizing{user-select:none;cursor:col-resize}
+/* Three views over one records store, stacked in the same box: the tree is the
+   structure, the story is the order, the parameters are the numbers. */
+#stage{position:relative;min-width:0;overflow:hidden}
+#cy,#params,#story{position:absolute;inset:0}
+#cy{background:var(--bg)}
+#params{display:flex;flex-direction:column;background:var(--bg);overflow:hidden}
+.pbar{flex:none;display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  padding:10px 14px;border-bottom:1px solid var(--line);max-height:33%;overflow:auto}
+.pbar .sep{width:1px;height:18px;background:var(--line);margin:0 3px}
+.pbar .lab{font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--faint)}
+.pchip{font-family:var(--mono);font-size:11px;padding:4px 9px;border-radius:3px;
+  border:1px solid var(--line);background:var(--surface);color:var(--muted);
+  cursor:pointer;white-space:nowrap}
+.pchip.on{background:var(--sel);border-color:var(--sel);color:#fff}
+.pchip .n{opacity:.6;margin-left:6px}
+#pchart{flex:1;min-height:0;overflow:auto;padding:12px 14px 22px}
+#pchart svg{display:block;overflow:visible}
+.axis{stroke:var(--line);stroke-width:1}
+.grid{stroke:var(--line);stroke-width:1;stroke-dasharray:2 4;opacity:.7}
+.tk{font-family:var(--mono);font-size:9.5px;fill:var(--faint)}
+.runlab{font-family:var(--mono);font-size:9.5px;fill:var(--faint)}
+.trace{fill:none;stroke-linejoin:round;stroke-linecap:round}
+.trace.off{opacity:.22}
+.jump{fill:none;stroke-dasharray:3 3;opacity:.55}
+.dot{stroke:var(--surface);stroke-width:1.2;cursor:pointer}
+.livecap{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+.small{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.small figure{margin:0;background:var(--surface);border:1px solid var(--line);
+  border-radius:4px;padding:9px 10px 6px;cursor:zoom-in}
+.small figcaption{font-family:var(--mono);font-size:10.5px;color:var(--muted);
+  margin-bottom:5px;display:flex;justify-content:space-between;gap:8px}
+.small figcaption b{color:var(--ink);font-weight:600;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.small figcaption .rng{color:var(--faint);white-space:nowrap}
+/* The story: the run tree read as a sequence, which is how a person tells it.
+   Each tile is a clip, an id and the sentence; the arrows carry the order. */
+#story{overflow:auto;background:var(--bg);padding:16px 18px 30px}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px}
+.tile{width:210px;background:var(--surface);border:1px solid var(--line);
+  border-radius:5px;overflow:hidden;cursor:pointer;display:flex;
+  flex-direction:column;transition:border-color .12s,transform .12s}
+.tile:hover{border-color:var(--sel);transform:translateY(-2px)}
+.tile.on{border-color:var(--sel);box-shadow:0 0 0 2px var(--sel) inset}
+.tile.off{opacity:.45}
+.tile .shot{position:relative;aspect-ratio:4/3;background:#0b0f14;display:block}
+.tile .shot img,.tile .shot video{width:100%;height:100%;object-fit:cover;display:block}
+.tile .noshot{height:4px;background:repeating-linear-gradient(90deg,
+  var(--line) 0 5px,transparent 5px 10px)}
+.tile .shot .play{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.55);
+  color:#fff;font-size:10px;font-family:var(--mono);padding:2px 6px;border-radius:3px}
+.tile .meta{padding:8px 10px 10px;display:flex;flex-direction:column;gap:5px;flex:1}
+.tile .who{font-family:var(--mono);font-size:11px;color:var(--muted);
+  display:flex;align-items:center;gap:6px}
+.tile .who b{color:var(--ink)}
+.tile .said{font-size:12.5px;line-height:1.45}
+.tile .swatch{width:8px;height:8px;border-radius:50%;flex:none}
+.arrow{align-self:center;color:var(--faint);font-size:19px;font-family:var(--mono);
+  user-select:none;flex:none}
+.arrow.on{color:var(--sel)}
+.arrow.weak{opacity:.45;font-size:15px}
+.tile .from{font-size:9.5px;color:var(--faint);margin-left:auto}
+/* Clips lined up under the parameter chart, each sitting at its run's band. */
+.strip{flex:none;border-top:1px solid var(--line);background:var(--surface);
+  padding:8px 14px 12px;overflow-x:auto}
+.strip .rail{position:relative}
+.strip .clip{position:absolute;cursor:pointer}
+.strip .clip img,.strip .clip video{width:100%;aspect-ratio:4/3;object-fit:cover;
+  border-radius:3px;border:1px solid var(--line);display:block;background:#0b0f14}
+.strip .clip .lb{font-family:var(--mono);font-size:9.5px;color:var(--faint);
+  margin-top:3px;display:block;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.strip .clip.off{opacity:.4}
+.tip{position:fixed;z-index:60;max-width:330px;background:var(--surface);
+  border:1px solid var(--line);border-radius:4px;padding:8px 10px;font-size:12px;
+  line-height:1.45;box-shadow:0 6px 22px rgba(0,0,0,.18);pointer-events:none}
+.tip b{font-family:var(--mono)}
+.moves{width:100%;border-collapse:collapse;font-size:12px}
+.moves td{padding:5px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+.moves .rid{font-family:var(--mono);color:var(--faint);white-space:nowrap}
+.moves .val{font-family:var(--mono);white-space:nowrap}
+.moves .why{color:var(--muted);font-size:11.5px}
+.pill{display:inline-block;font-family:var(--mono);font-size:9.5px;padding:1px 5px;
+  border-radius:999px;border:1px solid var(--line);color:var(--faint);margin-left:5px}
+.summary{font-size:14.5px;line-height:1.5;color:var(--ink);margin:2px 0 4px}
+@media print{header .controls,#grip,footer{display:none}
+  main{display:block}#params{position:static}.small{grid-template-columns:1fr 1fr}}
 aside{overflow:auto;padding:16px 20px 40px;border-left:1px solid var(--line);
   background:var(--surface)}
 aside h2{margin:0 0 2px;font-size:16px;font-family:var(--mono)}
@@ -67,17 +165,29 @@ footer{flex:none;padding:7px 20px;border-top:1px solid var(--line);
 <header>
   <h1>__TITLE__ <span id="stat"></span></h1>
   <div class="controls">
-    <input type="search" id="q" placeholder="search id, slug, hypothesis, outcome" />
+    <span id="views"></span>
+    <input type="search" id="q" placeholder="search id, slug, summary, outcome" />
     <span id="chips"></span>
     <button class="chip" id="fit">fit</button>
     <button class="chip" id="dir">rotate</button>
+    <button class="chip" id="thumbs">thumbnails</button>
     <span id="edgetoggles"></span>
   </div>
 </header>
 <main>
-  <div id="cy"></div>
+  <div id="stage">
+    <div id="cy"></div>
+    <section id="params" hidden>
+      <div id="pbar" class="pbar"></div>
+      <div id="pchart"></div>
+      <div id="pstrip" class="strip" hidden></div>
+    </section>
+    <section id="story" hidden><div id="storyflow" class="flow"></div></section>
+  </div>
+  <div id="grip" title="drag to resize"></div>
   <aside id="panel"><p style="color:var(--muted)">Select a run.</p></aside>
 </main>
+<div id="tip" class="tip" hidden></div>
 <footer class="legend">
   <b>—</b> config lineage &nbsp; <b>- -</b> warm start (from the run whose weights were taken)
   &nbsp; <b>·····</b> prior &nbsp;·&nbsp; drag to pan, scroll to zoom, click a node
@@ -87,7 +197,12 @@ footer{flex:none;padding:7px 20px;border-top:1px solid var(--line);
 <script>__CYTOSCAPE_DAGRE__</script>
 <script>
 const RUNS=__RUNS__, EDGES=__EDGES__, STATS=__STATS__, COLORS=__COLORS__, MEDIA=__MEDIA__;
+const PARAMS=__PARAMS__, PATHS=__PATHS__;
 const byId=Object.fromEntries(RUNS.map(r=>[r.id,r]));
+// Declared up here because the node elements are built from posterOf() before
+// the toggle that owns this flag is wired: a `let` read from its own temporal
+// dead zone throws, and the throw would take the whole page with it.
+let thumbs=true;
 let filter=new Set(), query="", rankDir="TB";
 const showEdge={config:true, warm:true, prior:false};
 
@@ -99,6 +214,9 @@ cytoscape.use(cytoscapeDagre);
 const elements=[];
 RUNS.forEach(r=>elements.push({data:{
   id:r.id, label:`${r.id}  ${r.slug}`, verdict:r.verdict, scratch:r.scratch?1:0,
+  // A run nobody filmed has no poster, which is the common case: the node
+  // stays the dot it always was rather than becoming a frame around nothing.
+  poster:posterOf(r),
 }}));
 EDGES.config.forEach(([a,b])=>{ if(byId[a]&&byId[b])
   elements.push({data:{id:`c_${a}_${b}`,source:a,target:b,kind:"config"}}); });
@@ -113,17 +231,30 @@ const cy=cytoscape({
   style:[
     {selector:"node",style:{
       "label":"data(label)","font-family":"ui-monospace,Menlo,monospace","font-size":11,
-      "text-valign":"center","text-halign":"right","text-margin-x":7,
-      "color":"#5B6A79","width":15,"height":15,
+      "text-valign":"center","text-halign":"right","text-margin-x":9,
+      "color":"#5B6A79",
+      // A node with a still of its own run is worth four times the area of one
+      // without; a node with nothing to show stays a dot rather than a frame
+      // around emptiness.
+      "width":ele=>ele.data("poster")?76:15,
+      "height":ele=>ele.data("poster")?57:15,
+      "background-image":ele=>ele.data("poster")||"none",
+      "background-fit":"cover","background-image-opacity":1,
       "text-max-width":150,"text-overflow-wrap":"anywhere",
       "background-color":ele=>COLORS[ele.data("verdict")]||"#8A98A6",
       "shape":ele=>ele.data("scratch")?"ellipse":"round-rectangle",
       "border-width":2,"border-color":"#fff","transition-property":"opacity,width,height",
     }},
     {selector:"node.dim",style:{"opacity":0.18}},
-    {selector:"node.hit",style:{"width":22,"height":22,"border-color":"#1F77B4"}},
+    // A dot grows to say "this one"; a thumbnail is already big enough, so it
+    // says it with the border instead of swelling and shoving its neighbours.
+    {selector:"node.hit",style:{"border-color":"#1F77B4","border-width":3,
+      "width":ele=>ele.data("poster")?76:22,
+      "height":ele=>ele.data("poster")?57:22}},
     {selector:"node:selected",style:{
-      "border-color":"#1F77B4","border-width":3,"width":22,"height":22,"color":"#17212B"}},
+      "border-color":"#1F77B4","border-width":4,"color":"#17212B",
+      "width":ele=>ele.data("poster")?76:22,
+      "height":ele=>ele.data("poster")?57:22}},
     {selector:"edge",style:{
       "width":1.6,"curve-style":"bezier","target-arrow-shape":"triangle",
       "arrow-scale":0.7,"line-color":"#8595A5","target-arrow-color":"#8595A5"}},
@@ -140,8 +271,13 @@ function layout(){
   // Labels sit to the right of each node, so nodes sharing a rank need room for
   // the label rather than for the dot -- nodeSep is sized for the text.
   const wide = rankDir==="TB";
+  // A thumbnail is 76x57 where a dot is 15x15, so the ranks have to stand
+  // further apart the moment posters are on or the frames overlap the labels
+  // of the rank below.
+  const shots = cy.nodes().some(n=>n.data("poster"));
   cy.layout({name:"dagre", rankDir,
-             nodeSep: wide?170:26, rankSep: wide?60:190, edgeSep:12,
+             nodeSep: wide?(shots?230:170):(shots?70:26),
+             rankSep: wide?(shots?110:60):(shots?250:190), edgeSep:12,
              animate:false, fit:true, padding:34}).run();
   // Fitting 50+ nodes makes every label unreadable, which is a bad first
   // impression of a graph whose labels are the point. Open at reading zoom on
@@ -180,10 +316,56 @@ document.getElementById("q").addEventListener("input",e=>{
 document.getElementById("fit").onclick=()=>cy.fit(undefined,30);
 document.getElementById("dir").onclick=()=>{rankDir=rankDir==="TB"?"LR":"TB"; layout();};
 
+// The seam between graph and record. Cytoscape needs to be told the box
+// changed; the grid does the rest.
+(function(){
+  const grip=document.getElementById("grip"), main=document.querySelector("main");
+  function place(){ const a=document.getElementById("panel").getBoundingClientRect();
+    grip.style.left=(a.left-main.getBoundingClientRect().left)+"px"; }
+  place(); addEventListener("resize",place);
+  grip.addEventListener("pointerdown",e=>{
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    grip.classList.add("drag"); document.body.classList.add("resizing");
+    const move=ev=>{
+      const w=Math.min(Math.max(main.getBoundingClientRect().right-ev.clientX,372),780);
+      document.documentElement.style.setProperty("--panel",w+"px");
+      place(); cy.resize();
+    };
+    const up=()=>{ grip.classList.remove("drag");
+      document.body.classList.remove("resizing");
+      removeEventListener("pointermove",move); removeEventListener("pointerup",up); };
+    addEventListener("pointermove",move); addEventListener("pointerup",up);
+  });
+})();
+
+// Thumbnails on the tree. A poster in the node answers "what did this one look
+// like" without a click; the toggle exists because at ten nodes it is a gift
+// and at a hundred it is a wall.
+function posterOf(r){
+  return thumbs && r && r.clip && r.clip.poster ? mediaUrl(r.clip.poster) : null;
+}
+function applyThumbs(){
+  cy.batch(()=>{ cy.nodes().forEach(n=>n.data("poster", posterOf(byId[n.id()]))); });
+  cy.style().update();
+  layout();
+}
+const thumbBtn=document.getElementById("thumbs");
+// Nothing filmed means nothing to toggle, and a dead control is worse than an
+// absent one.
+if(!RUNS.some(r=>r.clip&&r.clip.poster)) thumbBtn.hidden=true;
+thumbBtn.classList.add("on"); thumbBtn.style.background="var(--sel)";
+thumbBtn.onclick=()=>{
+  thumbs=!thumbs;
+  thumbBtn.classList.toggle("on",thumbs);
+  thumbBtn.style.background=thumbs?"var(--sel)":"";
+  applyThumbs();
+};
+
 function matches(r){
   if(filter.size && !filter.has(r.verdict)) return false;
   if(!query) return true;
-  return [r.id,r.slug,r.hypothesis,r.outcome,r.stage].join(" ").toLowerCase().includes(query);
+  return [r.id,r.slug,r.summary,r.hypothesis,r.outcome,r.stage]
+    .join(" ").toLowerCase().includes(query);
 }
 function apply(){
   cy.batch(()=>{
@@ -284,6 +466,500 @@ function select(id){
       document.body.appendChild(box);};
   });
 }
+
+/* ---------------------------------------------------------------------------
+   The parameter view.
+
+   The tree answers "what did we try?". This answers "what was the number?" --
+   for one knob at a time, along the whole lineage, with the branches drawn as
+   branches. x is the lineage's own clock: each run is offset by where its
+   config parent stopped, so two children of the same run start at the same x
+   and diverge. Highlighted paths are the chains that end in a leaf; while
+   anything is still training, every live chain stays lit.
+--------------------------------------------------------------------------- */
+const PRUNS=(PARAMS.runs||[]), PINDEX=(PARAMS.index||[]);
+const PBYID=Object.fromEntries(PRUNS.map(r=>[r.id,r]));
+let pkey=(PINDEX[0]||{}).key||null, pmode="one", view="tree", stripOn=false;
+
+// Which chains to draw bright. A run still training is the question of the
+// moment, so live leaves win; with none, the deepest leaf is the result path.
+function litRuns(){
+  const leaves=Object.keys(PATHS);
+  const live=leaves.filter(id=>(PBYID[id]||{}).live);
+  const chosen=live.length?live:
+    leaves.sort((a,b)=>(PATHS[b].length-PATHS[a].length)).slice(0,1);
+  const set=new Set();
+  chosen.forEach(id=>(PATHS[id]||[]).forEach(r=>set.add(r)));
+  return {set, chains:chosen, live:live.length>0};
+}
+
+function fmt(v){
+  const a=Math.abs(v);
+  if(v===0) return "0";
+  if(a>=1000||a<0.001) return v.toExponential(1);
+  return String(Number(v.toPrecision(3)));
+}
+
+// A symmetric log when the values span decades -- one series can hold a weight
+// of -300 and one of -0.0002 -- and plain linear when they do not, because a
+// log axis on a two-point range is just a harder way to read two numbers.
+function scaleFor(values){
+  let lo=Math.min(...values), hi=Math.max(...values);
+  if(!isFinite(lo)||!isFinite(hi)){lo=0;hi=1;}
+  if(lo===hi){const pad=Math.abs(lo)*0.5||1; lo-=pad; hi+=pad;}
+  const mags=values.map(Math.abs).filter(v=>v>0);
+  const ratio=mags.length?Math.max(...mags)/Math.min(...mags):1;
+  if(ratio<=120){
+    const pad=(hi-lo)*0.08;
+    return {t:v=>v, inv:v=>v, lo:lo-pad, hi:hi+pad, log:false};
+  }
+  const c=Math.min(...mags)||1e-9;
+  const t=v=>Math.sign(v)*Math.log10(1+Math.abs(v)/c);
+  const inv=u=>Math.sign(u)*c*(Math.pow(10,Math.abs(u))-1);
+  const tl=t(lo), th=t(hi), pad=(th-tl)*0.08;
+  return {t, inv, lo:inv(tl-pad), hi:inv(th+pad), log:true};
+}
+
+function seriesFor(key){
+  return PRUNS.map(r=>({run:r, pts:(r.series||{})[key]||[]})).filter(s=>s.pts.length);
+}
+
+function svgEl(name,attrs){
+  const el=document.createElementNS("http://www.w3.org/2000/svg",name);
+  for(const k in attrs) if(attrs[k]!=null) el.setAttribute(k,attrs[k]);
+  return el;
+}
+
+/* One chart. `mini` drops the axes down to the bare shape for the one-pager. */
+function chartFor(key,{width=760,height=340,mini=false}={}){
+  const series=seriesFor(key);
+  const svg=svgEl("svg",{width,height,viewBox:`0 0 ${width} ${height}`,
+                         role:"img","aria-label":`${key} over the lineage`});
+  if(!series.length){
+    const t=svgEl("text",{x:8,y:20,class:"tk"});
+    t.textContent="no values recorded"; svg.appendChild(t); return svg;
+  }
+
+  const m={l:mini?46:62, r:mini?10:16, t:mini?10:34, b:mini?16:30};
+  const W=width-m.l-m.r, H=height-m.t-m.b;
+  const span=Math.max(PARAMS.span||1,1);
+  const values=series.flatMap(s=>s.pts.map(p=>p.v));
+  const sc=scaleFor(values);
+  const X=x=>m.l+(x/span)*W;
+  const Y=v=>{const u=(sc.t(v)-sc.t(sc.lo))/((sc.t(sc.hi)-sc.t(sc.lo))||1);
+    return m.t+H-u*H;};
+  const {set:lit}=litRuns();
+
+  // y grid, and a zero rule when the series crosses it -- sign is the whole
+  // meaning of a reward weight.
+  const ticks=[];
+  for(let i=0;i<=(mini?3:5);i++) ticks.push(sc.inv(sc.t(sc.lo)+
+    (sc.t(sc.hi)-sc.t(sc.lo))*i/(mini?3:5)));
+  if(sc.lo<0&&sc.hi>0) ticks.push(0);
+  ticks.forEach(v=>{
+    const y=Y(v);
+    svg.appendChild(svgEl("line",{x1:m.l,x2:m.l+W,y1:y,y2:y,
+      class:v===0?"axis":"grid"}));
+    const t=svgEl("text",{x:m.l-6,y:y+3,class:"tk","text-anchor":"end"});
+    t.textContent=fmt(v); svg.appendChild(t);
+  });
+
+  // x: one band per run, so "where am I" is answered without a legend.
+  let lastLabelX=-1e9, row=0;
+  PRUNS.forEach(r=>{
+    if(!series.some(s=>s.run.id===r.id)) return;
+    const x=X(r.offset);
+    svg.appendChild(svgEl("line",{x1:x,x2:x,y1:m.t,y2:m.t+H,class:"grid"}));
+    if(mini) return;
+    row = (x-lastLabelX < 26) ? 1-row : 0;
+    lastLabelX = x;
+    const t=svgEl("text",{x:x+3,y:m.t-8-row*10,class:"runlab"});
+    t.textContent=r.id+(r.live?" ●":""); svg.appendChild(t);
+  });
+  svg.appendChild(svgEl("line",{x1:m.l,x2:m.l+W,y1:m.t+H,y2:m.t+H,class:"axis"}));
+  if(!mini){
+    const t=svgEl("text",{x:m.l+W,y:m.t+H+20,class:"tk","text-anchor":"end"});
+    t.textContent="iterations along the lineage →"; svg.appendChild(t);
+  }
+
+  // The traces themselves: a step line per run, plus the dashed jump from the
+  // parent's last value to this run's launch value, which is where most
+  // parameter changes actually happen -- between runs, not inside one.
+  series.forEach(({run,pts})=>{
+    const on=lit.has(run.id), col=COLORS[run.verdict]||"#8A98A6";
+    let d="";
+    pts.forEach((p,i)=>{
+      const x=X(run.offset+p.x), y=Y(p.v);
+      if(i===0) d+=`M${x} ${y}`;
+      else d+=`H${x}V${y}`;
+    });
+    const parent=run.parent&&PBYID[run.parent];
+    const prevPts=parent&&(parent.series||{})[key];
+    if(prevPts&&prevPts.length){
+      const from=prevPts[prevPts.length-1].v, to=pts[0].v;
+      if(from!==to) svg.appendChild(svgEl("path",{
+        d:`M${X(parent.end)} ${Y(from)}L${X(run.offset)} ${Y(to)}`,
+        class:"jump"+(on?"":" off"),stroke:col,"stroke-width":on?2:1.4}));
+    }
+    svg.appendChild(svgEl("path",{d,class:"trace"+(on?"":" off"),stroke:col,
+      "stroke-width":on?(mini?2:2.6):(mini?1.2:1.5),
+      "stroke-dasharray":run.live?"7 4":null}));
+
+    if(mini) return;
+    pts.forEach(p=>{
+      if(p.source==="end") return;
+      const dot=svgEl("circle",{cx:X(run.offset+p.x),cy:Y(p.v),
+        r:p.source==="launch"?3.2:4.2,fill:col,class:"dot"+(on?"":" off")});
+      dot.addEventListener("pointerenter",e=>showTip(e,run,key,p));
+      dot.addEventListener("pointerleave",hideTip);
+      svg.appendChild(dot);
+    });
+    if(run.live){
+      const last=pts[pts.length-1];
+      svg.appendChild(svgEl("circle",{cx:X(run.offset+last.x),cy:Y(last.v),r:5.5,
+        fill:"none",stroke:col,"stroke-width":2,class:"livecap"}));
+    }
+  });
+  return svg;
+}
+
+const TIP=document.getElementById("tip");
+function showTip(e,run,key,p){
+  const source=p.source==="launch"?"launched at":
+               p.source==="curriculum"?"curriculum set":"edited to";
+  TIP.innerHTML=`<b>${esc(run.id)} ${esc(run.slug)}</b> · it${esc(p.x)}<br>`
+    +`${esc(source)} <b>${esc(fmt(p.v))}</b>`
+    +(p.config_value!=null&&p.config_value!==p.v
+       ? ` <span class="pill">config said ${esc(fmt(p.config_value))}</span>`:"")
+    +(p.why?`<div class="why" style="margin-top:5px;color:var(--muted)">${esc(p.why)}</div>`:"");
+  TIP.hidden=false;
+  const box=TIP.getBoundingClientRect();
+  TIP.style.left=Math.min(e.clientX+14,innerWidth-box.width-10)+"px";
+  TIP.style.top=Math.max(10,e.clientY-box.height-12)+"px";
+}
+function hideTip(){TIP.hidden=true;}
+
+/* The chooser: what actually moved, most-moved first. */
+function drawBar(){
+  const bar=document.getElementById("pbar");
+  bar.innerHTML="";
+  const lab=document.createElement("span");
+  lab.className="lab"; lab.textContent="parameter";
+  bar.appendChild(lab);
+  const all=document.createElement("button");
+  all.className="pchip"+(pmode==="all"?" on":"");
+  all.textContent="▦ one-pager";
+  all.title="every parameter that moved, on one surface";
+  all.onclick=()=>{pmode="all"; drawBar(); drawChart(); drawPanel(); drawStrip();};
+  bar.appendChild(all);
+  bar.appendChild(Object.assign(document.createElement("span"),{className:"sep"}));
+  PINDEX.forEach(e=>{
+    if(!e.changes) return;
+    const b=document.createElement("button");
+    b.className="pchip"+(pmode==="one"&&e.key===pkey?" on":"");
+    b.innerHTML=`${esc(e.key.replace(/^reward\./,"").replace(/\.weight$/,""))}`
+      +`<span class="n">${esc(e.changes)}</span>`;
+    b.title=`${e.key} — ${e.first} → ${e.last}, ${e.changes} change(s)`;
+    b.onclick=()=>{pkey=e.key; pmode="one"; drawBar(); drawChart(); drawPanel();
+      drawStrip();};
+    bar.appendChild(b);
+  });
+  bar.appendChild(Object.assign(document.createElement("span"),{className:"sep"}));
+  const film=document.createElement("button");
+  film.className="pchip"+(stripOn?" on":"");
+  film.textContent="▶ clips under the chart";
+  film.onclick=()=>{stripOn=!stripOn; drawBar(); drawStrip();};
+  bar.appendChild(film);
+  const fixed=PINDEX.filter(e=>!e.changes).length;
+  if(fixed){
+    const note=document.createElement("span");
+    note.className="lab";
+    note.textContent=`+${fixed} never moved`;
+    bar.appendChild(note);
+  }
+}
+
+function drawChart(){
+  const host=document.getElementById("pchart");
+  host.innerHTML="";
+  if(!PINDEX.length){
+    host.innerHTML=`<p style="color:var(--muted)">No parameter snapshots in these `
+      +`records. <code>rlmcp record new</code> stores one at launch; runs recorded `
+      +`before that have nothing to draw.</p>`;
+    return;
+  }
+  if(pmode==="all"){
+    const grid=document.createElement("div"); grid.className="small";
+    PINDEX.filter(e=>e.changes).forEach(e=>{
+      const fig=document.createElement("figure");
+      fig.innerHTML=`<figcaption><b title="${esc(e.key)}">${esc(e.key)}</b>`
+        +`<span class="rng">${esc(e.first)} → ${esc(e.last)}</span></figcaption>`;
+      fig.appendChild(chartFor(e.key,{width:320,height:120,mini:true}));
+      fig.onclick=()=>{pkey=e.key; pmode="one"; drawBar(); drawChart(); drawPanel();
+        drawStrip();};
+      grid.appendChild(fig);
+    });
+    host.appendChild(grid);
+    return;
+  }
+  const w=Math.max(520,host.clientWidth-30);
+  // Tall enough to separate the steps, capped because a step chart stretched
+  // over a whole 4K column reads as noise, not as detail.
+  host.appendChild(chartFor(pkey,{width:w,
+    height:Math.min(560,Math.max(320,host.clientHeight-34))}));
+}
+
+/* The ledger, in the panel: every move of this parameter and why. In one-pager
+   mode it is the whole tuning history on one surface. */
+function movesFor(key){
+  const out=[]; let current=null;
+  PRUNS.forEach(run=>{
+    const pts=(run.series||{})[key]; if(!pts||!pts.length) return;
+    if(current!=null&&pts[0].v!==current)
+      out.push({run:run.id,at:"launch",from:current,to:pts[0].v,
+                why:"relaunched with a different value",source:"config"});
+    current=pts[0].v;
+    pts.slice(1).forEach(p=>{
+      if(p.source!=="manual"&&p.source!=="curriculum") return;
+      out.push({run:run.id,at:"it"+p.x,from:current,to:p.v,why:p.why||"",
+                source:p.source});
+      current=p.v;
+    });
+    current=pts[pts.length-1].v;
+  });
+  return out;
+}
+
+function drawPanel(){
+  const P=document.getElementById("panel");
+  const {chains,live}=litRuns();
+  const head=`<h3>highlighted</h3><p style="font-size:12.5px;color:var(--muted)">`
+    +(live?`${chains.length} path(s) still training`:`the path to ${esc(chains[0]||"—")}`)
+    +` · ${chains.map(c=>esc((PATHS[c]||[]).join(" → "))).join("<br>")}</p>`;
+  if(pmode==="all"){
+    const rows=PINDEX.filter(e=>e.changes);
+    P.innerHTML=`<h2>every parameter that moved</h2>`
+      +`<p class="summary">${esc(rows.length)} parameter(s) moved across `
+      +`${esc(PRUNS.length)} runs; ${esc(PINDEX.length-rows.length)} were set once `
+      +`and never touched.</p>`
+      +head
+      +rows.map(e=>{
+        const moves=movesFor(e.key);
+        return `<h3>${esc(e.key)}</h3>`
+          +`<p style="font-size:12.5px;color:var(--muted)">${esc(e.first)} → `
+          +`${esc(e.last)} · ${esc(moves.length)} move(s) · range `
+          +`${esc(fmt(e.min))}…${esc(fmt(e.max))}</p>`
+          +`<table class="moves">`+moves.map(m=>
+            `<tr><td class="rid">${esc(m.run)} ${esc(m.at)}</td>`
+            +`<td class="val">${esc(fmt(m.from))} → ${esc(fmt(m.to))}</td></tr>`
+            ).join("")+`</table>`;
+      }).join("");
+    P.scrollTop=0;
+    return;
+  }
+  if(!pkey||!PINDEX.length){
+    P.innerHTML=`<h2>parameters</h2><p class="summary">Nothing to trace: these `
+      +`records carry no launch snapshot.</p><p style="color:var(--muted)">`
+      +`<code>rlmcp record new</code> stores the resolved parameters at launch, and `
+      +`live edits come from each run's event log. A records store written before `
+      +`either existed still draws its tree — it just has no numbers to plot.</p>`
+      +head;
+    P.scrollTop=0;
+    return;
+  }
+  const entry=PINDEX.find(e=>e.key===pkey)||{};
+  const moves=movesFor(pkey);
+  P.innerHTML=`<h2 style="font-size:14px;word-break:break-all">${esc(pkey)}</h2>`
+    +`<p class="summary">${esc(entry.first||"")} → ${esc(entry.last||"")}`
+    +` over ${esc(moves.length)} move(s).</p>`
+    +head
+    +`<h3>moves</h3>`
+    +(moves.length?`<table class="moves">`+moves.map(m=>
+      `<tr><td class="rid">${esc(m.run)}<br>${esc(m.at)}</td>`
+      +`<td><span class="val">${esc(fmt(m.from))} → ${esc(fmt(m.to))}</span>`
+      +`<span class="pill">${esc(m.source)}</span>`
+      +(m.why?`<div class="why">${esc(m.why)}</div>`:"")+`</td></tr>`).join("")
+      +`</table>`
+      :`<p style="color:var(--muted)">Set once, never changed.</p>`);
+  P.scrollTop=0;
+}
+
+/* ---------------------------------------------------------------------------
+   The story: the same runs, read in order.
+
+   The tree shows structure and the parameter view shows numbers; neither shows
+   the thing a person actually asks for first, which is "show me what it looked
+   like, in order, and tell me what happened". One tile per run -- the clip, the
+   verdict, the sentence -- with arrows carrying the sequence, and the run on
+   the highlighted path drawn full strength.
+--------------------------------------------------------------------------- */
+function clipOf(r){ return r && r.clip && r.clip.src ? r.clip : null; }
+
+function playInPanel(id){
+  select(id);
+  const v=document.getElementById("vp");
+  if(v){ v.play().catch(()=>{}); v.scrollIntoView({block:"nearest"}); }
+}
+
+function drawStory(){
+  const flow=document.getElementById("storyflow");
+  flow.innerHTML="";
+  const {set:lit}=litRuns();
+  const chain=RUNS.slice();
+  chain.forEach((r,i)=>{
+    const on=lit.has(r.id);
+    const clip=clipOf(r);
+    const tile=document.createElement("figure");
+    tile.className="tile"+(on?"":" off");
+    tile.dataset.run=r.id;
+    const colour=COLORS[r.verdict]||"#8A98A6";
+    tile.innerHTML=
+      // No clip is not a missing image; it is a run nobody filmed. A 4:3 grey
+      // rectangle per run turns a lineage without video into a wall of holes,
+      // so the tile keeps only a hairline where the clip would be.
+      (clip
+        ? `<div class="shot">`
+          +(clip.poster
+            ? `<img loading="lazy" src="${esc(mediaUrl(clip.poster))}" alt="${esc(r.slug)}">`
+            : `<video muted playsinline preload="metadata" `
+              +`src="${esc(mediaUrl(clip.src))}#t=0.5"></video>`)
+          +`<span class="play">▶ play</span></div>`
+        : `<div class="noshot" title="no clip attached to this run"></div>`)
+      +`<figcaption class="meta">`
+      +`<span class="who"><span class="swatch" style="background:${colour}"></span>`
+      +`<b>${esc(r.id)}</b> ${esc(r.slug)}`
+      // The story is told in the order the runs happened, which is not always
+      // the order of the lineage. When the previous tile is not this run's
+      // parent, say whose child it is rather than letting the arrow imply it.
+      +(r.parent&&chain[i-1]&&r.parent!==chain[i-1].id
+         ? `<span class="from" title="config parent">↳${esc(r.parent)}</span>`:"")
+      +`</span>`
+      +`<span class="said">${esc(r.summary||"—")}</span>`
+      +`</figcaption>`;
+    tile.onclick=()=>{ flow.querySelectorAll(".tile").forEach(t=>t.classList.remove("on"));
+      tile.classList.add("on"); playInPanel(r.id); };
+    // Hovering previews without leaving the page: the poster swaps for the
+    // clip, muted, and swaps back. Clicking is still what plays it properly.
+    if(clip&&clip.poster){
+      let vid=null;
+      tile.addEventListener("pointerenter",()=>{
+        if(vid) return;
+        vid=document.createElement("video");
+        vid.muted=true; vid.loop=true; vid.playsInline=true;
+        vid.src=mediaUrl(clip.src);
+        tile.querySelector(".shot").prepend(vid);
+        tile.querySelector(".shot img").style.display="none";
+        vid.play().catch(()=>{});
+      });
+      tile.addEventListener("pointerleave",()=>{
+        if(!vid) return;
+        vid.remove(); vid=null;
+        const img=tile.querySelector(".shot img"); if(img) img.style.display="";
+      });
+    }
+    flow.appendChild(tile);
+    if(i<chain.length-1){
+      const next=chain[i+1], direct=next.parent===r.id;
+      const a=document.createElement("span");
+      a.className="arrow"+(direct?"":" weak")+(on&&lit.has(next.id)?" on":"");
+      a.textContent=direct?"→":"⇢";
+      a.title=direct ? `${next.id} continues ${r.id}`
+                     : `${next.id} came next in time, but branches from `
+                       +`${next.parent||"nothing"}`;
+      flow.appendChild(a);
+    }
+  });
+}
+
+/* Clips under the parameter chart, tied to the run whose band they belong to.
+
+   Positioning each clip at its run's x looks right until the runs are short:
+   a handful of runs spanning a few hundred iterations between them land their
+   thumbnails on top of each other. So the clips are spaced evenly and a leader
+   line goes up to the band -- the correspondence is drawn rather than implied
+   by position, which survives any distribution of run lengths. */
+function drawStrip(){
+  const host=document.getElementById("pstrip");
+  const chart=document.getElementById("pchart");
+  host.hidden=!stripOn||pmode!=="one";
+  chart.style.flex=host.hidden?"1":"0 1 auto";
+  if(host.hidden) return;
+  const svg=document.querySelector("#pchart svg");
+  if(!svg) return;
+  const width=Number(svg.getAttribute("width"))||760;
+  const span=Math.max(PARAMS.span||1,1);
+  const m={l:62,r:16}, CW=124, LEAD=18;
+  const {set:lit}=litRuns();
+  const shown=PRUNS.filter(r=>((r.series||{})[pkey]||[]).length)
+                   .map(r=>({r, rec:byId[r.id]}))
+                   .filter(x=>clipOf(x.rec));
+  host.innerHTML="";
+  if(!shown.length){
+    host.innerHTML=`<p class="cap">No clips on the runs that touch this parameter — `
+      +`<code>rlmcp record asset &lt;id&gt; &lt;file.mp4&gt; --kind videos</code>.</p>`;
+    return;
+  }
+  const railWidth=Math.max(width, shown.length*(CW+10));
+  const rail=document.createElement("div");
+  rail.className="rail"; rail.style.width=railWidth+"px";
+  rail.style.height=(LEAD+118)+"px";
+
+  const lead=svgEl("svg",{width:railWidth,height:LEAD});
+  lead.style.position="absolute"; lead.style.left="0"; lead.style.top="0";
+  rail.appendChild(lead);
+
+  const step=(railWidth-CW)/Math.max(1,shown.length-1);
+  shown.forEach(({r,rec},i)=>{
+    const clip=clipOf(rec);
+    const left=shown.length===1?(railWidth-CW)/2:i*step;
+    const bandX=m.l+((r.offset+r.iterations/2)/span)*(width-m.l-m.r);
+    const on=lit.has(r.id);
+    lead.appendChild(svgEl("path",{d:`M${bandX} 0 L${left+CW/2} ${LEAD}`,
+      stroke:COLORS[r.verdict]||"#8A98A6","stroke-width":on?1.6:1,
+      fill:"none",opacity:on?0.85:0.35}));
+
+    const el=document.createElement("div");
+    el.className="clip"+(on?"":" off");
+    el.style.left=left+"px"; el.style.top=LEAD+"px"; el.style.width=CW+"px";
+    el.innerHTML=(clip.poster
+        ? `<img loading="lazy" src="${esc(mediaUrl(clip.poster))}" alt="${esc(r.id)}">`
+        : `<video muted playsinline preload="metadata" `
+          +`src="${esc(mediaUrl(clip.src))}#t=0.5"></video>`)
+      +`<span class="lb">${esc(r.id)} ${esc(r.slug)}</span>`;
+    el.title=(rec.summary||r.slug)+" — click to play";
+    el.onclick=()=>{ setView("tree"); playInPanel(r.id); };
+    rail.appendChild(el);
+  });
+  host.appendChild(rail);
+}
+
+/* The view switch. Selecting a run restores the record panel; the parameter
+   view owns the panel while it is up. */
+const views=document.getElementById("views");
+[["tree","tree"],["story","story"],["params","parameters"]].forEach(([k,label])=>{
+  const b=document.createElement("button");
+  b.className="chip"+(view===k?" on":""); b.textContent=label;
+  b.style.background=view===k?"var(--sel)":"";
+  b.dataset.view=k;
+  b.onclick=()=>setView(k);
+  views.appendChild(b);
+});
+function setView(k){
+  view=k;
+  views.querySelectorAll("button").forEach(b=>{
+    const on=b.dataset.view===k;
+    b.classList.toggle("on",on); b.style.background=on?"var(--sel)":"";
+  });
+  document.getElementById("cy").hidden=(k!=="tree");
+  document.getElementById("params").hidden=(k!=="params");
+  document.getElementById("story").hidden=(k!=="story");
+  if(k==="params"){ drawBar(); drawChart(); drawPanel(); drawStrip(); }
+  else if(k==="story"){ drawStory();
+    const sel=cy.$(":selected"); if(sel.nonempty()) select(sel.id()); }
+  else { cy.resize(); const sel=cy.$(":selected"); if(sel.nonempty()) select(sel.id()); }
+}
+addEventListener("resize",()=>{
+  if(view==="params"&&pmode==="one"){ drawChart(); drawStrip(); }});
 
 apply();
 select((RUNS.find(r=>r.verdict==="best")||RUNS[RUNS.length-1]||{}).id);

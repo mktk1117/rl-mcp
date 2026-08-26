@@ -400,16 +400,24 @@ def _record_command(args: argparse.Namespace) -> int:
   if action == "graph":
     from rlmcp.records.views import plot_lineage, render_lineage_html
     from rlmcp.records.lineage import build, summarize
+    from rlmcp.records.poster import ensure_posters
 
     records = store.list_records()
     if not records:
       _emit({"ok": False, "error": "No records to draw."})
       return 1
+    posters: Dict[str, str] = {}
     if args.png:
       out = Path(args.out or (store.root / "lineage.png"))
       out.write_bytes(plot_lineage(records, title=args.title))
     else:
       out = Path(args.out or (store.root / "lineage.html"))
+      # A still per filmed run, cached in the media store beside the clip it
+      # came from, so the tree can show what each run looked like. Nothing here
+      # can fail the render: a store with no video, no imageio or no room to
+      # write one gets a page without thumbnails.
+      posters = ensure_posters(records, store.media_root,
+                               derive=not args.no_posters)
       # Media is referenced relatively, so the page works from a file:// path
       # with no server -- the same single-origin trick, minus the origin.
       try:
@@ -418,9 +426,10 @@ def _record_command(args: argparse.Namespace) -> int:
         media_base = str(store.media_root) + "/"
       out.write_text(
           render_lineage_html(records, title=args.title, media_base=media_base,
-                              engine=args.engine)
+                              engine=args.engine, posters=posters)
       )
-    _emit({"ok": True, "path": str(out), **summarize(build(records))})
+    _emit({"ok": True, "path": str(out), "posters": len(posters),
+           **summarize(build(records))})
     return 0
 
   if action == "compare":
@@ -699,6 +708,8 @@ def build_parser() -> argparse.ArgumentParser:
   q.add_argument("--out", help="Where to write (default: <records>/lineage.html)")
   q.add_argument("--png", action="store_true", help="Write a PNG instead of the viewer")
   q.add_argument("--title", default="rlmcp run tree")
+  q.add_argument("--no-posters", action="store_true",
+                 help="Do not derive missing clip stills (read-only media)")
   q.add_argument("--engine", default="auto", choices=["auto", "cytoscape", "simple"],
                  help="Interactive graph view, or a dependency-free fallback")
 
