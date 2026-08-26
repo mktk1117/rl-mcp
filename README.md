@@ -68,8 +68,20 @@ The CLI has two readers with opposite needs, and it tells them apart by whether
 stdout is a terminal:
 
 * **A pipe** — an agent shelling out, the MCP server, a redirect into a file —
-  gets the JSON it has always got. That output is a parsing contract and does
-  not move.
+  gets the JSON it has always got. Each command's output is a parsing contract
+  and does not move. It is one contract *per command*, though, not one shape
+  across the CLI — the top level follows where the answer comes from:
+
+  | where the answer comes from | top level of the JSON | commands |
+  | --- | --- | --- |
+  | session files on disk | the payload itself — an object, or a list for `sessions` and `events` | `status`, `info`, `sessions`, `events`, `params`, `metrics --list`, `extensions`, `record list`, `record timeline` |
+  | the training process, or an offline stand-in for it | `{"ok": true, "result": …}` on success, `{"ok": false, "error": "…"}` plus hints on failure | `get`, `set`, `metrics`, `plot`, `shot`, `video`, `curriculum`, `run`, … and `play`, `analyze` |
+  | the record store | `"ok"` beside the record's own keys | the other `record …` subcommands |
+
+  What this means for a parser: look for a top-level `"ok"`. Absent — the
+  payload is the whole output. Present, outside `record` — take `"result"` on
+  success, `"error"` on failure. Every command's family is pinned by
+  `tests/test_cli_output.py`, so none of this can drift silently.
 * **A terminal** gets the same payload laid out to be read: aligned columns,
   wrapped prose, timestamps as wall-clock. Nothing is truncated — text mode
   changes presentation, never content.
