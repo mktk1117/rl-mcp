@@ -29,6 +29,11 @@ dependencies = [
 
 [project.scripts]
 rlmcp = "rlmcp.cli:main"
+# `rlmcp train` and `rlmcp serve` are the same code; these names exist because
+# the docs use them and because `claude mcp add rlmcp -- rlmcp-server ...` reads
+# better than a subcommand. Prefixed, since mjlab installs a bare `train`.
+rlmcp-train = "rlmcp.train:main"
+rlmcp-server = "rlmcp.server.mcp_server:main"
 
 [project.optional-dependencies]
 server = [

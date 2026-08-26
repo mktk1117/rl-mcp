@@ -26,8 +26,20 @@ from pathlib import Path
 from typing import List, Optional
 
 
+def _prog_name(subcommand: str) -> str:
+  """Name this the way it was actually invoked.
+
+  The same code is reachable as `rlmcp train` and as the `rlmcp-train` console
+  script, and a usage line that names the other one is confusing exactly when
+  the reader is looking up how to type it.
+  """
+  invoked = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else ""
+  return invoked if invoked.startswith("rlmcp-") else subcommand
+
+
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-  parser = argparse.ArgumentParser(prog="rlmcp train", description=__doc__.splitlines()[0])
+  parser = argparse.ArgumentParser(prog=_prog_name("rlmcp train"),
+                                   description=__doc__.splitlines()[0])
   parser.add_argument("task", help="Registered mjlab task id")
   parser.add_argument("--num-envs", type=int, default=None)
   parser.add_argument("--max-iterations", type=int, default=None)

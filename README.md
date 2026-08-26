@@ -110,6 +110,8 @@ parameter edits and commands — so the same structure drives a locomotion ladde
 and a manipulation one:
 
 ```python
+from rlmcp import Action, Condition, CurriculumStage
+
 CurriculumStage(
     name="1_rough",
     parameters={"reward.foot_clearance.weight": -1.0},
