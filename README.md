@@ -51,7 +51,9 @@ Every one of those is also an MCP tool. An agent can do all of it, and
 **it sees the screenshots and plots**, not just their file paths.
 
 The CLI knows who is reading. A terminal gets aligned tables, and pictures open
-by themselves. A pipe gets JSON, and that JSON shape does not change.
+by themselves. A pipe gets JSON, and each command's JSON is a parsing contract
+that does not move — the shapes are written down and pinned by tests, in
+[docs/tools.md](docs/tools.md#what-a-pipe-gets).
 
 ## The whole integration
 
@@ -207,7 +209,7 @@ More in [docs/design.md](docs/design.md).
 ## Tests
 
 ```bash
-pytest tests -q     # 722 tests, ~7s, no GPU and no simulator required
+pytest tests -q     # 766 tests, ~6s, no GPU and no simulator required
 ```
 
 ## License

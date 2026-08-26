@@ -104,7 +104,7 @@ Anything your simulator has and others do not belongs in an
 ## Tests
 
 ```bash
-pytest tests -q     # 722 tests, ~7s, no GPU and no simulator required
+pytest tests -q     # 766 tests, ~6s, no GPU and no simulator required
 ```
 
 The suite runs the real controller against a fake simulator, covering the command

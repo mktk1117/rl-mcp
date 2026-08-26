@@ -7,12 +7,16 @@ grows -- that is what lets the formatted side be changed freely.
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sys
+import time
 
 import pytest
 
 from rlmcp import cli, cli_output
+from rlmcp.session import Response, Session
 
 
 # Mode resolution: a pipe is an agent, a terminal is a person.
@@ -246,3 +250,204 @@ def test_a_held_back_artifact_is_announced(tmp_path, capsys, monkeypatch):
   cli._emit({"ok": True, "result": {"image_path": str(path)}}, command="screenshot")
   out = capsys.readouterr().out
   assert str(path) in out and "not opened" in out
+
+
+# The envelope split: which commands wrap their payload, which emit it bare.
+#
+# Each command's JSON shape is a contract, but it is one contract *per
+# command*, not one shape across the CLI. Commands answered from session files
+# emit their payload directly (`sessions` and `events` as a bare list);
+# commands that reach the trainer -- or stand in for it offline, like `play`
+# and `analyze` -- wrap it in the `{ok, result, error}` envelope; `record`
+# subcommands put `ok` beside their own keys instead. README.md states the
+# rule next to the parsing-contract paragraph; the table here is what keeps it
+# true. A new subcommand fails the walk below until it declares its family.
+
+BARE = "bare"          # top-level object without "ok": the payload itself
+LIST = "list"          # top-level JSON list: the payload itself
+ENVELOPE = "envelope"  # {"ok": ..., "result": ...} / {"ok": false, "error": ...}
+
+SHAPES = {
+    "sessions": LIST,
+    "events": LIST,
+    "status": BARE,
+    "info": BARE,
+    "params": BARE,        # --live flips it to the envelope; pinned below
+    "extensions": BARE,    # --available flips it; pinned below
+    "record": BARE,        # via `record list`; the record family has its own test
+    "help": ENVELOPE,
+    "get": ENVELOPE,
+    "set": ENVELOPE,
+    "reset": ENVELOPE,
+    "reset-envs": ENVELOPE,
+    "metrics": ENVELOPE,
+    "plot": ENVELOPE,
+    "shot": ENVELOPE,
+    "video": ENVELOPE,
+    "play": ENVELOPE,
+    "trace": ENVELOPE,
+    "diagnose": ENVELOPE,
+    "analyze": ENVELOPE,
+    "plot-trace": ENVELOPE,
+    "curriculum": ENVELOPE,
+    "commands": ENVELOPE,
+    "pause": ENVELOPE,
+    "resume": ENVELOPE,
+    "step-once": ENVELOPE,
+    "checkpoint": ENVELOPE,
+    "checkpoints": ENVELOPE,
+    "load": ENVELOPE,
+    "note": ENVELOPE,
+    "feedback": ENVELOPE,
+    "stop": ENVELOPE,
+    "run": ENVELOPE,
+    "raw": ENVELOPE,
+}
+
+# Arguments that make a command well-formed, as in test_cli_dispatch. The two
+# paths that do not exist are deliberate: `play` and `analyze` build their own
+# result rather than round-tripping, so their *refusal* is what must carry the
+# envelope -- a live success would need a checkpoint and a trace.
+_SHAPE_ARGS = {
+    "get": ["reward.x.weight"],
+    "set": ["reward.x.weight", "-0.2"],
+    "run": ["get_status"],
+    "raw": ["get_status"],
+    "note": ["a note"],
+    "feedback": ["they said something"],
+    "load": ["/nonexistent/checkpoint.pt"],
+    "analyze": ["/nonexistent/trace.npz"],
+    "play": ["/nonexistent/checkpoint.pt"],
+    "record": ["list"],
+}
+_REFUSALS = {"play", "analyze"}
+
+# `train` and `serve` hand the line to another program; there is no payload.
+_NO_OUTPUT = {"train", "serve"}
+
+
+@pytest.fixture
+def live_session(tmp_path):
+  """A session whose trainer looks genuinely alive.
+
+  Liveness is not stubbed: the session carries this test's own pid and a fresh
+  heartbeat, the same evidence the CLI weighs for a real run. Only the
+  transport is faked, in the test body, so dispatch, `_call` and `_emit` all
+  run for real.
+  """
+  session = tmp_path / "logs" / "run1" / "rlmcp"
+  session.mkdir(parents=True)
+  now = time.time()
+  (session / "session.json").write_text(json.dumps({
+      "schema_version": 1, "pid": os.getpid(), "started_at": now,
+      "task": "Fake-Task-v0", "num_envs": 4,
+  }))
+  (session / "status.json").write_text(json.dumps({
+      "updated_at": now, "iteration": 7, "num_envs": 4,
+  }))
+  (session / "metrics.jsonl").write_text(
+      json.dumps({"iteration": 7, "t": now, "Train/mean_reward": 1.0}) + "\n")
+  (session / "events.jsonl").write_text(
+      json.dumps({"t": now, "kind": "note", "text": "hello"}) + "\n")
+  (session / "params.json").write_text(json.dumps({
+      "reward.x.weight": {"current_value": -0.1, "category": "reward"},
+  }))
+  return session
+
+
+def _shape_subcommands():
+  sub = next(
+      a for a in cli.build_parser()._actions
+      if isinstance(a, argparse._SubParsersAction)
+  )
+  return set(sub.choices) - _NO_OUTPUT
+
+
+def _run_json(argv, tmp_path, capsys, monkeypatch):
+  """Run the CLI as an agent would and parse what landed on stdout."""
+  monkeypatch.setenv("RLMCP_OUTPUT", "json")
+  monkeypatch.setenv("RLMCP_OPEN", "never")
+  monkeypatch.setenv("RLMCP_RECORDS", str(tmp_path / "records"))
+  monkeypatch.setattr(
+      Session, "call",
+      lambda self, cmd, timeout=120.0, **args: Response(
+          req_id="pin", ok=True, result={}, error=None),
+  )
+  code = cli.main(argv)
+  return code, json.loads(capsys.readouterr().out)
+
+
+def test_every_command_declares_its_envelope_family():
+  """A command added without a row in SHAPES is a contract nobody wrote down."""
+  assert set(SHAPES) == _shape_subcommands()
+
+
+@pytest.mark.parametrize("command", sorted(SHAPES), ids=sorted(SHAPES))
+def test_the_declared_family_is_the_emitted_family(
+    command, live_session, tmp_path, capsys, monkeypatch):
+  argv = [
+      "--session", str(live_session),
+      "--root", str(tmp_path),
+      "--timeout", "1",
+      command,
+      *_SHAPE_ARGS.get(command, []),
+  ]
+  code, payload = _run_json(argv, tmp_path, capsys, monkeypatch)
+
+  family = SHAPES[command]
+  if family == LIST:
+    assert isinstance(payload, list)
+  elif family == BARE:
+    assert isinstance(payload, dict) and "ok" not in payload
+  elif command in _REFUSALS:
+    # The failure half of the envelope: ok is false and the story is in error.
+    assert code == 1 and payload["ok"] is False and payload["error"]
+  else:
+    # A real round-trip emits exactly the three keys, ok true, payload under
+    # result. Anything else here means the command did not reach the (faked)
+    # trainer -- a dead-session refusal would also carry "ok", so the strict
+    # form is what proves the mechanism ran.
+    assert code == 0
+    assert set(payload) == {"ok", "result", "error"}
+    assert payload["ok"] is True
+
+
+@pytest.mark.parametrize("argv_tail, family", [
+    (["params", "--live"], ENVELOPE),
+    (["metrics", "--list"], BARE),
+    (["metrics", "--offline"], ENVELOPE),
+    (["extensions", "--available"], ENVELOPE),
+], ids=["params-live", "metrics-list", "metrics-offline", "extensions-available"])
+def test_flags_that_move_the_answer_move_the_family(
+    argv_tail, family, live_session, tmp_path, capsys, monkeypatch):
+  """The flip follows where the answer comes from, so the flip is the pin.
+
+  `--offline` answers from files yet keeps the envelope on purpose: it stands
+  in for a trainer round-trip, and its callers parse it as one.
+  """
+  argv = ["--session", str(live_session), "--timeout", "1", *argv_tail]
+  code, payload = _run_json(argv, tmp_path, capsys, monkeypatch)
+  assert code == 0
+  if family == BARE:
+    assert "ok" not in payload
+  else:
+    assert payload["ok"] is True and "result" in payload
+
+
+def test_record_subcommands_tag_their_payload_rather_than_wrapping_it(
+    tmp_path, capsys, monkeypatch):
+  """Listings answer bare; everything else puts `ok` beside its own keys."""
+  root = ["record", "--records-root", str(tmp_path / "records")]
+
+  code, listing = _run_json([*root, "list"], tmp_path, capsys, monkeypatch)
+  assert code == 0 and "ok" not in listing
+  assert set(listing) == {"count", "records"}
+
+  code, made = _run_json(
+      [*root, "new", "a-slug", "--falsifier", "it never walks"],
+      tmp_path, capsys, monkeypatch)
+  assert code == 0 and made["ok"] is True
+  assert "result" not in made and "record" in made
+
+  code, checked = _run_json([*root, "check"], tmp_path, capsys, monkeypatch)
+  assert code == 0 and "ok" in checked and "result" not in checked

@@ -21,18 +21,50 @@ These work on every command.
 
 | flag | meaning |
 | --- | --- |
-| `--session PATH` | talk to this session. Default: the newest one found |
-| `--root DIR` | where to look for sessions |
+| `--session PATH` | talk to this session |
+| `--root DIR` | where to search for the newest session |
 | `--json` / `--text` | force machine output or human output |
 | `--open` / `--no-open` | show images and clips, or just print their paths |
 | `--timeout SECONDS` | how long to wait for the trainer (default 120) |
 
-Output mode is guessed from stdout. A terminal gets tables and wrapped text; a
-pipe gets JSON. The JSON shape is a contract and does not change. `--text` never
-truncates anything, it only lays it out.
+### Which run a bare command talks to
 
-Environment variables do the same for a whole shell: `RLMCP_OUTPUT=json|text`,
-`RLMCP_OPEN=auto|never|always`, `RLMCP_RECORDS=<dir>`, `RLMCP_TASK_PACKAGES=<modules>`.
+`--session` wins, then `$RLMCP_SESSION`. Failing both, it takes the newest
+session under the first root that has one: `--root`, then `$RLMCP_ROOT`, then
+`./logs`, `./rlmcp_session`, `.`. Those are the same two variables the MCP
+server reads, so one export steers both. When nothing is found, the error names
+the directory it searched and where that directory came from.
+
+### Environment variables
+
+| variable | does |
+| --- | --- |
+| `RLMCP_SESSION` | pin one session directory |
+| `RLMCP_ROOT` | where to search for sessions |
+| `RLMCP_OUTPUT` | `json` or `text`, overriding the guess |
+| `RLMCP_OPEN` | `auto`, `never` or `always` |
+| `RLMCP_RECORDS` | the records directory |
+| `RLMCP_TASK_PACKAGES` | modules to import so their tasks register (`play`) |
+
+### What a pipe gets
+
+Output mode is guessed from stdout: a terminal gets tables and wrapped text, a
+pipe gets JSON. `--text` never truncates anything, it only lays it out.
+
+Each command's JSON is a parsing contract and does not move. It is one contract
+*per command*, though, not one shape across the CLI. The top level follows where
+the answer came from:
+
+| where the answer comes from | top level | commands |
+| --- | --- | --- |
+| session files on disk | the payload itself — an object, or a list for `sessions` and `events` | `status`, `info`, `sessions`, `events`, `params`, `metrics --list`, `extensions`, `record list`, `record timeline` |
+| the training process, or an offline stand-in for it | `{"ok": true, "result": …}`, or `{"ok": false, "error": "…"}` plus hints | `get`, `set`, `metrics`, `plot`, `shot`, `video`, `curriculum`, `run`, … and `play`, `analyze` |
+| the record store | `"ok"` beside the record's own keys | the other `record …` subcommands |
+
+**For a parser:** look for a top-level `"ok"`. Absent, the payload is the whole
+output. Present and the command is not `record`, take `"result"` on success and
+`"error"` on failure. Every command's family is pinned by
+`tests/test_cli_output.py`, so none of it can drift silently.
 
 ## Quick index
 
