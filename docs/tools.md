@@ -1,0 +1,578 @@
+# Tool reference
+
+Every rlmcp capability, one entry each. Each entry gives the shell command, the
+MCP tool an agent calls, what comes back, and the traps.
+
+## Three ways to call the same thing
+
+| you are | you use | example |
+| --- | --- | --- |
+| a person at a terminal | the `rlmcp` CLI | `rlmcp status` |
+| an LLM agent | an MCP tool | `get_training_status {}` |
+| anything, for a verb the core does not know | `run` / `run_command` | `rlmcp run set_terrain max_level=4` |
+
+They all end up in the same place: a request file in the session directory that
+the training process picks up between rollout batches. Nothing here can race
+the simulator.
+
+## Global CLI flags
+
+These work on every command.
+
+| flag | meaning |
+| --- | --- |
+| `--session PATH` | talk to this session. Default: the newest one found |
+| `--root DIR` | where to look for sessions |
+| `--json` / `--text` | force machine output or human output |
+| `--open` / `--no-open` | show images and clips, or just print their paths |
+| `--timeout SECONDS` | how long to wait for the trainer (default 120) |
+
+Output mode is guessed from stdout. A terminal gets tables and wrapped text; a
+pipe gets JSON. The JSON shape is a contract and does not change. `--text` never
+truncates anything, it only lays it out.
+
+Environment variables do the same for a whole shell: `RLMCP_OUTPUT=json|text`,
+`RLMCP_OPEN=auto|never|always`, `RLMCP_RECORDS=<dir>`, `RLMCP_TASK_PACKAGES=<modules>`.
+
+## Quick index
+
+| what you want | command | MCP tool |
+| --- | --- | --- |
+| what runs exist | [`sessions`](#sessions) | `list_sessions` |
+| point at another run | (use `--session`) | `switch_session` |
+| how is it doing | [`status`](#status) | `get_training_status` |
+| numbers over time | [`metrics`](#metrics) | `list_metrics`, `get_metrics` |
+| a graph of them | [`plot`](#plot) | `plot_metrics` |
+| a picture of the robot | [`shot`](#shot) | `take_screenshot` |
+| a clip of the robot | [`video`](#video) | `record_video` |
+| why does it move badly | [`diagnose`](#diagnose) | `diagnose_motion` |
+| raw per-step signals | [`trace`](#trace), [`plot-trace`](#plot-trace), [`analyze`](#analyze) | `record_trace`, `plot_joint_trace` |
+| what can I tune | [`params`](#params), [`get`](#get) | `list_parameters` |
+| change a weight | [`set`](#set), [`reset`](#reset) | `set_parameter`, `reset_parameters` |
+| restart episodes | [`reset-envs`](#reset-envs) | `reset_environments` |
+| task-specific verbs | [`commands`](#commands), [`run`](#run) | `list_commands`, `run_command` |
+| the stage ladder | [`curriculum`](#curriculum) | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
+| undo an experiment | [`checkpoint`](#checkpoint), [`load`](#load) | `save_checkpoint`, `list_checkpoints`, `rollback_to_checkpoint` |
+| pause, resume, stop | [`pause`](#pause-resume-step-once) | `pause_training`, `resume_training`, `stop_training` |
+| write something down | [`note`](#note), [`feedback`](#feedback), [`events`](#events) | `add_note`, `record_feedback`, `get_events` |
+| watch a finished run | [`play`](#play) | (CLI only) |
+| the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
+
+---
+
+# Watching a run
+
+## `sessions`
+
+List runs under the root, newest first, with `running` / `stalled` / `dead`.
+
+```bash
+rlmcp sessions
+```
+
+**MCP:** `list_sessions()` — same rows, plus which one this server is pinned to.
+`switch_session({"target": "newest"})` or a directory path moves the pin. The
+server never changes runs on its own; the CLI attaches to the newest run on
+every invocation.
+
+## `status`
+
+The one command to start with.
+
+```bash
+rlmcp status
+```
+
+**MCP:** `get_training_status()`
+
+Returns: `iteration`, `total_env_steps`, `num_envs`, `paused`, `headline_metrics`
+(everything under `rlmcp/` plus mean reward and episode length), `curriculum`
+(stage and promotion progress), `pending_jobs`, `extensions`, and a liveness
+`state`.
+
+It reads the trainer's published heartbeat, so it answers even while the
+training loop is busy, and after the run has died.
+
+## `info`
+
+Static facts about the session: task id, device, step time, when it started.
+
+```bash
+rlmcp info
+```
+
+## `metrics`
+
+```bash
+rlmcp metrics --list                          # every name this run publishes
+rlmcp metrics --list --contains reward
+rlmcp metrics Train/mean_reward --last-n 50
+rlmcp metrics --offline                       # read metrics.jsonl, skip the trainer
+```
+
+**MCP:** `list_metrics({"contains": "..."})`, `get_metrics({"names": [...], "last_n": 30})`
+
+`get_metrics` returns recent values plus a trend summary per metric, so you do
+not have to eyeball a list of floats.
+
+## `plot`
+
+Draw metrics to a PNG.
+
+```bash
+rlmcp plot Train/mean_reward rlmcp/episode_length_frac --smooth 20 --last-n 400
+```
+
+**MCP:** `plot_metrics({"names": [...], "last_n": 400, "smooth": 5, "title": "..."})`
+returns the image inline plus its path.
+
+In a terminal the PNG opens by itself: inline if your terminal can draw images
+(kitty, Ghostty, WezTerm, or `chafa` / `imgcat` / `viu`), otherwise through
+`xdg-open`. Piped output never opens a window.
+
+## `events`
+
+The run's audit trail: every parameter change with its reason, every stage
+change, checkpoint, note and falsifier event.
+
+```bash
+rlmcp events --last-n 50
+```
+
+**MCP:** `get_events({"last_n": 25})`
+
+## artifacts
+
+Everything the run has written: PNGs, MP4s, `.npz` traces.
+
+**MCP:** `list_artifacts()`. From a shell, look in `<session>/artifacts/`.
+
+---
+
+# Looking at the robot
+
+All four commands below record during normal rollout steps, so what you see is
+real training behaviour, not a separate evaluation. `video`, `trace` and
+`diagnose` are **deferred jobs**: they collect data over the coming steps and
+answer when done.
+
+Every one takes `--env-id N` or `--where key=value` to pick which robot. The
+`where` vocabulary comes from the run's extensions — the core does not know what
+`terrain=pyramid_stairs` means, the terrain extension does. See
+[extensions.md](extensions.md).
+
+## `shot`
+
+One frame, right now.
+
+```bash
+rlmcp shot
+rlmcp shot --where terrain=pyramid_stairs level=2
+rlmcp shot --no-open                     # write the PNG, print the path
+```
+
+**MCP:** `take_screenshot({"where": {"terrain": "pyramid_stairs"}})` returns the
+image inline plus the path. Large images are downscaled to fit MCP message
+limits; if one still does not fit you get the path and a note.
+
+## `video`
+
+```bash
+rlmcp video --seconds 8 --where terrain=random_rough
+```
+
+**MCP:** `record_video({"seconds": 4.0, "where": {...}})`
+
+## `diagnose`
+
+The most useful command in this list. It records per-step joint signals and
+tells you *why* the motion is bad, not just that it is.
+
+```bash
+rlmcp diagnose --seconds 4
+```
+
+**MCP:** `diagnose_motion({"seconds": 4.0})`
+
+Returns a report with five sections and a plain-English verdict:
+
+```json
+{"smoothness": {"joint_jerk_rms": 8596, "chatter_measured": true,
+                "hf_share_median": 0.469, "whole_body_hf": true,
+                "worst_hf_joints": [{"name": "right_shoulder_yaw_joint",
+                                     "hf_power_share": 0.659, "peak_hf_hz": 9.75}]},
+ "tracking": {"lin_vel_error_rms": 0.285, "commanded_speed_mean": 0.672},
+ "effort":   {"torque_rms": 11.3, "hardest_working_joints": ["..."]},
+ "posture":  {"tilt_deg_mean": 4.2, "base_height_std": 0.044},
+ "gait":     {"contact_fraction": 0.51, "mean_air_time_s": 0.32},
+ "verdict":  ["The whole body carries high-frequency motion (median 0.47 of
+               joint-velocity power above 8.0 Hz across 29 joints) ... raise
+               action_rate_l2 or lower action.joint_pos.scale_gain rather than
+               chasing one joint",
+              "Linear velocity tracking is reasonable (RMS error 0.28 m/s)"]}
+```
+
+Three things make the report trustworthy:
+
+- **Chatter is the share of joint-velocity power above the gait band**, not the
+  dominant frequency. Buzzing sits on top of a healthy 1–3 Hz gait instead of
+  replacing it, so the dominant frequency would miss it.
+- **A joint is named only if it stands out against the robot's own median.** On a
+  50 Hz humanoid every joint carries some high-frequency content, and a list of
+  27 "bad" joints tells you nothing. When the median itself is high, the report
+  calls it a whole-body problem, which has a different fix.
+- **When the measurement cannot be made** (trace too short, control rate too low)
+  you get `chatter_measured: false` and the reason. A missing finding never
+  reads as "clean". A diverged (NaN) policy leads with `DIVERGENCE:` instead of
+  tidy-looking zeros.
+
+## `trace`
+
+Record the raw signals without analysing them. Lands as an `.npz` in
+`artifacts/`.
+
+```bash
+rlmcp trace --seconds 6 --env-id 0
+```
+
+**MCP:** `record_trace({"seconds": 4.0})`
+
+## `plot-trace`
+
+Re-plot the last trace.
+
+```bash
+rlmcp plot-trace --channels joint_vel --components knee ankle
+```
+
+**MCP:** `plot_joint_trace({"channels": [...], "components": [...]})`
+
+## `analyze`
+
+Re-run the diagnosis on a saved trace, with no live trainer. Useful after the
+run has exited.
+
+```bash
+rlmcp analyze artifacts/trace_env0_it001520.npz --plot
+```
+
+Traces are saved without pickle. A trace from an older rlmcp needs
+`--allow-legacy`, which is an explicit opt-in because unpickling a file you did
+not write runs code from it.
+
+## Deferred job rules
+
+- Several jobs at once is fine. Past about four in flight, new requests are
+  refused; free a slot with `rlmcp run cancel_job req_id=<id>` (ids are in
+  `status`'s `pending_jobs`).
+- A deferred request **while training is paused** is refused with an
+  explanation. No steps happen while paused, so the job could never finish.
+- Jobs time out (~90 s) and fail honestly instead of hanging your call.
+- Queued commands expire after 120 s. A retry after a timeout can never cause a
+  double execution.
+
+---
+
+# Changing a run
+
+## `params`
+
+Discover what can be tuned. Nothing is hand-listed; rlmcp walks the environment
+config. The G1 rough task exposes 97 knobs.
+
+```bash
+rlmcp params --contains foot
+rlmcp params --category reward
+rlmcp params --live                     # ask the trainer instead of params.json
+```
+
+**MCP:** `list_parameters({"category": "reward", "contains": "foot"})`
+
+| category | examples |
+| --- | --- |
+| `reward` | `reward.foot_slip.weight`, `reward.foot_clearance.params.target_height` |
+| `termination` | `termination.fell_over.params.limit_angle` |
+| `domain_randomization` | `event.interval.push_robot.params.velocity_range.x` (a `[min, max]` pair) |
+| `curriculum` | `command.twist.ranges.lin_vel_x` |
+| `action` | `action.joint_pos.scale_gain` — a direct lever on jerkiness |
+| `rl` | `rl.learning_rate`, `rl.entropy_coef`, `rl.clip_param`, `rl.desired_kl` |
+
+Each parameter carries a **liveness**, and this is the field to read before you
+write:
+
+| liveness | what happens |
+| --- | --- |
+| `live` | takes effect next rollout batch |
+| `at_reset` | applied now, takes effect at each environment's next reset. The response says so |
+| `at_startup`, `inert` | the write is **refused**. These are only read when the environment is built, so a write would report success and change nothing |
+
+## `get`
+
+```bash
+rlmcp get reward.action_rate_l2.weight
+```
+
+## `set`
+
+```bash
+rlmcp set reward.action_rate_l2.weight -0.25 --why "ankles chattering at 15 Hz"
+rlmcp set event.interval.push_robot.params.velocity_range.x '[-1.5, 1.5]'
+```
+
+**MCP:** `set_parameter({"key": "...", "value": -0.25, "rationale": "..."})`
+
+Always pass a reason. It costs one clause and turns the event log into something
+you can read back later.
+
+Values are checked before anything is touched. A scalar written to a `[low, high]`
+range, an inverted range, or a float that would truncate on an int knob is
+refused with the expected shape named, and the live config stays intact.
+
+**Magnitudes are not second-guessed.** The only bounds are the ones true by
+definition: `gamma` and `lam` in `[0, 1]`, no negative learning rate. Everything
+else is unbounded, because only the task knows its own scale. A reward weight of
+600, an action gain of 10 and a clip epsilon of 0.8 are all legitimate
+experiments, and an invented limit would block them while catching nothing.
+
+> Setting `rl.learning_rate` also switches PPO's schedule to `fixed`. The
+> adaptive schedule would otherwise overwrite your value within one iteration.
+> The response says so rather than silently doing nothing.
+
+## `reset`
+
+Put parameters back to their startup values.
+
+```bash
+rlmcp reset                              # all of them
+rlmcp reset reward.foot_slip.weight      # just these
+```
+
+**MCP:** `reset_parameters({"keys": [...]})`
+
+## `reset-envs`
+
+The other reset, and it does an unrelated thing: it starts fresh **episodes** and
+leaves every parameter where it is.
+
+```bash
+rlmcp reset-envs                                  # every environment
+rlmcp reset-envs --where terrain=pyramid_stairs   # only those
+rlmcp reset-envs --env-id 0 --env-id 7
+```
+
+**MCP:** `reset_environments({"where": {...}, "rationale": "..."})`
+
+Use it to clear a stuck state, or to watch the start of a behaviour instead of
+waiting for the robot to fail into one.
+
+## `commands`
+
+What verbs this run accepts, core plus whatever its extensions added.
+
+```bash
+rlmcp commands
+```
+
+**MCP:** `list_commands()`
+
+## `run`
+
+Call any of them. Values are parsed as JSON, so quote lists.
+
+```bash
+rlmcp run set_terrain terrains='["flat","random_rough"]' max_level=4
+rlmcp run terrain_status
+rlmcp run cancel_job req_id=abc123
+```
+
+**MCP:** `run_command({"cmd": "set_terrain", "args": {"max_level": 4}})`
+
+This is how a task's own vocabulary reaches you without the MCP tool list ever
+changing. `rlmcp raw` is an alias.
+
+## `curriculum`
+
+```bash
+rlmcp curriculum                                    # stage, and what it waits for
+rlmcp curriculum advance --why "flat is solved"
+rlmcp curriculum goto 3_from_table --why "warm start already places reliably"
+rlmcp curriculum auto-off                           # stop it promoting itself
+rlmcp curriculum auto-on
+```
+
+**MCP:** `curriculum_status()`, `curriculum_advance({"reason": "..."})`,
+`curriculum_goto({"stage": "...", "reason": "..."})`, `curriculum_auto({"enabled": false})`
+
+`curriculum_status` shows each promotion condition with its current value and the
+streak. A manual command beats the automatic schedule within the same iteration.
+Writing a ladder is [curriculum.md](curriculum.md).
+
+---
+
+# Safety net and lifecycle
+
+## `checkpoint`
+
+```bash
+rlmcp checkpoint before-experiment --note "trying 2x push events"
+rlmcp checkpoints
+```
+
+**MCP:** `save_checkpoint({"tag": "...", "note": "..."})`, `list_checkpoints()`
+
+Saves weights **and** parameters, curriculum stage, and extension state (terrain
+unlocks and the like).
+
+## `load`
+
+The undo button.
+
+```bash
+rlmcp load before-experiment
+```
+
+**MCP:** `rollback_to_checkpoint({"path": "before-experiment"})`
+
+Restores weights, parameters (checkpointed values beat stage defaults),
+curriculum stage and extension state, and reports what it actually found. A
+checkpoint with no extension state says so instead of claiming success.
+
+## `pause`, `resume`, `step-once`
+
+```bash
+rlmcp pause
+rlmcp step-once        # advance exactly one iteration while paused
+rlmcp resume
+```
+
+**MCP:** `pause_training()`, `resume_training()`
+
+Other tools keep working while paused, except deferred jobs, which are refused
+because nothing steps.
+
+## `stop`
+
+```bash
+rlmcp stop --why "the falsifier fired"
+```
+
+**MCP:** `stop_training({"reason": "..."})`
+
+In the training process this arrives as a `TrainingStopped` exception inside
+`runner.learn()`. Catch it and save a checkpoint — see [your-task.md](your-task.md).
+`stop` also closes a `play` session.
+
+---
+
+# Writing things down
+
+## `note`
+
+```bash
+rlmcp note "reviewer says the gripper should approach from above"
+```
+
+**MCP:** `add_note({"text": "..."})`
+
+Goes into the event log next to every parameter change. A remark about the run
+belongs with the run, not in a side file.
+
+## `feedback`
+
+What a human said, kept against the run and stamped with the iteration.
+
+```bash
+rlmcp feedback "it looks jittery near the end" --kind observe
+rlmcp feedback "stop tuning the entropy coefficient" --kind correct \
+    --read-as "leave rl.entropy_coef alone for the rest of this run"
+```
+
+**MCP:** `record_feedback({"text": "...", "kind": "steer", "interpretation": "..."})`
+
+Six kinds: `steer`, `correct`, `reject`, `approve`, `observe`, `constrain`. The
+first four ask for something, so an entry of that kind with no recorded response
+counts as **unanswered** and says so everywhere it appears. Answering is
+[`rlmcp record answer`](records.md#feedback-the-steering-kept).
+
+---
+
+# Playing a finished run
+
+## `play`
+
+Everything above talks to a live trainer. Once the run has exited, the only
+evidence left is a checkpoint, and `play` is how you look at it.
+
+```bash
+rlmcp play                                      # newest run, last checkpoint, 8s clip
+rlmcp play logs/rsl_rl/my_run/model_final_4375.pt --device cpu
+rlmcp play --stage 2_hardest --seconds 12
+rlmcp play --mode native                        # MuJoCo's own viewer
+rlmcp play --mode viser                         # a viewer in the browser
+```
+
+| flag | meaning |
+| --- | --- |
+| `--mode video\|native\|viser` | render an mp4 (works over ssh), or open a viewer |
+| `--device cpu` | play without touching a GPU that is training |
+| `--stage NAME` | restore conditions as of the end of that stage |
+| `--set KEY=VALUE` | override a parameter after the replay, so it wins. Repeatable |
+| `--no-replay` | do not restore conditions at all |
+| `--allow-partial` | render even if some conditions could not be restored |
+| `--task-package MODULE` | import this first so your tasks register. Repeatable |
+| `--num-envs`, `--extra-envs` | how many robots, and how many composited into the frame |
+| `--seconds`, `--fps`, `--out`, `--render-width/-height` | clip options |
+
+### Why `play` replays the run first
+
+A checkpoint remembers weights and an iteration number. It does not remember the
+curriculum rung it was climbing, and a task's `play=True` config is rung zero by
+construction. So replaying a late checkpoint against a fresh config shows a
+policy failing at a task it was never asked to do. That looks exactly like a bad
+policy, which is the worst kind of wrong evidence: clear, confident and blaming
+the wrong thing.
+
+So `play` folds the session's event log first. Every curriculum entry recorded
+the parameters it set and the commands it ran; every live `rlmcp set` recorded
+its key and new value. Replaying those in order puts the environment back where
+the policy left it, and the result says exactly what was restored.
+
+If something cannot be restored — a command this build of the task no longer
+has, a parameter it no longer accepts — `play` refuses to render and says which
+fix applies to which problem. "Unknown command" and "the command changed its
+arguments" send you to different places to look.
+
+The reconstruction lives in `rlmcp/core/replay.py` and imports no simulator. It
+is a plain parse-and-fold over the event log.
+
+### Steering a play session
+
+A play session is itself a session. It publishes into `<run>/rlmcp/play/<stamp>/`
+and answers the same commands a training run does. It is marked as a play
+session, so it never becomes the answer to "the latest session here".
+
+```bash
+rlmcp --session <play dir> reset-envs                  # see the opening again
+rlmcp --session <play dir> run list_policies           # what else is next to it
+rlmcp --session <play dir> run load_policy checkpoint=model_2000.pt
+rlmcp --session <play dir> stop
+```
+
+`load_policy` is the interesting one: the conditions you restored and the camera
+you set up survive, and only the weights change. That is what makes a comparison
+fair. It refuses without touching the running policy if the file is missing or
+if the weights load but cannot act on this environment — a swap that half-applies
+is worse than one that does not happen.
+
+Because a checkpoint from another run may have trained at another rung, the
+response always names the stage it trained at next to the stage the environment
+is in. When those disagree the conditions are deliberately **not** changed, and
+the payload says so loudly. Pass `replay=true` to restore that checkpoint's own
+conditions instead.
+
+---
+
+# Records
+
+`rlmcp record …` is the record *across* runs: hypotheses, verdicts, lineage,
+feedback. It has its own page: [records.md](records.md).

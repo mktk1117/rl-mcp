@@ -11,6 +11,10 @@ This file is the canonical guide. `CLAUDE.md` is a symlink to it, so an
 assistant that looks for that name finds the same text; there is one copy to
 maintain and nothing here assumes a particular agent product.
 
+**This file is about working *in* this repository.** To *use* rlmcp, read
+[docs/tools.md](docs/tools.md) — every command and MCP tool, one entry each —
+and [docs/mcp-server.md](docs/mcp-server.md) if you are driving over MCP.
+
 ## This repo is the tool. The records are somewhere else.
 
 Two repositories, on purpose:
