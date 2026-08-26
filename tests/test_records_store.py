@@ -11,12 +11,13 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import sqlite3
 import time
 
 import pytest
 
 from rlmcp.records.filestore import FileStore
-from rlmcp.records.record import Falsifier, RunRecord, Weights
+from rlmcp.records.record import Falsifier, Feedback, RunRecord, Weights
 from rlmcp.records.store import (
     ConflictError,
     SlotUnavailable,
@@ -620,3 +621,157 @@ def test_a_crashed_writers_temp_file_is_swept_on_open(tmp_path, capsys):
   assert live.exists()  # its writer (this process) is still alive
   assert "swept" in capsys.readouterr().err
   live.unlink()
+
+
+# Feedback. It is the one part of a record two writers race for, so it has its
+# own append operation rather than a read-modify-write by every caller.
+
+
+def test_feedback_is_appended_in_the_order_it_arrived(store):
+  record = store.new_record("steered")
+
+  store.add_feedback(record.id, Feedback(text="first", kind="observe"))
+  store.add_feedback(record.id, Feedback(text="second", kind="steer"))
+
+  after = store.get_record(record.id)
+  assert [f.text for f in after.feedback] == ["first", "second"]
+  assert after.feedback[1].kind == "steer"
+
+
+def test_an_append_does_not_overwrite_what_landed_in_between(store):
+  """The append is re-applied to the fresh record, never written from a stale
+  copy -- the shape of a human typing while the trainer heartbeats."""
+  record = store.new_record("raced")
+  stale = store.get_record(record.id)
+
+  store.add_feedback(record.id, Feedback(text="landed first"))
+  stale.outcome = "written from an old copy"
+  store.add_feedback(record.id, Feedback(text="landed second"))
+
+  after = store.get_record(record.id)
+  assert [f.text for f in after.feedback] == ["landed first", "landed second"]
+
+
+def test_feedback_with_no_text_is_refused(store):
+  record = store.new_record("empty_remark")
+
+  with pytest.raises(StoreError):
+    store.add_feedback(record.id, Feedback(text="   "))
+
+
+def test_feedback_on_an_unknown_record_is_refused(store):
+  with pytest.raises(StoreError):
+    store.add_feedback("999", Feedback(text="into the void"))
+
+
+def test_answering_fills_the_response_slot_without_touching_the_text(store):
+  record = store.new_record("answered")
+  store.add_feedback(record.id, Feedback(text="try a smaller step", kind="steer"))
+
+  updated = store.answer_feedback(record.id, 0, "Halved it; the jitter went away.")
+
+  assert updated.feedback[0].text == "try a smaller step"
+  assert updated.feedback[0].answered
+  assert updated.feedback[0].changed is True
+  assert updated.outstanding_feedback() == []
+
+
+def test_an_answer_that_changed_nothing_is_recorded_as_such(store):
+  """"Looked into it, nothing needed changing" is a real answer, and the
+  ledger must not read as though every remark moved the project."""
+  record = store.new_record("investigated")
+  store.add_feedback(record.id, Feedback(text="that knob is the wrong one", kind="correct"))
+
+  updated = store.answer_feedback(
+      record.id, 0, "It was already at the default.", changed=False)
+
+  assert updated.feedback[0].answered
+  assert updated.feedback[0].changed is False
+
+
+def test_an_empty_response_is_not_an_answer(store):
+  record = store.new_record("unanswered")
+  store.add_feedback(record.id, Feedback(text="do the thing", kind="steer"))
+
+  with pytest.raises(StoreError):
+    store.answer_feedback(record.id, 0, "  ")
+
+
+def test_answering_an_index_that_is_not_there_is_refused(store):
+  record = store.new_record("short_list")
+  store.add_feedback(record.id, Feedback(text="only one", kind="steer"))
+
+  with pytest.raises(StoreError) as exc:
+    store.answer_feedback(record.id, 4, "about the fifth one")
+  assert "index 4" in str(exc.value)
+
+
+def test_the_timeline_folds_every_run_oldest_first(store):
+  first = store.new_record("early")
+  second = store.new_record("late")
+  store.add_feedback(first.id, Feedback(text="said first", at=100.0))
+  store.add_feedback(second.id, Feedback(text="said second", at=200.0))
+  store.add_feedback(first.id, Feedback(text="said third", at=300.0))
+
+  rows = store.feedback_timeline()
+
+  assert [r["text"] for r in rows] == ["said first", "said second", "said third"]
+  # Each row points back at the entry it came from: run plus index is how a
+  # response is attached later.
+  assert [(r["run"], r["index"]) for r in rows] == [
+      (first.id, 0), (second.id, 0), (first.id, 1)]
+
+
+def test_the_timeline_filters_by_kind_author_and_what_is_outstanding(store):
+  record = store.new_record("filtered")
+  store.add_feedback(record.id, Feedback(text="nice", kind="approve", author="reviewer"))
+  store.add_feedback(record.id, Feedback(text="do this", kind="steer"))
+  store.add_feedback(record.id, Feedback(text="did that", kind="steer",
+                                         response="done"))
+
+  assert len(store.feedback_timeline(kind="steer")) == 2
+  assert len(store.feedback_timeline(author="reviewer")) == 1
+  assert [r["text"] for r in store.feedback_timeline(outstanding=True)] == ["do this"]
+  assert len(store.feedback_timeline(limit=2)) == 2
+
+
+def test_an_empty_store_has_an_empty_timeline(store):
+  assert store.feedback_timeline() == []
+  assert store.feedback_timeline(outstanding=True) == []
+
+
+def test_the_timeline_survives_the_index_being_thrown_away(tmp_path):
+  """The files are the truth; the index only makes the fold a query."""
+  store = FileStore(tmp_path / "records", slots=1)
+  record = store.new_record("indexed")
+  store.add_feedback(record.id, Feedback(text="remember me", kind="constrain"))
+
+  os.remove(store.index_path)
+  reopened = FileStore(tmp_path / "records", slots=1)
+  reopened.reindex()
+
+  assert [r["text"] for r in reopened.feedback_timeline()] == ["remember me"]
+
+
+def test_an_index_predating_the_feedback_table_catches_itself_up(tmp_path):
+  """An old store opens with the table missing; an empty answer would read as
+  a fact rather than as a missing migration."""
+  store = FileStore(tmp_path / "records", slots=1)
+  record = store.new_record("legacy_index")
+  store.add_feedback(record.id, Feedback(text="written before the table", kind="steer"))
+  with sqlite3.connect(store.index_path) as conn:
+    conn.execute("DROP TABLE feedback")
+
+  reopened = FileStore(tmp_path / "records", slots=1)
+
+  assert [r["text"] for r in reopened.feedback_timeline()] == [
+      "written before the table"]
+
+
+def test_deleting_a_record_takes_its_feedback_out_of_the_timeline(store):
+  record = store.new_record("doomed")
+  store.add_feedback(record.id, Feedback(text="say something", kind="steer"))
+
+  store.delete_record(record.id)
+
+  assert store.feedback_timeline() == []

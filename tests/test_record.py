@@ -11,6 +11,7 @@ from rlmcp.core.curriculum import Condition
 from rlmcp.records.filestore import FileStore
 from rlmcp.records.record import (
     Falsifier,
+    Feedback,
     Lease,
     RunRecord,
     Weights,
@@ -361,3 +362,346 @@ def test_a_not_evaluable_falsifier_row_cannot_carry_a_validated_close(tmp_path, 
   after = store.get_record(record.id)
   assert after.verdict == "planned"
   assert after.metrics == []
+
+
+# Feedback: what a human said, and what was done about it. The point of the
+# field is that an instruction with no recorded response stays visible, so
+# these check the honest-by-default shapes as much as the round trip.
+
+
+def test_feedback_round_trips_through_a_dict():
+  record = RunRecord(
+      id="011",
+      slug="steered",
+      feedback=[
+          Feedback(text="It gets jittery near the end.", kind="observe",
+                   author="reviewer", iteration=420),
+          Feedback(text="Stop tuning the entropy coefficient.", kind="correct",
+                   response="Checked; it was already at the default.",
+                   changed=False, affects=["012"], artifacts=["plots/jitter.png"]),
+      ],
+  )
+
+  restored = RunRecord.from_dict(json.loads(json.dumps(record.to_dict())))
+
+  assert [f.text for f in restored.feedback] == [f.text for f in record.feedback]
+  assert restored.feedback[0].kind == "observe"
+  assert restored.feedback[0].iteration == 420
+  assert restored.feedback[1].affects == ["012"]
+  assert restored.feedback[1].artifacts == ["plots/jitter.png"]
+  assert restored.feedback[1].changed is False
+
+
+def test_a_record_written_before_feedback_existed_still_loads():
+  """Every new field is optional; a v1 record keeps its own schema stamp."""
+  old = {"schema_version": 1, "id": "003", "slug": "ancient",
+         "hypothesis": "it will work", "verdict": "planned"}
+
+  record = RunRecord.from_dict(old)
+
+  assert record.feedback == []
+  assert record.headline == ""
+  assert record.task == ""
+  assert record.schema_version == 1
+  assert record.outstanding_feedback() == []
+
+
+def test_bare_string_feedback_is_kept_rather_than_dropped():
+  """A hand-edited record is still a record; losing the remark is worse."""
+  record = RunRecord.from_dict(
+      {"id": "004", "slug": "hand_edited", "feedback": ["just do the thing"]}
+  )
+
+  assert record.feedback[0].text == "just do the thing"
+  assert record.feedback[0].kind == "steer"
+
+
+def test_only_instructions_are_outstanding_without_a_response():
+  """An observation asked for nothing, so silence is not a dropped ball."""
+  record = RunRecord(
+      id="005", slug="mixed",
+      feedback=[
+          Feedback(text="looks good", kind="approve"),
+          Feedback(text="it looks jittery", kind="observe"),
+          Feedback(text="try a smaller step", kind="steer"),
+          Feedback(text="never exceed 80%", kind="constrain", response="Capped it."),
+      ],
+  )
+
+  assert [i for i, _ in record.outstanding_feedback()] == [2]
+  assert record.feedback_kinds() == {
+      "approve": 1, "observe": 1, "steer": 1, "constrain": 1}
+
+
+def test_a_written_headline_wins_over_the_derived_sentence():
+  record = RunRecord(id="006", slug="summarised",
+                     outcome="Reward rose to 4.2. Then it plateaued.")
+  assert record.one_line() == "Reward rose to 4.2."
+
+  record.headline = "The plateau, not the rise, is the story."
+  assert record.one_line() == "The plateau, not the rise, is the story."
+
+
+def test_one_line_still_falls_back_when_no_headline_is_written():
+  """The viewer payload reads one_line(); clearing the headline restores it."""
+  record = RunRecord(id="007", slug="open_run", hypothesis="A longer warmup helps.")
+  assert record.one_line() == "A longer warmup helps."
+
+  record.outcome = "It did not. The warmup was never the constraint."
+  assert record.one_line() == "It did not."
+
+  record.headline = "   "  # whitespace is not a headline
+  assert record.one_line() == "It did not."
+
+
+def test_the_summary_row_carries_the_feedback_counts():
+  record = RunRecord(
+      id="008", slug="counted", task="Some-Task-v0",
+      feedback=[Feedback(text="do this", kind="steer"),
+                Feedback(text="nice", kind="approve")],
+  )
+
+  row = record.summary()
+
+  assert row["feedback"] == 2
+  assert row["feedback_outstanding"] == 1
+  assert row["task"] == "Some-Task-v0"
+  # Existing keys keep their meaning: the JSON is a parsing contract.
+  assert row["hypothesis"] == "" and row["outcome"] == ""
+
+
+# The command line over the same data. `rlmcp record` JSON is a parsing
+# contract for agents, so these check the payload shapes as well as the effect.
+
+
+def _record_cli(root, *argv) -> int:
+  return cli_main(["record", "--records-root", str(root), *argv])
+
+
+def _payload(capsys) -> dict:
+  return json.loads(capsys.readouterr().out)
+
+
+def _feedback_session(tmp_path, said) -> str:
+  """A finished session whose event log holds feedback rows."""
+  session = Session(tmp_path / "logs" / "spoken" / "rlmcp").create({"task": "test"})
+  session.append_metrics(400, {"Train/mean_reward": 1.0})
+  for entry in said:
+    session.append_event("feedback", entry)
+  return str(session.dir)
+
+
+def test_the_cli_attaches_feedback_and_says_it_is_unanswered(tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("steered")
+
+  rc = _record_cli(store.root, "feedback", record.id,
+                   "Stop tuning the entropy coefficient.", "--kind", "correct")
+
+  assert rc == 0
+  payload = _payload(capsys)
+  assert payload["index"] == 0
+  assert payload["feedback"]["kind"] == "correct"
+  # The reminder names the exact command that would answer it.
+  assert f"record answer {record.id} 0" in payload["reminder"]
+
+
+def test_an_approval_gets_no_nagging_reminder(tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("approved")
+
+  _record_cli(store.root, "feedback", record.id, "Looks right.", "--kind", "approve")
+
+  assert "reminder" not in _payload(capsys)
+
+
+def test_feedback_is_stamped_with_the_runs_current_iteration(tmp_path, capsys):
+  """The iteration is the one thing only the session knows, and it is what
+  places the remark on the run's timeline."""
+  store = _store(tmp_path)
+  record = store.new_record("live")
+  session = Session(tmp_path / "logs" / "live" / "rlmcp").create({"task": "test"})
+  session.publish_status({"iteration": 880, "num_envs": 4})
+  record.session = str(session.dir)
+  store.put_record(record)
+
+  _record_cli(store.root, "feedback", record.id, "Something is off.")
+
+  assert _payload(capsys)["feedback"]["iteration"] == 880
+
+
+def test_feedback_on_a_record_with_no_session_has_no_iteration(tmp_path, capsys):
+  """Missing is fine -- a remark on a finished write-up has no iteration --
+  but guessing one is not."""
+  store = _store(tmp_path)
+  record = store.new_record("off_run")
+
+  _record_cli(store.root, "feedback", record.id, "About the write-up.")
+
+  assert _payload(capsys)["feedback"]["iteration"] is None
+
+
+def test_the_cli_answers_a_remark_without_touching_its_text(tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("answered")
+  _record_cli(store.root, "feedback", record.id, "Try a smaller step.")
+  capsys.readouterr()
+
+  rc = _record_cli(store.root, "answer", record.id, "0",
+                   "Halved it; the jitter went away.")
+
+  assert rc == 0
+  entry = _payload(capsys)["feedback"]
+  assert entry["text"] == "Try a smaller step."
+  assert entry["changed"] is True
+  assert store.get_record(record.id).outstanding_feedback() == []
+
+
+def test_answering_an_index_that_is_not_there_fails_loudly(tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("short")
+
+  rc = _record_cli(store.root, "answer", record.id, "3", "about the fourth")
+
+  assert rc == 1
+  assert "no index 3" in _payload(capsys)["error"]
+
+
+def test_a_written_headline_replaces_the_derived_one(tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("summarised", hypothesis="A longer warmup helps.")
+
+  _record_cli(store.root, "headline", record.id, "The entropy floor is the constraint.")
+  payload = _payload(capsys)
+
+  assert payload["headline"] == "The entropy floor is the constraint."
+  assert payload["derived"] is False
+
+  _record_cli(store.root, "headline", record.id)  # no text clears it
+  cleared = _payload(capsys)
+  assert cleared["headline"] == "A longer warmup helps."
+  assert cleared["derived"] is True
+
+
+def test_the_timeline_renders_a_ledger_with_the_unanswered_count(tmp_path, capsys):
+  store = _store(tmp_path)
+  first = store.new_record("early")
+  second = store.new_record("late")
+  _record_cli(store.root, "feedback", first.id, "Never exceed 80%.",
+              "--kind", "constrain")
+  _record_cli(store.root, "feedback", second.id, "Try a smaller step.",
+              "--kind", "steer", "--did", "Halved it.")
+  _record_cli(store.root, "feedback", second.id, "Stop tuning it.",
+              "--kind", "correct")
+  capsys.readouterr()
+
+  rc = _record_cli(store.root, "timeline", "--markdown")
+
+  assert rc == 0
+  text = capsys.readouterr().out
+  assert "# Feedback ledger" in text
+  assert "**2 unanswered**" in text
+  assert f"{first.id}[0]" in text
+  assert "Never exceed 80%." in text          # the table
+  assert "**Done:** Halved it." in text       # and again, in full
+
+
+def test_the_ledger_can_be_written_to_a_file(tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("written_out")
+  _record_cli(store.root, "feedback", record.id, "Say it once.")
+  capsys.readouterr()
+  out = tmp_path / "FEEDBACK.md"
+
+  _record_cli(store.root, "timeline", "--markdown", "--out", str(out))
+
+  assert _payload(capsys)["count"] == 1
+  assert "Say it once." in out.read_text()
+
+
+def test_an_empty_store_renders_a_ledger_rather_than_failing(tmp_path, capsys):
+  store = _store(tmp_path)
+
+  rc = _record_cli(store.root, "timeline", "--markdown")
+
+  assert rc == 0
+  assert "No feedback recorded yet." in capsys.readouterr().out
+
+
+def test_check_reports_the_unanswered_count_without_reshaping_its_payload(
+    tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("closed_with_a_loose_end", outcome="it happened",
+                            metrics=[["measured", "1.0"]], verdict="falsified")
+  store.put_record(record)
+  _record_cli(store.root, "feedback", record.id, "Never exceed 80%.",
+              "--kind", "constrain")
+  capsys.readouterr()
+
+  _record_cli(store.root, "check")
+  payload = _payload(capsys)
+
+  # Everything an existing parser reads is still exactly where it was.
+  assert set(("ok", "errors", "warnings", "records")) <= set(payload)
+  assert payload["feedback"] == {
+      "total": 1, "unanswered": 1, "runs_with_unanswered": [record.id]}
+
+
+def test_check_on_a_store_with_no_feedback_still_answers(tmp_path, capsys):
+  store = _store(tmp_path)
+  store.new_record("quiet")
+
+  _record_cli(store.root, "check")
+
+  assert _payload(capsys)["feedback"]["unanswered"] == 0
+
+
+def test_closing_folds_what_was_said_to_the_running_trainer(tmp_path, capsys):
+  """Feedback said mid-run lives in the session log, which is deleted with the
+  logs. The close-out is the last chance to move it into the record."""
+  store = _store(tmp_path)
+  record = store.new_record("spoken_to")
+  record.session = _feedback_session(tmp_path, [
+      {"iteration": 120, "text": "It collapses after the warmup.",
+       "feedback_kind": "correct", "author": "user",
+       "interpretation": "Shorten the warmup."},
+  ])
+  store.put_record(record)
+
+  _close(store.root, record.id, "falsified", "--outcome", "it did not hold",
+         "--metric", "x=1")
+  capsys.readouterr()
+
+  folded = store.get_record(record.id).feedback
+  assert [f.text for f in folded] == ["It collapses after the warmup."]
+  assert folded[0].iteration == 120
+  assert folded[0].interpretation == "Shorten the warmup."
+
+
+def test_a_second_close_does_not_double_the_ledger(tmp_path, capsys):
+  """`interrupted` is the one terminal verdict that can be closed again."""
+  store = _store(tmp_path)
+  record = store.new_record("reclosed")
+  record.session = _feedback_session(tmp_path, [
+      {"iteration": 40, "text": "said once", "feedback_kind": "steer"},
+  ])
+  store.put_record(record)
+  _close(store.root, record.id, "interrupted")
+  capsys.readouterr()
+
+  _close(store.root, record.id, "falsified", "--outcome", "done",
+         "--metric", "x=1")
+  capsys.readouterr()
+
+  assert [f.text for f in store.get_record(record.id).feedback] == ["said once"]
+
+
+def test_a_headline_given_at_close_wins_over_the_outcome(tmp_path, capsys):
+  store = _store(tmp_path)
+  record = store.new_record("closed_with_a_headline")
+
+  _close(store.root, record.id, "falsified",
+         "--outcome", "Reward rose to 4.2. Then it plateaued.",
+         "--headline", "The plateau is the story.", "--metric", "x=1")
+
+  assert _payload(capsys)["record"]["headline"] == "The plateau is the story."

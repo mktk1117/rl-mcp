@@ -13,8 +13,10 @@ uses. ``strict=True`` turns the warning into a refusal.
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from rlmcp.records.record import RunRecord
@@ -26,6 +28,22 @@ UNREGISTERED_WARNING = (
     "[rlmcp]   rlmcp record new <slug> --hypothesis ... --falsifier ...\n"
     "[rlmcp] then pass record_run=<id> to wrap()."
 )
+
+
+def task_from_session(session_dir: Any) -> str:
+  """The task id the live session says it is training, or ``""``.
+
+  Read straight out of ``session.json`` rather than through
+  :class:`rlmcp.session.Session`, because this runs at wrap time on the
+  training process's critical path and a half-written or absent session file
+  must cost the field, never the run.
+  """
+  try:
+    info = json.loads((Path(str(session_dir)) / "session.json").read_text())
+  except Exception:  # noqa: BLE001 -- no session fact is worth stalling a launch.
+    return ""
+  task = info.get("task")
+  return str(task).strip() if task else ""
 
 
 class RecordLink:
@@ -77,6 +95,11 @@ class RecordLink:
     if self.record is None:
       return
     self.record.session = str(session_dir)
+    # The session already knows what it is training, and a task that only a
+    # flag can set is empty on most records -- which is the same as not having
+    # the field at all. An explicit `record new --task` wins; this fills the gap.
+    if not self.record.task:
+      self.record.task = task_from_session(session_dir)
     if config:
       self.record.config = dict(config)
     self._config_pending = True

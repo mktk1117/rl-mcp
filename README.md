@@ -300,7 +300,7 @@ reporting a success that changes nothing.
 ```
 training process (torch, mujoco)          session directory            agent process (no simulator)
 ┌──────────────────────────────┐          ┌────────────────┐          ┌──────────────────────────┐
-│ RlMcpEnvWrapper             │          │ status.json    │          │ MCP server (29 tools)    │
+│ RlMcpEnvWrapper             │          │ status.json    │          │ MCP server (34 tools)    │
 │  ├ on_step()   trace frames  │ ───────► │ metrics.jsonl  │ ◄──────► │ rlmcp CLI               │
 │  └ service()   run commands  │          │ events.jsonl   │          │ your own scripts         │
 │     ├ SimAdapter  (env)      │ ◄─────── │ inbox/ outbox/ │          └──────────────────────────┘
@@ -350,6 +350,33 @@ prints the moment it fires; close-out records it honestly (`FIRED`, `held`, or
 cannot claim `validated` at all. Records are plain files — the store assigns
 ids transactionally, never reuses them, and two writers cannot silently
 overwrite each other.
+
+### Feedback: the steering, kept
+
+Most of what a human contributes to a training run is said, not measured — "the
+motion looks jittery near the end of an episode", "stop tuning the entropy
+coefficient", "never let the torque limit past 80% again". Said in a chat
+window, it is gone when the window closes. `rlmcp` records it against the run
+instead:
+
+```bash
+rlmcp feedback "it looks jittery near the end" --kind observe   # to the live trainer
+rlmcp record feedback 012 "stop tuning the entropy coefficient" --kind correct
+rlmcp record answer 012 0 "checked it; already at the default" --no-change
+rlmcp record timeline --markdown            # the whole ledger, oldest first
+```
+
+Feedback is append-only, and each entry carries a slot for what was done about
+it. Six kinds — `steer`, `correct`, `reject`, `approve`, `observe`, `constrain`
+— of which the first four ask for something, so an entry of that kind with no
+recorded response is *unanswered* and says so: in the timeline, in `REPORT.md`,
+and in `rlmcp record check`. `--no-change` is a real answer; "looked into it,
+nothing needed changing" is not the same as ignoring it, and the ledger keeps
+the two apart.
+
+`rlmcp record timeline --markdown` renders the ledger: a table of every remark
+with what it was read as and what changed, then the same in full. It is
+generated from the records every time, so it cannot drift from them.
 
 ## The lineage graph, and the page that draws it
 

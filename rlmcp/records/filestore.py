@@ -44,7 +44,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator, List, Optional, Tuple
 
-from rlmcp.records.record import RunRecord, Lease, slugify
+from rlmcp.records.record import Feedback, RunRecord, Lease, slugify
 from rlmcp.records.store import ConflictError, MediaStore, SlotUnavailable, StoreError
 
 INDEX_NAME = "index.sqlite"
@@ -83,6 +83,21 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_seq ON runs(seq);
 CREATE INDEX IF NOT EXISTS runs_verdict ON runs(verdict);
 CREATE INDEX IF NOT EXISTS runs_parent ON runs(parent);
+CREATE TABLE IF NOT EXISTS feedback (
+  run_id TEXT,
+  idx INTEGER,
+  at REAL,
+  kind TEXT,
+  author TEXT,
+  iteration INTEGER,
+  answered INTEGER,
+  outstanding INTEGER,
+  changed INTEGER,
+  text TEXT,
+  PRIMARY KEY (run_id, idx)
+);
+CREATE INDEX IF NOT EXISTS feedback_at ON feedback(at);
+CREATE INDEX IF NOT EXISTS feedback_kind ON feedback(kind);
 CREATE TABLE IF NOT EXISTS alloc (
   kind TEXT PRIMARY KEY,
   next INTEGER NOT NULL
@@ -247,9 +262,27 @@ class FileStore:
     return conn
 
   def _init_index(self) -> None:
+    """Create the index if it is missing, and catch it up if it is old.
+
+    A store written by a build that predates a table opens here with the rest
+    of its index intact, so the new table would sit empty and every query
+    against it would answer "nothing" -- which reads as a fact rather than as
+    a missing migration. Detecting the gap and rebuilding once is cheap; the
+    files are the truth, so a rebuild can only agree with them.
+    """
     with contextlib.closing(self._connect()) as conn:
       conn.execute("PRAGMA journal_mode=WAL")
+      stale = bool(
+          conn.execute(
+              "SELECT 1 FROM sqlite_master WHERE type='table' AND name='runs'"
+          ).fetchone()
+          and not conn.execute(
+              "SELECT 1 FROM sqlite_master WHERE type='table' AND name='feedback'"
+          ).fetchone()
+      )
       conn.executescript(_SCHEMA)
+    if stale:
+      self.reindex()
 
   @contextlib.contextmanager
   def _tx(self) -> Iterator[sqlite3.Connection]:
@@ -283,6 +316,19 @@ class FileStore:
             record.session, json.dumps(record.tags), record.updated_at, str(path),
         ),
     )
+    # Feedback is append-only in the file, but a response can be filled in
+    # later, so the rows are replaced wholesale rather than appended to. The
+    # file stays the truth; this is only what makes the timeline a query.
+    conn.execute("DELETE FROM feedback WHERE run_id = ?", (record.id,))
+    conn.executemany(
+        "INSERT INTO feedback VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [
+            (record.id, i, entry.at, entry.kind, entry.author, entry.iteration,
+             int(entry.answered), int(entry.outstanding), int(entry.changed),
+             entry.text)
+            for i, entry in enumerate(record.feedback)
+        ],
+    )
 
   def reindex(self) -> int:
     """Rebuild the index from the files. The files always win.
@@ -294,6 +340,7 @@ class FileStore:
     count = 0
     with self._tx() as conn:
       conn.execute("DELETE FROM runs")
+      conn.execute("DELETE FROM feedback")
       for meta in sorted(self.runs_dir.glob("*/meta.json")):
         record = self._read_meta(meta)
         if record is None:
@@ -396,6 +443,7 @@ class FileStore:
     record.tags = list(record.tags)
     record.change = list(record.change)
     record.metrics = [list(pair) for pair in record.metrics]
+    record.feedback = list(record.feedback)
     record.version += 1
     record.touch()
     directory.mkdir(parents=True, exist_ok=True)
@@ -514,7 +562,95 @@ class FileStore:
       if media_dir.exists():
         shutil.rmtree(media_dir, ignore_errors=True)
       conn.execute("DELETE FROM runs WHERE id = ?", (record_id,))
+      conn.execute("DELETE FROM feedback WHERE run_id = ?", (record_id,))
     return True
+
+  # Feedback.
+
+  def add_feedback(self, record_id: str, feedback: Feedback) -> RunRecord:
+    """Append one remark, through the retry helper.
+
+    Feedback is the write most likely to collide with another: a human types it
+    while the trainer is heartbeating its lease. Going through
+    :meth:`update_record` means the append is re-applied to the fresh record on
+    a lost compare-and-swap rather than failing, and it is an append every time
+    -- never a write of a stale list that would drop whatever landed in between.
+    """
+    if not feedback.text.strip():
+      raise StoreError("Feedback with no text: there is nothing to record.")
+
+    def append(fresh: RunRecord) -> None:
+      fresh.feedback.append(feedback)
+
+    updated = self.update_record(record_id, append)
+    if updated is None:
+      raise StoreError(f"No record '{record_id}' to attach feedback to.")
+    return updated
+
+  def answer_feedback(self, record_id: str, index: int, response: str,
+                      changed: bool = True) -> RunRecord:
+    """Fill in what was done about one remark."""
+    if not response.strip():
+      raise StoreError("An empty response is not an answer.")
+
+    box: dict = {}
+
+    def answer(fresh: RunRecord) -> Any:
+      if not -len(fresh.feedback) <= index < len(fresh.feedback):
+        box["error"] = (
+            f"Run {record_id} has {len(fresh.feedback)} feedback entries; "
+            f"there is no index {index}."
+        )
+        return False
+      entry = fresh.feedback[index]
+      entry.response = response
+      entry.changed = bool(changed)
+
+    updated = self.update_record(record_id, answer)
+    if updated is None:
+      raise StoreError(box.get("error") or f"No record '{record_id}'.")
+    return updated
+
+  def feedback_timeline(
+      self,
+      kind: Optional[str] = None,
+      author: Optional[str] = None,
+      outstanding: bool = False,
+      limit: Optional[int] = None,
+  ) -> List[dict]:
+    """Every remark in the store, oldest first."""
+    clauses, params = [], []
+    if kind is not None:
+      clauses.append("kind = ?")
+      params.append(kind)
+    if author is not None:
+      clauses.append("author = ?")
+      params.append(author)
+    if outstanding:
+      clauses.append("outstanding = 1")
+    sql = "SELECT run_id, idx FROM feedback"
+    if clauses:
+      sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY at, run_id, idx"
+    if limit:
+      sql += f" LIMIT {int(limit)}"
+
+    with contextlib.closing(self._connect()) as conn:
+      hits = [(row["run_id"], row["idx"]) for row in conn.execute(sql, params)]
+
+    # The index answers *which*; the files answer *what* -- the same division
+    # ``query`` uses, so a stale index can never invent a remark.
+    rows = []
+    cache: dict = {}
+    for run_id, idx in hits:
+      if run_id not in cache:
+        cache[run_id] = self.get_record(run_id)
+      record = cache[run_id]
+      if record is None or not 0 <= idx < len(record.feedback):
+        continue
+      rows.append({"run": run_id, "slug": record.slug, "index": idx,
+                   **record.feedback[idx].to_dict()})
+    return rows
 
   # Documents.
 

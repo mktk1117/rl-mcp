@@ -14,10 +14,13 @@ Stdlib only, so the whole layer works in an interpreter with no simulator:
 
 from rlmcp.records.filestore import FileStore, open_store
 from rlmcp.records.record import (
+    FEEDBACK_KINDS,
     OPEN_VERDICTS,
+    OWED_A_RESPONSE,
     TERMINAL_VERDICTS,
     VERDICTS,
     Falsifier,
+    Feedback,
     Lease,
     RunRecord,
     Weights,
@@ -37,12 +40,15 @@ from rlmcp.records.validate import Problem, Report, check_verdict_change, valida
 
 __all__ = [
     "ConflictError",
+    "FEEDBACK_KINDS",
     "FileStore",
     "Falsifier",
+    "Feedback",
     "RecordStore",
     "Lease",
     "MediaStore",
     "OPEN_VERDICTS",
+    "OWED_A_RESPONSE",
     "Problem",
     "Report",
     "RunRecord",
