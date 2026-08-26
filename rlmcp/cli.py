@@ -17,7 +17,8 @@ Output follows the reader. A pipe gets the JSON it has always got, because an
 agent's parser is a contract; a terminal gets the same payload formatted, and
 any picture the command produced is opened. ``--json`` / ``--text`` and
 ``RLMCP_OUTPUT`` override the guess, ``--no-open`` / ``RLMCP_OPEN`` the
-showing.
+showing. ``RLMCP_SESSION`` pins a session and ``RLMCP_ROOT`` points the
+search, the same two variables the MCP server reads.
 
 Depends only on the standard library, so it runs in any interpreter -- the
 simulator lives in the training process, not here.
@@ -31,7 +32,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rlmcp import cli_output
 from rlmcp.records.record import FEEDBACK_KINDS
@@ -40,20 +41,45 @@ from rlmcp.session import Session, iter_sessions
 DEFAULT_ROOTS = ("./logs", "./rlmcp_session", ".")
 
 
+def _search_roots(args: argparse.Namespace) -> Tuple[List[str], str]:
+  """The roots a bare command searches, and where that list came from.
+
+  Precedence matches the MCP server's: an explicit ``--root`` wins, then
+  ``$RLMCP_ROOT``, then the cwd-relative defaults. The second element names
+  the source, so an error can say "looked in X (from RLMCP_ROOT)" instead of
+  leaving the reader to guess why X was searched.
+  """
+  if getattr(args, "root", None):
+    return [args.root], "--root"
+  env_root = os.environ.get("RLMCP_ROOT")
+  if env_root:
+    return [env_root], "RLMCP_ROOT"
+  return list(DEFAULT_ROOTS), "default"
+
+
 def _resolve_session(args: argparse.Namespace) -> Session:
   if getattr(args, "session", None):
     return Session.open(args.session)
   env_dir = os.environ.get("RLMCP_SESSION")
   if env_dir:
     return Session.open(env_dir)
-  roots = [args.root] if getattr(args, "root", None) else list(DEFAULT_ROOTS)
+  roots, origin = _search_roots(args)
   for root in roots:
     found = Session.find_latest(root)
     if found is not None:
       return found
+  if origin == "default":
+    looked = (
+        f"under the current directory ({Path.cwd()}) -- its ./logs, "
+        "./rlmcp_session, or anywhere beneath it"
+    )
+  else:
+    looked = f"under '{roots[0]}' (from {origin})"
   raise SystemExit(
-      "No rlmcp session found. Pass --session <dir>, set RLMCP_SESSION, or run "
-      f"from a directory containing one of {list(DEFAULT_ROOTS)}."
+      f"No rlmcp session found {looked}.\n"
+      "A session is the <run_dir>/rlmcp directory a training run writes. "
+      "Point at one with --session <dir> or --root <logs dir>, or set "
+      "RLMCP_SESSION / RLMCP_ROOT."
   )
 
 
@@ -689,7 +715,11 @@ def _play_command(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(prog="rlmcp", description=__doc__.splitlines()[0])
   parser.add_argument("--session", help="Path to a session directory")
-  parser.add_argument("--root", help="Directory to search for the newest session")
+  parser.add_argument(
+      "--root",
+      help="Directory to search for the newest session "
+           "(default: $RLMCP_ROOT, then ./logs, ./rlmcp_session, .)",
+  )
   parser.add_argument("--timeout", type=float, default=120.0)
   # Output mode is guessed from stdout (pipe -> json, terminal -> text); these
   # are for the cases the guess cannot see, like a pretty run teed to a file.
@@ -1013,7 +1043,7 @@ def main(argv: Optional[List[str]] = None) -> int:
   _OPEN = cli_output.resolve_open(getattr(args, "open_policy", None))
 
   if cmd == "sessions":
-    roots = [args.root] if args.root else list(DEFAULT_ROOTS)
+    roots, _ = _search_roots(args)
     seen, rows = set(), []
     for root in roots:
       # Everything here, play sessions included: this is the command for
