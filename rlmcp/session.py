@@ -320,6 +320,13 @@ class Session:
     }
     _atomic_write_json(self.session_file, payload)
     self._cached_pid = None  # session.json now names a new owner.
+    # Announce the session machine-wide, so a bare `rlmcp status` in another
+    # shell can find this run without knowing its directory. Best-effort by
+    # contract: registry.register never raises.
+    from rlmcp import registry
+
+    registry.register(registry.KIND_TRAINER, session_dir=self.dir,
+                      session_kind=payload.get("kind"))
     return self
 
   @staticmethod
