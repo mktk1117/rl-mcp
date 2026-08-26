@@ -246,8 +246,11 @@ def to_payload(graph: Graph,
             "summary": record.one_line(),
             # Where the sentence came from, because "what this run found" and
             # "what this run set out to find" are different claims and the
-            # story view must not let them read as the same one.
-            "summary_source": ("outcome" if record.outcome.strip()
+            # story view must not let them read as the same one. A written
+            # headline is a third source: it is the record rather than a
+            # reading of it, and ``one_line`` prefers it.
+            "summary_source": ("headline" if record.headline.strip()
+                               else "outcome" if record.outcome.strip()
                                else "hypothesis" if record.hypothesis.strip()
                                else ""),
             "hypothesis": record.hypothesis,

@@ -501,10 +501,24 @@ def _image_result(payload: Dict[str, Any], key: str = "image_path") -> Any:
   return [payload, Image(data=data, format=fmt)]
 
 
+def _open_records(root: Optional[str]):
+  """Open the record store this server writes feedback into.
+
+  Resolution is the CLI's: the server's ``--records-root``, then
+  ``$RLMCP_RECORDS``, then ``./records``. Imported here rather than at module
+  scope so a server started only to watch a live run never pays for the records
+  layer.
+  """
+  from rlmcp.records import open_store
+
+  return open_store(root)
+
+
 def create_mcp_server(
     session_dir: Optional[str] = None,
     root: Optional[str] = None,
     name: str = "rlmcp",
+    records_root: Optional[str] = None,
 ) -> MCPServer:
   """Build the MCP server exposing one pinned training session.
 
@@ -513,6 +527,10 @@ def create_mcp_server(
   pinned trainer dies, data tools switch to reading its files off disk and
   live-command tools explain themselves; ``switch_session`` is the one way to
   attach to a different run.
+
+  ``records_root`` points the feedback tools at a record store; left unset they
+  fall back to ``$RLMCP_RECORDS`` and then ``./records``, the same resolution
+  ``rlmcp record`` uses.
   """
   if MCPServer is None:
     raise ImportError(SDK_MISSING)
@@ -785,6 +803,116 @@ def create_mcp_server(
     return _call(handle, "load_checkpoint", timeout=600.0, path=path)
 
   @mcp.tool()
+  def record_feedback(
+      text: str,
+      kind: str = "steer",
+      author: str = "user",
+      interpretation: str = "",
+  ) -> Dict[str, Any]:
+    """Record what a human just said about this run, stamped with the iteration.
+
+    Call this whenever the user steers, corrects, rejects or approves what the
+    run is doing -- verbatim in ``text``, your reading of it in
+    ``interpretation``. ``kind`` is one of steer, correct, reject, approve,
+    observe, constrain. It lands in the run record at close-out, so the reason
+    behind a change stays recoverable after the conversation is gone.
+    """
+    return _call(handle, "feedback", text=text, kind=kind, author=author,
+                 interpretation=interpretation)
+
+  @mcp.tool()
+  def attach_feedback(
+      record_id: str,
+      text: str,
+      kind: str = "steer",
+      author: str = "user",
+      interpretation: str = "",
+      response: str = "",
+      changed: bool = True,
+  ) -> Dict[str, Any]:
+    """Attach a remark to a run record, live trainer or not.
+
+    ``record_feedback`` is for a run that is still going; this is for one that
+    has finished, or for a remark about a record the trainer never saw. The
+    entry is appended, never edited, and its index is how a response is
+    attached to it later.
+    """
+    from rlmcp.records.record import Feedback
+    from rlmcp.records.store import StoreError
+
+    entry = Feedback(text=text, kind=kind, author=author,
+                     interpretation=interpretation, response=response,
+                     changed=bool(response) and changed)
+    try:
+      updated = _open_records(records_root).add_feedback(record_id, entry)
+    except StoreError as exc:
+      return {"ok": False, "error": str(exc)}
+    index = len(updated.feedback) - 1
+    return {"ok": True, "record": updated.id, "index": index,
+            "feedback": updated.feedback[index].to_dict(),
+            "outstanding": updated.feedback[index].outstanding}
+
+  @mcp.tool()
+  def answer_feedback(
+      record_id: str,
+      index: int,
+      response: str,
+      changed: bool = True,
+  ) -> Dict[str, Any]:
+    """Record what was done about one remark on a run record.
+
+    ``changed=False`` is a real answer: "looked into it, nothing needed
+    changing" is not the same as ignoring it, and recording the difference is
+    what keeps the ledger honest.
+    """
+    from rlmcp.records.store import StoreError
+
+    try:
+      updated = _open_records(records_root).answer_feedback(
+          record_id, index, response, changed=changed)
+    except StoreError as exc:
+      return {"ok": False, "error": str(exc)}
+    return {"ok": True, "record": updated.id, "index": index,
+            "feedback": updated.feedback[index].to_dict()}
+
+  @mcp.tool()
+  def get_feedback_timeline(
+      kind: Optional[str] = None,
+      author: Optional[str] = None,
+      outstanding: bool = False,
+      limit: Optional[int] = None,
+  ) -> Dict[str, Any]:
+    """Every remark across the records, oldest first, with what came of it.
+
+    ``outstanding=True`` narrows it to instructions nobody has recorded a
+    response to -- the question worth asking before closing a run out.
+    """
+    rows = _open_records(records_root).feedback_timeline(
+        kind=kind, author=author, outstanding=outstanding, limit=limit)
+    return {"count": len(rows), "feedback": rows}
+
+  @mcp.tool()
+  def set_record_headline(record_id: str, text: str = "") -> Dict[str, Any]:
+    """Set the one-sentence summary a tree or a listing shows for a run.
+
+    An empty ``text`` clears it, falling back to the first sentence of the
+    run's outcome (or its hypothesis while it is still open).
+    """
+    from rlmcp.records.store import StoreError
+
+    def set_headline(fresh) -> None:
+      fresh.headline = text.strip()
+
+    try:
+      updated = _open_records(records_root).update_record(record_id, set_headline)
+    except StoreError as exc:
+      return {"ok": False, "error": str(exc)}
+    if updated is None:
+      return {"ok": False, "error": f"No record '{record_id}'."}
+    return {"ok": True, "record": updated.id, "headline": updated.one_line(),
+            "derived": not updated.headline}
+
+  @mcp.tool()
   def add_note(text: str) -> Dict[str, Any]:
     """Record a note in the session event log, next to parameter changes."""
     return _call(handle, "note", text=text)
@@ -843,11 +971,17 @@ def main(argv: Optional[List[str]] = None) -> int:
       help="Directory searched for the newest session (default: cwd)",
   )
   parser.add_argument("--name", default="rlmcp")
+  parser.add_argument(
+      "--records-root",
+      help="Record store the feedback tools write to "
+           "(default: $RLMCP_RECORDS, then ./records)",
+  )
   args = parser.parse_args(argv)
   create_mcp_server(
       session_dir=args.session or os.environ.get("RLMCP_SESSION"),
       root=args.root,
       name=args.name,
+      records_root=args.records_root,
   ).run()
   return 0
 

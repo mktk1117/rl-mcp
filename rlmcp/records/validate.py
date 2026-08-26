@@ -15,7 +15,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
-from rlmcp.records.record import OPEN_VERDICTS, TERMINAL_VERDICTS, RunRecord, VERDICTS
+from rlmcp.records.record import (
+    FEEDBACK_KINDS,
+    OPEN_VERDICTS,
+    TERMINAL_VERDICTS,
+    RunRecord,
+    VERDICTS,
+)
 
 REQUIRED_FOR_RESULT = ("outcome", "metrics")
 """Fields a record must fill once it claims a result.
@@ -197,6 +203,39 @@ def validate(
           f"{len(record.change)} changes in one run -- the outcome is "
           "directional, not attributable to any single change.",
       )
+
+    # Feedback that was heard and dropped.
+    #
+    # A warning rather than an error: the answer legitimately arrives after the
+    # remark, so an open run with an outstanding instruction is just work in
+    # progress. Once the run is closed, nobody is coming back to it -- an
+    # instruction with no recorded response at that point was dropped, and the
+    # records should say so out loud rather than quietly keeping the text.
+    for index, entry in record.outstanding_feedback():
+      if record.verdict in OPEN_VERDICTS:
+        continue
+      warn(
+          record.id, "feedback-unanswered",
+          f"feedback[{index}] ({entry.kind}, {entry.author}) has no recorded "
+          f"response on a closed run: {entry.text[:70]!r}. Answer it with "
+          f"`rlmcp record answer {record.id} {index} \"...\"` -- or say plainly "
+          "that nothing was done.",
+      )
+    for index, entry in enumerate(record.feedback):
+      if entry.kind not in FEEDBACK_KINDS:
+        warn(
+            record.id, "feedback-kind",
+            f"feedback[{index}] has kind '{entry.kind}', which is not one of: "
+            f"{', '.join(FEEDBACK_KINDS)}. Views that group by kind will not "
+            "know where to put it.",
+        )
+      for run_id in entry.affects:
+        if run_id not in by_id and run_id not in seen_ids:
+          warn(
+              record.id, "feedback-reference",
+              f"feedback[{index}] says it affects '{run_id}', which is not a "
+              "record here.",
+          )
 
     # Assets.
     if media_exists is not None:

@@ -1,8 +1,9 @@
 """Reading someone else's records in.
 
-rlmcp's record schema is deliberately the one from agentic-mjlab, so an
-existing records can be read without transcription: ``runs/NNN-slug/meta.json``
-and the flat ``runs/legacy/<ID>.json`` files both load as they are.
+rlmcp's record schema is deliberately close to the hand-rolled ones this method
+grew out of, so an existing store can be read without transcription:
+``runs/NNN-slug/meta.json`` and the flat ``runs/legacy/<ID>.json`` files both
+load as they are.
 
 Two differences are handled here rather than silently dropped:
 

@@ -28,10 +28,12 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rlmcp import cli_output
+from rlmcp.records.record import FEEDBACK_KINDS
 from rlmcp.session import Session, iter_sessions
 
 DEFAULT_ROOTS = ("./logs", "./rlmcp_session", ".")
@@ -254,7 +256,7 @@ def _analyze_offline(
 def _record_command(args: argparse.Namespace) -> int:
   """The records subcommands. No live trainer needed for any of them."""
   from rlmcp.records import open_store
-  from rlmcp.records.record import Falsifier, Weights, fold_recipe
+  from rlmcp.records.record import Falsifier, Feedback, Weights, fold_recipe
   from rlmcp.records.store import StoreError
   from rlmcp.records.validate import check_verdict_change, validate
 
@@ -273,6 +275,8 @@ def _record_command(args: argparse.Namespace) -> int:
             check_after=args.check_after,
         ),
         change=list(args.change or []),
+        task=args.task.strip(),
+        headline=args.headline,
         parent=args.parent,
         weights=Weights(args.weights, args.checkpoint) if args.weights else None,
         proposed_by=args.proposed_by,
@@ -327,12 +331,33 @@ def _record_command(args: argparse.Namespace) -> int:
     def close_out(fresh) -> Any:
       if args.outcome:
         fresh.outcome = args.outcome
+      if args.headline:
+        fresh.headline = args.headline
       fresh.metrics.extend(_parse_metrics(args.metric))
 
       # The falsifier is read at the run's final iteration, never before its
       # pre-registered read-point: a run killed at iteration 50 has not fired
       # a falsifier that says "do not read me before 600".
       evidence = gather_evidence(fresh.session)
+      # Feedback said to the running trainer lives in the session's event log,
+      # which is deleted with the logs. Fold it into the record now, skipping
+      # anything already attached -- close-out is re-runnable on an
+      # ``interrupted`` run, and the ledger must not double.
+      seen = {(f.author, f.text) for f in fresh.feedback}
+      for said in evidence.get("feedback") or []:
+        if (said.get("author", "user"), said.get("text", "")) in seen:
+          continue
+        fresh.feedback.append(Feedback(
+            text=said.get("text", ""),
+            kind=said.get("kind", "steer"),
+            author=said.get("author", "user"),
+            at=float(said.get("at") or time.time()),
+            iteration=said.get("iteration"),
+            interpretation=said.get("interpretation", ""),
+            response=said.get("response", ""),
+            changed=bool(said.get("response")),
+        ))
+
       result = fresh.falsifier.check(
           evidence.get("final_metrics") or {}, iteration=evidence.get("iterations")
       )
@@ -361,6 +386,93 @@ def _record_command(args: argparse.Namespace) -> int:
     report = write_report(store, closed, box["result"], evidence=box["evidence"])
     _emit({"ok": True, "record": closed.summary(), "falsifier": box["result"],
            "report": str(report)})
+    return 0
+
+  if action == "headline":
+    text = (args.text or "").strip()
+
+    def set_headline(fresh) -> None:
+      fresh.headline = text
+
+    try:
+      updated = store.update_record(args.record_id, set_headline)
+    except StoreError as exc:
+      _emit({"ok": False, "error": str(exc)})
+      return 1
+    if updated is None:
+      _emit({"ok": False, "error": f"No record '{args.record_id}'."})
+      return 1
+    _emit({"ok": True, "record": updated.id, "headline": updated.one_line(),
+           "derived": not updated.headline})
+    return 0
+
+  if action == "feedback":
+    record = store.get_record(args.record_id)
+    if record is None:
+      _emit({"ok": False, "error": f"No record '{args.record_id}'."})
+      return 1
+    iteration = args.iteration
+    if iteration is None and record.session:
+      # The iteration is the one thing only the session knows, and it is what
+      # places the remark on the run's timeline. Missing is fine -- feedback on
+      # a finished write-up genuinely has no iteration -- but guessing is not.
+      try:
+        iteration = Session.open(record.session).status().get("iteration")
+      except (FileNotFoundError, OSError):
+        iteration = None
+    entry = Feedback(
+        text=args.text,
+        kind=args.kind,
+        author=args.author,
+        iteration=iteration,
+        interpretation=args.interpretation,
+        response=args.response,
+        changed=bool(args.response) and not args.no_change,
+        affects=list(args.affects or []),
+        artifacts=list(args.artifacts or []),
+    )
+    try:
+      updated = store.add_feedback(record.id, entry)
+    except StoreError as exc:
+      _emit({"ok": False, "error": str(exc)})
+      return 1
+    index = len(updated.feedback) - 1
+    payload = {"ok": True, "record": updated.id, "index": index,
+               "feedback": updated.feedback[index].to_dict()}
+    if updated.feedback[index].outstanding:
+      payload["reminder"] = (
+          f"Unanswered until you record what you did: "
+          f"rlmcp record answer {updated.id} {index} \"...\""
+      )
+    _emit(payload)
+    return 0
+
+  if action == "answer":
+    try:
+      updated = store.answer_feedback(
+          args.record_id, args.index, args.response, changed=not args.no_change)
+    except StoreError as exc:
+      _emit({"ok": False, "error": str(exc)})
+      return 1
+    _emit({"ok": True, "record": updated.id, "index": args.index,
+           "feedback": updated.feedback[args.index].to_dict()})
+    return 0
+
+  if action == "timeline":
+    rows = store.feedback_timeline(kind=args.kind, author=args.author,
+                                   outstanding=args.outstanding, limit=args.limit)
+    if not args.markdown:
+      _emit({"count": len(rows), "feedback": rows})
+      return 0
+    from rlmcp.records.report import render_feedback_ledger
+
+    text = render_feedback_ledger(rows)
+    if args.out:
+      out = Path(args.out)
+      out.write_text(text)
+      _emit({"ok": True, "path": str(out), "count": len(rows)})
+    else:
+      print(text)
     return 0
 
   if action == "asset":
@@ -394,7 +506,21 @@ def _record_command(args: argparse.Namespace) -> int:
             for entry in entries if entry
         },
     )
-    _emit({"records": len(records), **report.to_dict()})
+    # Additive to the payload, never a reshape: an agent parsing `ok`,
+    # `errors` and `warnings` sees exactly what it saw before. "2 unanswered"
+    # is the number worth reading at a glance, because feedback nobody
+    # answered is the one problem the records cannot fix by themselves.
+    outstanding = sum(len(r.outstanding_feedback()) for r in records)
+    _emit({
+        "records": len(records),
+        **report.to_dict(),
+        "feedback": {
+            "total": sum(len(r.feedback) for r in records),
+            "unanswered": outstanding,
+            "runs_with_unanswered": sorted(
+                r.id for r in records if r.outstanding_feedback()),
+        },
+    })
     return 0 if report.ok else 1
 
   if action == "graph":
@@ -653,6 +779,17 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("note", help="Record a note in the event log")
   p.add_argument("text")
 
+  p = sub.add_parser(
+      "feedback",
+      help="Record what a human said about the live run (stamped with the iteration)")
+  p.add_argument("text", help="Verbatim. What was actually said.")
+  p.add_argument("--kind", default="steer", choices=list(FEEDBACK_KINDS),
+                 help="What they were doing: steering, correcting, rejecting, "
+                      "approving, observing, or setting a standing rule")
+  p.add_argument("--author", default="user")
+  p.add_argument("--read-as", dest="interpretation", default="",
+                 help="What you took it to mean, if that is not obvious")
+
   p = sub.add_parser("events", help="Show recent session events")
   p.add_argument("--last-n", type=int, default=25)
 
@@ -667,6 +804,8 @@ def build_parser() -> argparse.ArgumentParser:
 
   q = record_sub.add_parser("new", help="Pre-register a run, before launching it")
   q.add_argument("slug")
+  q.add_argument("--headline", default="",
+                 help="One sentence for the tree. Derived from the outcome if omitted")
   q.add_argument("--hypothesis", default="")
   q.add_argument("--prediction", default="")
   q.add_argument("--falsifier", default="", help="What would prove this wrong")
@@ -680,6 +819,9 @@ def build_parser() -> argparse.ArgumentParser:
   q.add_argument("--weights", help="Warm start from this run id")
   q.add_argument("--checkpoint", default="", help="Checkpoint within --weights")
   q.add_argument("--stage", default="default")
+  q.add_argument("--task", default="",
+                 help="Which problem this run is about (the environment id). "
+                      "Filled in from the live session at launch if omitted")
   q.add_argument("--proposed-by", default="human")
 
   q = record_sub.add_parser("list", help="List records")
@@ -694,9 +836,55 @@ def build_parser() -> argparse.ArgumentParser:
   q = record_sub.add_parser("close", help="Close a run with a verdict")
   q.add_argument("record_id")
   q.add_argument("verdict")
+  q.add_argument("--headline", default="",
+                 help="One sentence for the tree. Derived from the outcome if omitted")
   q.add_argument("--outcome", default="")
   q.add_argument("--metric", nargs="*", metavar="NAME=VALUE",
                  help="The measurements that establish the outcome")
+
+  q = record_sub.add_parser(
+      "headline", help="Set the one-sentence summary shown on the tree")
+  q.add_argument("record_id")
+  q.add_argument("text", nargs="?",
+                 help="Omit to clear it and fall back to the derived sentence")
+
+  q = record_sub.add_parser(
+      "feedback", help="Attach what a human said to a run record")
+  q.add_argument("record_id")
+  q.add_argument("text", help="Verbatim. What was actually said.")
+  q.add_argument("--kind", default="steer", choices=list(FEEDBACK_KINDS))
+  q.add_argument("--author", default="user")
+  q.add_argument("--read-as", dest="interpretation", default="",
+                 help="What you took it to mean")
+  q.add_argument("--did", dest="response", default="",
+                 help="What you did about it, if you already have")
+  q.add_argument("--no-change", action="store_true",
+                 help="With --did: you answered it, but nothing changed")
+  q.add_argument("--affects", nargs="*", default=[], metavar="RUN_ID",
+                 help="Other runs this remark changed")
+  q.add_argument("--artifact", nargs="*", default=[], dest="artifacts",
+                 metavar="PATH", help="Paths that exist because of it")
+  q.add_argument("--iteration", type=int,
+                 help="Training iteration (read from the run's session if omitted)")
+
+  q = record_sub.add_parser(
+      "answer", help="Record what was done about a piece of feedback")
+  q.add_argument("record_id")
+  q.add_argument("index", type=int, help="Position in the run's feedback list")
+  q.add_argument("response")
+  q.add_argument("--no-change", action="store_true",
+                 help="You answered it, but nothing changed as a result")
+
+  q = record_sub.add_parser(
+      "timeline", help="Every remark across the records, oldest first")
+  q.add_argument("--kind", choices=list(FEEDBACK_KINDS))
+  q.add_argument("--author")
+  q.add_argument("--outstanding", action="store_true",
+                 help="Only instructions with no recorded response")
+  q.add_argument("--limit", type=int)
+  q.add_argument("--markdown", action="store_true",
+                 help="Render the ledger as Markdown instead of JSON")
+  q.add_argument("--out", help="With --markdown: write here instead of stdout")
 
   q = record_sub.add_parser("asset", help="Record an artifact against a run")
   q.add_argument("record_id")
@@ -928,6 +1116,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     return _call(session, "load_checkpoint", max(timeout, 300.0), path=args.path)
   if cmd == "note":
     return _call(session, "note", timeout, text=args.text)
+  if cmd == "feedback":
+    return _call(session, "feedback", timeout, text=args.text, kind=args.kind,
+                 author=args.author, interpretation=args.interpretation)
   if cmd == "stop":
     return _call(session, "stop_training", timeout, reason=args.why)
   if cmd in ("run", "raw"):

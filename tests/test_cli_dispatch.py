@@ -33,6 +33,7 @@ _REQUIRED_ARGS: Dict[str, List[str]] = {
     "run": ["get_status"],
     "raw": ["get_status"],
     "note": ["a note"],
+    "feedback": ["they said something"],
     "load": ["/nonexistent/checkpoint.pt"],
     "analyze": ["/nonexistent/trace.npz"],
     "plot-trace": [],
@@ -147,6 +148,9 @@ def test_record_subcommands_all_dispatch(tmp_path, monkeypatch):
   args_for = {
       "new": ["a-slug"],
       "show": ["001"],
+      "headline": ["001", "one sentence"],
+      "feedback": ["001", "they said something"],
+      "answer": ["001", "0", "what was done"],
       "close": ["001", "falsified", "--outcome", "x"],
       "asset": ["001", str(tmp_path / "nope.png")],
       "compare": ["001"],

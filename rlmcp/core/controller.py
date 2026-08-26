@@ -739,6 +739,7 @@ class RlMcp:
         "list_checkpoints": self.cmd_list_checkpoints,
         "load_checkpoint": self.cmd_load_checkpoint,
         "note": self.cmd_note,
+        "feedback": self.cmd_feedback,
         "stop_training": self.cmd_stop_training,
     }
     self._handler_owner = {name: "built-in" for name in self._handlers}
@@ -1252,6 +1253,32 @@ class RlMcp:
     """Write a free-form note into the session's event log."""
     self.session.append_event("note", {"iteration": self.iteration, "text": text})
     return {"logged": True, "iteration": self.iteration}
+
+  def cmd_feedback(
+      self,
+      text: str,
+      kind: str = "steer",
+      author: str = "user",
+      interpretation: str = "",
+  ) -> Dict[str, Any]:
+    """Record something a human said about this run, at the current iteration.
+
+    Separate from ``note`` because it is a different kind of fact: a note is the
+    agent talking to itself, feedback is a human steering the run. It is stamped
+    with the iteration here -- the only place that knows it -- and folded into
+    the run record at close-out by ``rlmcp record close``.
+    """
+    self.session.append_event(
+        "feedback",
+        {
+            "iteration": self.iteration,
+            "text": text,
+            "feedback_kind": kind,
+            "author": author,
+            "interpretation": interpretation,
+        },
+    )
+    return {"logged": True, "iteration": self.iteration, "feedback_kind": kind}
 
   def cmd_stop_training(self, reason: str = "") -> Dict[str, Any]:
     """Ask the training loop to stop cleanly at the next iteration boundary."""

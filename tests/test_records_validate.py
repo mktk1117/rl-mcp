@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rlmcp.records.record import Falsifier, Lease, RunRecord, Weights
+from rlmcp.records.record import Falsifier, Feedback, Lease, RunRecord, Weights
 from rlmcp.records.validate import check_verdict_change, validate
 
 
@@ -262,3 +262,99 @@ def test_the_report_serialises_for_a_tool_response():
 
   assert payload["ok"] is False
   assert payload["errors"][0]["rule"] == "verdict-enum"
+
+
+# Feedback that was heard and dropped. A warning, never an error: the answer
+# legitimately arrives after the remark, so only a closed run is judged.
+
+
+def test_an_unanswered_instruction_on_a_closed_run_is_reported():
+  record = _closed("001", feedback=[Feedback(text="stop tuning it", kind="correct")])
+
+  report = validate([record])
+
+  assert report.ok  # a warning, not an error
+  warning = next(p for p in report.warnings if p.rule == "feedback-unanswered")
+  assert "feedback[0]" in warning.message
+  # The message says what to type next, not merely that something is wrong.
+  assert "rlmcp record answer 001 0" in warning.message
+
+
+def test_an_open_run_still_owes_nothing():
+  """Work in progress: the response usually arrives after the remark."""
+  record = _record("001", verdict="running",
+                   feedback=[Feedback(text="try a smaller step", kind="steer")])
+
+  report = validate([record])
+
+  assert [p.rule for p in report.warnings if p.rule.startswith("feedback")] == []
+
+
+def test_an_answered_instruction_is_not_reported():
+  record = _closed("001", feedback=[
+      Feedback(text="stop tuning it", kind="correct",
+               response="It was already at the default.", changed=False)])
+
+  report = validate([record])
+
+  assert [p.rule for p in report.warnings if p.rule.startswith("feedback")] == []
+
+
+def test_an_observation_owes_no_response():
+  record = _closed("001", feedback=[
+      Feedback(text="it looks jittery near the end", kind="observe"),
+      Feedback(text="looks right, keep going", kind="approve")])
+
+  report = validate([record])
+
+  assert [p.rule for p in report.warnings if p.rule.startswith("feedback")] == []
+
+
+def test_every_unanswered_instruction_is_named_separately():
+  """The count is what a reader acts on -- "2 unanswered", with the indices."""
+  record = _closed("001", feedback=[
+      Feedback(text="do this", kind="steer"),
+      Feedback(text="never do that", kind="constrain"),
+      Feedback(text="nice", kind="approve")])
+
+  warnings = [p for p in validate([record]).warnings
+              if p.rule == "feedback-unanswered"]
+
+  assert len(warnings) == 2
+  assert "feedback[0]" in warnings[0].message
+  assert "feedback[1]" in warnings[1].message
+
+
+def test_a_kind_nobody_defined_is_flagged():
+  record = _closed("001", feedback=[Feedback(text="hm", kind="vibes")])
+
+  rules = [p.rule for p in validate([record]).warnings]
+
+  assert "feedback-kind" in rules
+
+
+def test_feedback_pointing_at_a_run_that_is_not_here_is_flagged():
+  record = _closed("001", feedback=[
+      Feedback(text="applies to the other one too", kind="constrain",
+               response="done", affects=["404"])])
+
+  rules = [p.rule for p in validate([record]).warnings]
+
+  assert "feedback-reference" in rules
+
+
+def test_feedback_pointing_at_a_run_that_is_here_is_not_flagged():
+  first = _closed("001", feedback=[
+      Feedback(text="applies to 002 too", kind="constrain",
+               response="done", affects=["002"])])
+
+  rules = [p.rule for p in validate([first, _closed("002")]).warnings]
+
+  assert "feedback-reference" not in rules
+
+
+def test_a_record_with_no_feedback_at_all_passes_quietly():
+  report = validate([_closed("001")])
+
+  assert report.ok
+  assert [p for p in report.warnings if p.rule.startswith("feedback")] == []

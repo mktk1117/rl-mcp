@@ -462,3 +462,16 @@ def test_the_page_still_draws_when_a_session_directory_is_gone():
 
   assert "const PARAMS=" in page
   assert "run_001" in page
+
+
+def test_a_written_headline_is_named_as_the_summarys_source():
+  """`one_line` prefers a written headline, so the payload must say so --
+  otherwise a viewer labels the sentence as the run's outcome."""
+  record = RunRecord(id="001", slug="summarised",
+                     outcome="Reward rose to 4.2.",
+                     headline="The plateau is the story.")
+
+  node = to_payload(build([record]))[0]
+
+  assert node["summary"] == "The plateau is the story."
+  assert node["summary_source"] == "headline"

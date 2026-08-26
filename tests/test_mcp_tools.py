@@ -1,6 +1,6 @@
 """Every MCP tool, called at least once.
 
-The MCP server is the product's headline surface -- 29 tools an agent reaches
+The MCP server is the product's headline surface -- 34 tools an agent reaches
 over stdio -- and nothing tested it. `CLAUDE.md` even claimed "the MCP-server
 tests skip unless the optional `mcp` package is installed", describing a file
 that did not exist.
@@ -49,14 +49,24 @@ _ARGS: Dict[str, Dict[str, Any]] = {
     "show_record": {"record_id": "001"},
     "attach_asset": {"record_id": "001", "path": "/nonexistent/x.png"},
     "compare_runs": {"record_ids": ["001"]},
+    "record_feedback": {"text": "they said something"},
+    "attach_feedback": {"record_id": "001", "text": "they said something"},
+    "answer_feedback": {"record_id": "001", "index": 0, "response": "done"},
+    "set_record_headline": {"record_id": "001", "text": "one sentence"},
 }
 
 
 @pytest.fixture(scope="module")
 def server(tmp_path_factory):
-  """A server pinned at a root with no sessions in it."""
+  """A server pinned at a root with no sessions in it.
+
+  ``records_root`` is pinned too: left unset the record tools would fall back
+  to ``./records``, and a test suite must not write a store into whatever
+  directory it happened to be run from.
+  """
   root = tmp_path_factory.mktemp("no_sessions")
-  return create_mcp_server(root=str(root))
+  return create_mcp_server(root=str(root),
+                           records_root=str(root / "records"))
 
 
 @pytest.fixture(scope="module")
@@ -183,3 +193,60 @@ def test_an_unknown_tool_is_refused(server):
   except Exception:
     return
   assert "unknown tool" in _text(result).lower()
+
+
+def test_the_feedback_tools_round_trip_against_a_real_store(tmp_path):
+  """The record tools answer without a trainer: a remark, then what was done
+  about it, then the fold across the whole store."""
+  from rlmcp.records import open_store
+
+  store = open_store(tmp_path / "records")
+  record = store.new_record("steered")
+  offline = create_mcp_server(root=str(tmp_path),
+                              records_root=str(tmp_path / "records"))
+
+  attached = json.loads(_text(asyncio.run(offline.call_tool(
+      "attach_feedback",
+      {"record_id": record.id, "text": "Try a smaller step.", "kind": "steer"}))))
+  assert attached["ok"] is True
+  assert attached["outstanding"] is True
+
+  answered = json.loads(_text(asyncio.run(offline.call_tool(
+      "answer_feedback",
+      {"record_id": record.id, "index": attached["index"],
+       "response": "Halved it.", "changed": True}))))
+  assert answered["feedback"]["response"] == "Halved it."
+
+  timeline = json.loads(_text(asyncio.run(offline.call_tool(
+      "get_feedback_timeline", {}))))
+  assert timeline["count"] == 1
+  assert timeline["feedback"][0]["run"] == record.id
+  assert json.loads(_text(asyncio.run(offline.call_tool(
+      "get_feedback_timeline", {"outstanding": True}))))["count"] == 0
+
+
+def test_a_headline_set_over_mcp_shows_up_on_the_record(tmp_path):
+  from rlmcp.records import open_store
+
+  store = open_store(tmp_path / "records")
+  record = store.new_record("summarised", hypothesis="A longer warmup helps.")
+  offline = create_mcp_server(root=str(tmp_path),
+                              records_root=str(tmp_path / "records"))
+
+  payload = json.loads(_text(asyncio.run(offline.call_tool(
+      "set_record_headline",
+      {"record_id": record.id, "text": "The entropy floor is the constraint."}))))
+
+  assert payload["derived"] is False
+  assert store.get_record(record.id).headline == "The entropy floor is the constraint."
+
+
+def test_a_feedback_tool_refuses_an_unknown_record_rather_than_raising(tmp_path):
+  offline = create_mcp_server(root=str(tmp_path),
+                              records_root=str(tmp_path / "records"))
+
+  payload = json.loads(_text(asyncio.run(offline.call_tool(
+      "attach_feedback", {"record_id": "999", "text": "into the void"}))))
+
+  assert payload["ok"] is False
+  assert "999" in payload["error"]

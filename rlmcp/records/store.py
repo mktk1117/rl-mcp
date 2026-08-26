@@ -10,11 +10,15 @@ thrown away and rebuilt. Later there will be a second one that speaks HTTP to a
 service holding Postgres and an object store. The test suite for this protocol
 is written once and run against both -- that is what proves the seam is real.
 
-Two rules the protocol exists to enforce:
+Three rules the protocol exists to enforce:
 
 * **The store assigns ids.** Two jobs on two machines cannot both pick ``035``.
 * **Claims are leases.** A job that dies releases its slot, rather than blocking
   the next launch forever the way a stale ``running`` record does.
+* **Feedback is appended, never overwritten.** It is the one part of a record
+  two writers genuinely race for -- a human types while the trainer heartbeats
+  -- so it gets its own append operation rather than a read-modify-write of the
+  whole record by every caller.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence
 
-from rlmcp.records.record import RunRecord
+from rlmcp.records.record import Feedback, RunRecord
 
 
 class StoreError(RuntimeError):
@@ -116,6 +120,39 @@ class RecordStore(Protocol):
 
   def delete_record(self, record_id: str) -> bool:
     ...
+
+  # Feedback.
+
+  def add_feedback(self, record_id: str, feedback: Feedback) -> RunRecord:
+    """Append one remark to a record. Returns the record as persisted.
+
+    Append-only by contract: an implementation may not reorder or drop earlier
+    entries, because an entry's index is how a response is attached to it later.
+    """
+
+  def answer_feedback(self, record_id: str, index: int, response: str,
+                      changed: bool = True) -> RunRecord:
+    """Record what was done about ``feedback[index]``.
+
+    The one mutation allowed on a stored remark, and it fills a slot rather
+    than replacing text. ``changed`` says whether anything actually moved --
+    "looked into it, nothing needed changing" is a legitimate answer and should
+    not be counted as a course correction.
+    """
+
+  def feedback_timeline(
+      self,
+      kind: Optional[str] = None,
+      author: Optional[str] = None,
+      outstanding: bool = False,
+      limit: Optional[int] = None,
+  ) -> List[Dict[str, Any]]:
+    """Every remark across the whole store, oldest first.
+
+    The cross-run question -- "when did they say what, and what came of it" --
+    that a per-record view cannot answer. Rows carry ``run`` and ``index`` so
+    each one points back at the record it lives on.
+    """
 
   # Leases.
 
