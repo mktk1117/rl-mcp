@@ -19,11 +19,11 @@ so nothing here needs a restart or a checkpoint round-trip.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from rlmcp.adapters.base import SimAdapter
+from rlmcp.adapters.base import NotSupported, SimAdapter
 from rlmcp.adapters.mjlab.access import ParameterAccess
 from rlmcp.adapters.mjlab.state import metrics as state_metrics
 from rlmcp.adapters.mjlab.state import rendering
@@ -120,6 +120,66 @@ class MjlabSimAdapter(SimAdapter):
   def renderer_ready(self) -> bool:
     """Whether a frame would reuse an existing renderer (else render() builds one)."""
     return rendering.renderer_ready(self.env)
+
+  # Episodes.
+
+  def reset_envs(self, env_ids: Optional[Sequence[int]] = None) -> Dict[str, Any]:
+    """Start fresh episodes, through the same path a termination takes.
+
+    A manager-based environment restarts a subset of its environments with
+    ``_reset_idx(env_ids)`` -- the method its own ``step`` calls for whichever
+    environments terminated this tick. Reusing it is what makes a requested
+    reset indistinguishable from a natural one: the event, command and
+    randomisation terms that run on reset all run here too, which is the whole
+    point of asking the environment to reset rather than writing state back
+    into it by hand.
+
+    ``reset()`` is the fallback for a backend that exposes no per-env path, and
+    only when every environment was asked for -- resetting all twelve because
+    the caller asked for two would be worse than refusing.
+    """
+    total = self.num_envs()
+    if env_ids is None:
+      chosen = list(range(total))
+    else:
+      chosen = [int(i) for i in env_ids]
+      out_of_range = [i for i in chosen if i < 0 or i >= total]
+      if out_of_range:
+        raise ValueError(
+            f"Environment id(s) {out_of_range} do not exist; this run has "
+            f"{total} environments (0..{total - 1})."
+        )
+
+    # Public spelling first, then the manager-based convention. Named rather
+    # than duck-typed so a backend that happens to have some other _reset_idx
+    # is not called by accident.
+    for name in ("reset_idx", "_reset_idx"):
+      reset_idx = getattr(self.env, name, None)
+      if callable(reset_idx):
+        import torch
+
+        reset_idx(torch.as_tensor(chosen, dtype=torch.long,
+                                  device=getattr(self.env, "device", None)))
+        # Manager-based envs zero the episode clock inside _reset_idx; doing it
+        # again is harmless, and a backend that does not would otherwise hand
+        # the restarted episode a clock already at the time limit.
+        clock = getattr(self.env, "episode_length_buf", None)
+        if clock is not None:
+          try:
+            clock[chosen] = 0
+          except Exception:
+            pass
+        return {"num_reset": len(chosen), "method": name}
+
+    if env_ids is None and callable(getattr(self.env, "reset", None)):
+      self.env.reset()
+      return {"num_reset": total, "method": "reset"}
+
+    raise NotSupported(
+        "reset_envs: this environment exposes neither reset_idx nor a way to "
+        "restart a subset of its environments, so only a full reset is "
+        "possible here -- ask for one by leaving env_ids and where unset."
+    )
 
   # Env state, for checkpointing the curriculum alongside the policy.
 

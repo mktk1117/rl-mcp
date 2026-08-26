@@ -125,7 +125,8 @@ set_parameter {"key": "event.startup.foot_friction.params.ranges", "value": [0.4
 Values are validated before anything is touched — a scalar written to a
 `[low, high]` range, an inverted range, or a truncating float on an int knob is
 refused with the expected shape named, and the live config stays intact.
-`reset_parameters` restores startup values.
+`reset_parameters` restores startup values; `reset_environments` is the
+unrelated one that starts fresh episodes and leaves every parameter alone.
 
 ### 4. Experiment safely with checkpoints
 
@@ -210,7 +211,7 @@ and the recent event log.
 | task verbs | `list_commands`, `run_command` |
 | curriculum | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
 | checkpoints | `save_checkpoint`, `list_checkpoints`, `rollback_to_checkpoint` |
-| lifecycle | `pause_training`, `resume_training`, `stop_training`, `add_note` |
+| lifecycle | `pause_training`, `resume_training`, `reset_environments`, `stop_training`, `add_note` |
 
 `cancel_job` and any extension verb reach the run through `run_command`; the
 full per-run command list comes from `list_commands`.

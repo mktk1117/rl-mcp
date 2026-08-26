@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from conftest import FakeSimAdapter
 
+from rlmcp.adapters.base import SimAdapter
 from rlmcp.core.controller import RlMcp
 from rlmcp.core.parameters.spec import Liveness
 from rlmcp.core.curriculum import (
@@ -819,3 +820,110 @@ def test_notes_land_in_the_event_log(lab):
   _run(lab, "note", text="switching to stairs next")
   notes = [e for e in _client(lab).events() if e["kind"] == "note"]
   assert notes[-1]["text"] == "switching to stairs next"
+
+
+# Resetting episodes, which is not resetting parameter values.
+
+
+def test_reset_envs_restarts_every_environment_by_default(lab, fake_sim):
+  """No narrowing means all of them. Restarting env 0 alone and calling it a
+  reset would be a lie, which is why the resolver defaults to None rather than
+  to the first environment the way the screenshot one does."""
+  response = _run(lab, "reset_envs")
+
+  assert response.ok
+  assert response.result["scope"] == "all"
+  assert response.result["num_reset"] == 12
+  assert fake_sim.resets == [list(range(12))]
+
+
+def test_reset_envs_takes_explicit_ids(lab, fake_sim):
+  response = _run(lab, "reset_envs", env_ids=[2, 5])
+
+  assert response.ok and response.result["env_ids"] == [2, 5]
+  assert fake_sim.resets == [[2, 5]]
+
+
+def test_reset_envs_narrows_by_the_extensions_own_vocabulary(lab, fake_sim):
+  """`--where` is the same query `shot` and `diagnose` take, so restarting only
+  the environments on one part of the task costs the core no new concepts."""
+  _run(lab, "set_terrain", terrains=["flat", "random_rough"])
+  expected = fake_sim.env_ids_on(terrain="random_rough")
+
+  response = _run(lab, "reset_envs", where={"terrain": "random_rough"})
+
+  assert response.ok
+  assert response.result["scope"] == "selection"
+  assert fake_sim.resets == [expected]
+  assert 0 < len(expected) < 12  # A real subset, not everything.
+
+
+def test_reset_envs_refuses_a_description_no_extension_understands(lab, fake_sim):
+  response = _run(lab, "reset_envs", where={"holding": True})
+
+  assert not response.ok and "terrain" in response.error
+  assert fake_sim.resets == []
+
+
+def test_reset_envs_refuses_a_description_that_matches_nothing(lab, fake_sim):
+  response = _run(lab, "reset_envs", where={"level": 5})
+
+  assert not response.ok
+  assert fake_sim.resets == []
+
+
+def test_reset_envs_refuses_an_empty_selection_rather_than_resetting_all(lab, fake_sim):
+  """An empty list is a caller whose filter produced nothing, not a caller who
+  meant 'everything'. Guessing the second would restart a whole run."""
+  response = _run(lab, "reset_envs", env_ids=[])
+
+  assert not response.ok
+  assert fake_sim.resets == []
+
+
+def test_reset_envs_says_so_when_the_backend_has_no_reset(tmp_path, fake_runner):
+  """The graceful degradation the adapter contract asks for: a backend that
+  cannot restart episodes says which capability is missing, and nothing else
+  in the run is disturbed."""
+
+  class NoResetSim(FakeSimAdapter):
+    # Back to the contract's default, which raises NotSupported -- a backend
+    # that never implemented the capability at all.
+    reset_envs = SimAdapter.reset_envs
+
+  sim = NoResetSim()
+  controller = RlMcp(sim_adapter=sim, runner_adapter=fake_runner,
+                     session_dir=tmp_path / "no-reset")
+  try:
+    response = _run(controller, "reset_envs")
+  finally:
+    controller.close()
+
+  assert not response.ok
+  assert "reset_envs" in response.error and "Nothing was reset" in response.error
+
+
+def test_reset_envs_is_logged_with_its_rationale(lab):
+  _run(lab, "reset_envs", env_ids=[1], rationale="cleared after the weight edit")
+
+  events = [e for e in _client(lab).events() if e["kind"] == "reset_envs"]
+  assert events[-1]["rationale"] == "cleared after the weight edit"
+  assert events[-1]["env_ids"] == [1]
+
+
+def test_resetting_episodes_and_resetting_parameters_are_different_verbs(lab, fake_sim):
+  """The two names sit next to each other in the command list and mean
+  unrelated things; neither may quietly do the other's job."""
+  _run(lab, "set_parameter", key="reward.action_rate_l2.weight", value=-0.4,
+       rationale="test")
+
+  _run(lab, "reset_envs")
+  assert fake_sim.get_parameter("reward.action_rate_l2.weight") == -0.4  # untouched
+
+  fake_sim.resets.clear()
+  _run(lab, "reset_parameters")
+  assert fake_sim.resets == []  # no episode was restarted
+
+
+def test_reset_envs_is_offered_to_agents_alongside_the_other_commands(lab):
+  assert "reset_envs" in _run(lab, "help").result["commands"]
