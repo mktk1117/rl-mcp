@@ -267,7 +267,7 @@ def _wrap(text: str, room: int, indent: str = "") -> List[str]:
   """Wrap on whitespace only.
 
   textwrap's defaults split on hyphens and chop over-long words, which turns a
-  session path into ``2026-08-\n24_shand003``. A token with nowhere to break
+  session path into ``2026-08-\n24_walk003``. A token with nowhere to break
   is better left overflowing than made unreadable -- and unselectable.
   """
   lines = textwrap.wrap(

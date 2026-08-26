@@ -367,44 +367,40 @@ They are drawn separately because they often disagree. A run can take its config
 from the run before it and its weights from six runs back, and a tool that draws
 one edge from the other data will draw it wrong.
 
-### What the graph shows: in-hand reorientation, 001 to 010
+### What the graph shows
 
-Ten runs teaching a SharpaWave hand to reorient a cube. Read the verdicts, not
-just the arrows:
+The value is not the arrows, it is the verdicts on them. An illustrative shape,
+of the kind these records tend to take:
 
 ```
-001 baseline ............... falsified   froze in a pinch grip, 0.25 goals
- └─ 002 progress shaping ... validated   ~24 goals/episode
-     └─ 003 palm-up fix .... interrupted wrong hand — this was a Shadow Hand
-         └─ 004 sharpa ..... interrupted per-env origins bug, hands stacked
-             └─ 005 fixed .. falsified   the freeze is back: 0.98 survival, 0.02 goals
-                 └─ 006 curriculum ..... falsified   freeze broken, but now it throws the cube
-                     └─ 007 re-priced .. falsified   pricing was never the constraint
-                         └─ 008 EMA filter ......... validated   ← the unlock
-                             └─ 009 dwell + terminate .... interrupted  precision ceiling too tight
-                                 └─ 010 0.4 rad band ..... validated   solved
+001 baseline ............... falsified   the policy found a degenerate optimum
+ └─ 002 reshaped reward .... falsified   optimum broken, but it overshot the other way
+     └─ 003 re-priced ...... falsified   so pricing was never the binding constraint
+         └─ 004 new actuation interface ... validated   ← the unlock
+             └─ 005 tighter tolerance ..... interrupted  stopped to fix the gate
+                 └─ 006 realistic tolerance .... validated   solved
 ```
 
-**What this means:** six of these ten runs did not work, and the graph is why
-that was affordable.
+**What this means:** four of these six runs did not work, and the graph is what
+made that affordable.
 
-Runs **005, 006 and 007** are the interesting part. Each was falsified, and
-together they are worth more than any one success. 005 showed the policy freezing
-— perfect survival, no rotation. 006 broke the freeze with a curriculum that made
-dropping cheap, and overshot: the hand started throwing the cube away. 007 priced
-dropping in between, and *also* failed. Three runs, one conclusion the graph makes
-unavoidable: reward pricing was not the binding constraint. 007 had pre-registered
-exactly that alternative in its falsifier — the action interface — and 008 changed
-only that, a moving-average filter on the joint targets, and the task opened up.
+Runs **001, 002 and 003** are the interesting part. Each was falsified, and
+together they are worth more than any one success would have been. The first
+found a degenerate optimum; the second broke it and overshot the opposite way;
+the third priced the trade in between and *also* failed. Three failures, one
+conclusion the graph makes unavoidable — the reward was never the binding
+constraint — and 003 had pre-registered exactly that alternative in its
+falsifier. 004 changed only that, and the task opened up.
 
-The three `interrupted` nodes are not failures of anything. 003 and 004 were setup
-mistakes (the wrong hand, a scene bug); 009 was a deliberate stop to fix a
-too-tight success band. Keeping them separate from `falsified` matters, because a
-hypothesis that was never really tested must not be counted as one that lost.
+That conclusion is not visible in any single record. It lives in the shape of
+three siblings, which is the argument for keeping runs as a graph rather than a
+list.
 
-`falsified` is a good verdict here. A run that kills its hypothesis in twenty
-minutes is information-dense, and the graph is what turns three of them in a row
-into an answer.
+`interrupted` is not a failure of anything, which is why it is a separate
+verdict: a run stopped for a setup mistake or a deliberate change of plan must
+not be counted as a hypothesis that lost. And `falsified` is a good verdict — a
+run that kills its hypothesis in twenty minutes is information-dense, and the
+graph is what turns three of them in a row into an answer.
 
 ## Install
 
@@ -482,20 +478,19 @@ command writes into the same records from any directory; leave it unset and you
 get a scratch `records/` wherever you happened to be standing.
 
 ```bash
-git clone git@github.com:mktk1117/rl-mcp.git ../rlmcp   # the tooling
-export RLMCP_RECORDS=$PWD/records                               # point the harness here
+pip install rl-mcp                    # the tooling
+export RLMCP_RECORDS=$PWD/records     # point the harness at your records
 ```
 
-[rlmcp-records](https://github.com/mktk1117/rl-mcp-tasks) is a worked
-example of the right-hand side — two task packages (`juggle/`, a G1 with two
-hands learning to juggle; `shand/`, in-hand cube reorientation) and the records
-their runs filled. The files named below are in it.
+The examples below use `mytask/` for the task package and `mytask_ext.py` for
+its extension. Nothing about the arrangement is specific to a task: any mjlab
+task package works the same way.
 
 ### 1. Wrap the environment
 
-One call, between building the environment and building the runner. This is
-`juggle/train_curriculum.py` with the argument parsing cut out; the whole file
-is about a hundred lines:
+One call, between building the environment and building the runner. A whole
+launcher is about a hundred lines; this is one with the argument parsing cut
+out:
 
 ```python
 import rlmcp
@@ -551,48 +546,49 @@ PYTHONPATH=. MUJOCO_GL=egl uv run --project ../rlmcp --extra mjlab \
 ### 2. Give the task a vocabulary
 
 The core knows parameters, metrics, traces, frames and stages. It does not know
-what a "catch" is, and it should not — so that vocabulary goes in an `Extension`
-beside your task, not in here. `juggle/rlmcp_ext.py` is the worked example.
+what a "goal" is, and it should not — so that vocabulary goes in an `Extension`
+beside your task, not in here. A worked example, for a task where the robot
+moves objects to goal poses:
 
 ```python
 from rlmcp.core.extensions import Extension
 from rlmcp.extensions import register
 
 @register
-class Juggling(Extension):
-  """Difficulty control and task-level metrics for the juggling task."""
+class Goals(Extension):
+  """Difficulty control and task-level metrics for a goal-reaching task."""
 
-  name = "juggle"
+  name = "goals"
 
   def available(self) -> bool:
-    return "juggle" in self.env.unwrapped.command_manager._terms
+    return "goal" in self.env.unwrapped.command_manager._terms
 
   def commands(self):
-    return {"set_juggle_difficulty": self.cmd_set_juggle_difficulty,
-            "juggle_status": self.cmd_juggle_status}
+    return {"set_goal_difficulty": self.cmd_set_goal_difficulty,
+            "goal_status": self.cmd_goal_status}
 
   def metrics(self):
     # Per minute of simulated time, not per episode -- see below.
-    return {"rlmcp/catch_rate_per_min": self._catch_rate()}
+    return {"rlmcp/goal_rate_per_min": self._goal_rate()}
 
   def select_envs(self, **criteria):
-    """Understands `airborne=true`."""
-    airborne = criteria.pop("airborne", None)
-    if criteria or airborne is None:
+    """Understands `holding=true`."""
+    holding = criteria.pop("holding", None)
+    if criteria or holding is None:
       return None                       # not our vocabulary; let others answer
-    want = str(airborne).lower() in ("1", "true", "yes")
-    return [i for i, flying in enumerate(self._airborne()) if flying == want]
+    want = str(holding).lower() in ("1", "true", "yes")
+    return [i for i, held in enumerate(self._holding()) if held == want]
 ```
 
 Those three hooks buy three different things at once, from one class:
 
-* `commands()` — `rlmcp run set_juggle_difficulty balls=2 pass_mode=alternate`
+* `commands()` — `rlmcp run set_goal_difficulty tolerance=0.2 mode=random`
   from a shell, `run_command` over MCP, **and** an `Action` a curriculum stage
   can apply on entry. Values are parsed as JSON, so quote lists:
   `rlmcp run set_objects names='["cube","mug"]'`.
 * `metrics()` — merged into telemetry, so they appear in `rlmcp metrics`,
   `rlmcp plot`, and in curriculum promotion conditions.
-* `select_envs()` — `rlmcp shot --where airborne=true`. The core never parses a
+* `select_envs()` — `rlmcp shot --where holding=true`. The core never parses a
   `where` key; your extension is the only thing that knows what one means.
 
 `select_envs` is dispatched **by signature**: the registry tries to bind the
@@ -626,25 +622,24 @@ notes file, that is a `CurriculumStage`. Encoding it means the run drives itself
 the ladder is saved with the run (`params/curriculum.json`), and a human can
 still override it live.
 
-`juggle/curriculum.py` is a non-terrain worked example — eight rungs, from
-catching a ball someone lobbed at you to a three-ball cascade:
+A non-terrain rung, from a manipulation ladder that starts with the object
+already in the gripper and works up to picking it off a table:
 
 ```python
 CurriculumStage(
-    name="1_toss_and_catch",
-    apply=[Action("set_juggle_difficulty",
-                  {"spawn_mode": "in_hand", "min_apex": 0.15,
-                   "min_separation": 0.15})],
-    parameters={"reward.catch.weight": 300.0,
-                "reward.throw_apex.weight": 60.0,
+    name="1_hold_and_place",
+    apply=[Action("set_goal_difficulty",
+                  {"spawn_mode": "in_gripper", "tolerance": 0.15})],
+    parameters={"reward.reach_goal.weight": 300.0,
+                "reward.grasp_stability.weight": 60.0,
                 "reward.drop_penalty.weight": -120.0},
     promote_when=[
-        Condition("Metrics/juggle/catches_per_min", ">=", 25.0),
-        Condition("Metrics/juggle/episode_dropped", "<=", 0.5),
+        Condition("Metrics/goals/goals_per_min", ">=", 25.0),
+        Condition("Metrics/goals/episode_dropped", "<=", 0.5),
     ],
     min_iterations=500,
     hold_iterations=20,
-    notes="Goal: throw it up and catch it again, in the same hand.",
+    notes="Goal: keep hold of it and place it, before learning to pick it up.",
 )
 ```
 
@@ -652,15 +647,16 @@ CurriculumStage(
 params` discovered. Both are written to the event log when the stage is entered,
 which is what lets the lineage page draw what changed and when.
 
-**Pick promotion metrics the policy cannot buy.** Two rules, both learned the
-expensive way in the records:
+**Pick promotion metrics the policy cannot buy.** Two rules, both usually
+learned the expensive way:
 
 * *Task-external, not the reward being optimised.* A reward term rises when the
-  policy games it. Catches per minute, success rate and holding fraction do not.
+  policy games it. Successes per minute, success rate and holding fraction do
+  not.
 * *Normalised — rates and fractions, never per-episode counts.* An episode that
   ends early on a failure is shorter for reasons unrelated to skill, so a raw
-  count promotes whatever survives longest. `juggle/rlmcp_ext.py` divides its
-  counts by `episode_length_buf * step_dt` for exactly this reason.
+  count promotes whatever survives longest. Divide counts by
+  `episode_length_buf * step_dt` and publish the rate.
 
 A stage promotes only when every condition has held for `hold_iterations`
 consecutive iterations *and* `min_iterations` has passed. You can override that
@@ -668,8 +664,8 @@ from a shell at any time:
 
 ```bash
 rlmcp curriculum                     # which rung, and what it is waiting for
-rlmcp curriculum advance --why "the wider lob is solved"
-rlmcp curriculum goto 3_two_balls --why "the warm start already has the catch"
+rlmcp curriculum advance --why "the easy tolerance is solved"
+rlmcp curriculum goto 3_from_table --why "the warm start already places reliably"
 rlmcp curriculum auto-off            # stop it promoting itself
 ```
 
@@ -683,17 +679,17 @@ edits apply between batches too, so nothing here can race the simulator.
 rlmcp sessions                       # what is running
 rlmcp status                         # iteration, stage, headline metrics
 rlmcp metrics --list                 # every metric name this run publishes
-rlmcp metrics rlmcp/catch_rate_per_min --last-n 50
-rlmcp plot rlmcp/catch_rate_per_min --smooth 20
+rlmcp metrics rlmcp/goal_rate_per_min --last-n 50
+rlmcp plot rlmcp/goal_rate_per_min --smooth 20
 
 rlmcp commands                       # every verb, including your extension's
-rlmcp run juggle_status              # what the task itself thinks is happening
-rlmcp shot --where airborne=true     # look at an env that is mid-flight
+rlmcp run goal_status                # what the task itself thinks is happening
+rlmcp shot --where holding=true      # look at an env that has the object
 rlmcp video --seconds 8
 rlmcp diagnose --seconds 4           # jerk, chatter, effort, posture, a verdict
 
 rlmcp set reward.drop_penalty.weight -150 --why "it is bailing out early"
-rlmcp note "takahiro says the palm should face up"
+rlmcp note "reviewer says the gripper should approach from above"
 
 rlmcp checkpoint before-experiment   # and `rlmcp load <path>` to undo
 rlmcp pause / rlmcp resume
@@ -746,7 +742,7 @@ not attributable to its own change. The rest of the vocabulary is `falsified`,
 and `running` meaning the run has not produced a result yet.
 
 Attach the clip. A video that stays in `logs/` is not a deliverable — `record asset`
-copies it into the records's own media store, so the record still has it after
+copies it into the records' own media store, so the record still has it after
 the training logs are cleaned, and the lineage page has something to show.
 
 ## How parameters are found

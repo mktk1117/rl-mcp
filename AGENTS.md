@@ -18,10 +18,10 @@ Two repositories, on purpose:
 * **this one** — the harness, adapters, CLI and MCP server. Its history should
   be about the tool.
 * **your records** — your mjlab task packages and `records/`, the run records.
-  [rlmcp-records](https://github.com/mktk1117/rlmcp-records) is the worked
-  example: `juggle/` and `shand/` are task packages, `records/` is the records they
-  filled, and its own `AGENTS.md` carries the guidance for *running* experiments
-  (mjlab traps, verification checks, the run-record lifecycle).
+  That repository holds a package per task (env config, `mdp/` terms, its
+  `rlmcp` extension, its curriculum, its launcher), the records those runs
+  filled, and its own guidance for *running* experiments: simulator traps,
+  verification checks, the run-record lifecycle.
 
 rlmcp is a dependency of that repo, never the other way round. Nothing about a
 task — no env config, no reward term, no run record — belongs in this tree. If
@@ -85,9 +85,9 @@ schedule = StageSchedule([
 env = rlmcp.wrap(env, session_dir=..., curriculum=schedule)
 ```
 
-The records's `juggle/curriculum.py` is a worked non-terrain example (eight
-rungs, catch → throw → cascade), driven by `juggle/train_curriculum.py`;
-`shand/curriculum.py` is a second one for in-hand reorientation.
+A manipulation ladder is the clearest non-terrain example: rungs that start
+with the object already held and work up to picking it off a table, each rung
+setting reward weights and calling the task extension's own verbs on entry.
 
 **Rule of thumb:** if you are writing down "when metric X passes Y, change
 weight Z", that is a `CurriculumStage`, not a note to yourself. Encoding it
@@ -102,7 +102,8 @@ what a "goal", "terrain" or "object set" is. Add those through an `Extension`
 (`commands()`, `metrics()`, `select_envs()`, `snapshot()`/`restore()`), which
 makes them reachable from the CLI, from MCP `run_command`, **and from a
 curriculum stage's `apply`** — all three at once. `rlmcp/extensions/terrain.py`
-is the reference; the records's `juggle/rlmcp_ext.py` is a task-side example.
+is the reference for one that ships here; a task package's own extension
+module is the task-side equivalent.
 
 An extension in another package registers itself through an entry point in the
 `rlmcp.extensions` group, so nothing in this repo has to be edited to add one.

@@ -25,19 +25,19 @@ from rlmcp.core.palette import (
 # The pair that actually caused the problem: a landing-point marker and the
 # third juggling ball.
 MARKER_YELLOW = (1.00, 0.85, 0.10, 0.70)
-BALL_YELLOW = (0.95, 0.80, 0.15, 1.00)
-BALL_RED = (0.90, 0.25, 0.15, 1.00)
-BALL_BLUE = (0.15, 0.45, 0.90, 1.00)
+OBJECT_YELLOW = (0.95, 0.80, 0.15, 1.00)
+OBJECT_RED = (0.90, 0.25, 0.15, 1.00)
+OBJECT_BLUE = (0.15, 0.45, 0.90, 1.00)
 
 
 def test_the_real_collision_is_caught():
-  assert rgba_distance(MARKER_YELLOW, BALL_YELLOW) < DEFAULT_MIN_DISTANCE
-  found = find_collisions({"m": MARKER_YELLOW}, {"ball2": BALL_YELLOW})
-  assert [c["collides_with"] for c in found] == ["ball2"]
+  assert rgba_distance(MARKER_YELLOW, OBJECT_YELLOW) < DEFAULT_MIN_DISTANCE
+  found = find_collisions({"m": MARKER_YELLOW}, {"sphere2": OBJECT_YELLOW})
+  assert [c["collides_with"] for c in found] == ["sphere2"]
 
 
 def test_distinct_colors_do_not_warn():
-  assert find_collisions({"m": MARKER_PALETTE[0]}, {"ball0": BALL_RED}) == []
+  assert find_collisions({"m": MARKER_PALETTE[0]}, {"ball0": OBJECT_RED}) == []
 
 
 def test_alpha_is_ignored():
@@ -56,7 +56,7 @@ def test_collisions_are_reported_nearest_first():
 
 
 def test_suggestion_clears_every_scene_color():
-  scene = [BALL_RED, BALL_BLUE, BALL_YELLOW]
+  scene = [OBJECT_RED, OBJECT_BLUE, OBJECT_YELLOW]
   pick = suggest_distinct(scene)
   assert min(rgba_distance(pick, c) for c in scene) >= DEFAULT_MIN_DISTANCE
 
@@ -68,8 +68,8 @@ def test_suggestion_survives_a_rainbow_scene():
 
 
 def test_report_names_both_sides():
-  text = format_report(find_collisions({"juggle.viz": MARKER_YELLOW}, {"ball2": BALL_YELLOW}))
-  assert "juggle.viz" in text and "ball2" in text
+  text = format_report(find_collisions({"markers.viz": MARKER_YELLOW}, {"sphere2": OBJECT_YELLOW}))
+  assert "markers.viz" in text and "sphere2" in text
 
 
 # --- the mjlab-side extraction -------------------------------------------
@@ -79,7 +79,7 @@ def test_report_names_both_sides():
 class _Cfg:
   debug_vis: bool = True
   viz_marker_color: Tuple[float, float, float, float] = MARKER_YELLOW
-  viz_face_colors: Tuple[Tuple[float, float, float, float], ...] = (BALL_RED,)
+  viz_face_colors: Tuple[Tuple[float, float, float, float], ...] = (OBJECT_RED,)
   unrelated: float = 1.0
   optional_color: Optional[Tuple[float, ...]] = None
 
@@ -121,32 +121,32 @@ class _Env:
 
 
 def test_marker_colors_found_by_convention():
-  env = _Env({"juggle": _Term(_Cfg())}, [])
+  env = _Env({"markers": _Term(_Cfg())}, [])
   found = collect_marker_colors(env)
-  assert found["juggle.viz_marker_color"] == MARKER_YELLOW
-  assert found["juggle.viz_face_colors[0]"] == BALL_RED
-  assert "juggle.unrelated" not in found
-  assert "juggle.optional_color" not in found
+  assert found["markers.viz_marker_color"] == MARKER_YELLOW
+  assert found["markers.viz_face_colors[0]"] == OBJECT_RED
+  assert "markers.unrelated" not in found
+  assert "markers.optional_color" not in found
 
 
 def test_terms_with_debug_vis_off_are_skipped():
-  env = _Env({"juggle": _Term(_Cfg(debug_vis=False))}, [])
+  env = _Env({"markers": _Term(_Cfg(debug_vis=False))}, [])
   assert collect_marker_colors(env) == {}
 
 
 def test_invisible_and_unnamed_geoms_are_skipped():
   env = _Env(
     {},
-    [_Geom("ball", BALL_RED), _Geom("ghost", (1, 1, 1, 0.0)), _Geom("", BALL_BLUE)],
+    [_Geom("ball", OBJECT_RED), _Geom("ghost", (1, 1, 1, 0.0)), _Geom("", OBJECT_BLUE)],
   )
   assert list(collect_scene_colors(env)) == ["ball"]
 
 
 def test_end_to_end_flags_the_marker_against_the_ball():
-  env = _Env({"juggle": _Term(_Cfg())}, [_Geom("ball2", BALL_YELLOW)])
+  env = _Env({"markers": _Term(_Cfg())}, [_Geom("sphere2", OBJECT_YELLOW)])
   collisions = check_marker_colors(env)
-  assert any(c["collides_with"] == "ball2" for c in collisions)
+  assert any(c["collides_with"] == "sphere2" for c in collisions)
 
 
 def test_no_scene_means_no_report_rather_than_a_crash():
-  assert check_marker_colors(_Env({"juggle": _Term(_Cfg())}, [])) == []
+  assert check_marker_colors(_Env({"markers": _Term(_Cfg())}, [])) == []
