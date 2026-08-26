@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from pathlib import Path
 
 from rlmcp.records.lineage import Graph, build, summarize, to_payload
+from rlmcp.records.params import build_history, leaf_paths
 from rlmcp.records.record import RunRecord
 
 _HERE = Path(__file__).parent
@@ -159,6 +160,7 @@ def render_lineage_html(
     title: str = "rlmcp run tree",
     media_base: str = "media/",
     engine: str = "auto",
+    posters: Optional[Dict[str, str]] = None,
 ) -> str:
   """One self-contained page: the tree, a detail panel, search and filters.
 
@@ -167,19 +169,33 @@ def render_lineage_html(
       zoom, lineage highlighting -- or ``simple`` for a dependency-free renderer
       that draws the same graph with none of that. ``auto`` picks cytoscape when
       the vendored libraries are present.
+    posters: video key to poster key, from
+      :func:`rlmcp.records.poster.ensure_posters`. Omitting it costs the
+      thumbnails and nothing else -- every view has a path for a run nobody
+      filmed, because most runs are.
 
   Either way the result is one file: the libraries are inlined rather than
   fetched, so the page opens from a path, needs no server, and survives a strict
   content-security policy.
   """
   graph = build(records)
-  payload = to_payload(graph)
+  payload = to_payload(graph, posters)
   stats = summarize(graph)
+  # Reading every session's event log to draw parameter traces is the most
+  # expensive thing this function does, and a lineage whose logs are gone still
+  # has to render: a failure here costs the parameter view, not the page.
+  try:
+    history = build_history(graph)
+    paths = leaf_paths(graph)
+  except Exception as exc:  # noqa: BLE001 -- the tree matters more than the traces.
+    history, paths = {"runs": [], "index": [], "span": 0, "error": str(exc)}, {}
 
   substitutions = {
       "__MEDIA__": _script_json(media_base),
       "__TITLE__": html.escape(title),
       "__RUNS__": _script_json(payload),
+      "__PARAMS__": _script_json(history),
+      "__PATHS__": _script_json(paths),
       "__EDGES__": _script_json({
           "config": graph.config_edges,
           "warm": graph.warm_edges,

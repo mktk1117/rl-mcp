@@ -182,7 +182,42 @@ def frontier(graph: Graph, max_children: int = 1) -> List[str]:
   return sorted(out, key=lambda i: graph.nodes[i].row)
 
 
-def to_payload(graph: Graph) -> List[Dict[str, Any]]:
+def headline_video(record: RunRecord) -> Optional[List[str]]:
+  """The clip that stands for the run: the last video attached to it.
+
+  Last rather than first because attachments arrive in time order, so the last
+  one is the most recent look at the policy -- which is the one a reader of the
+  tree wants. Everything that shows a run as a picture agrees to ask here, so
+  the node, the story tile and the poster cache cannot pick different clips.
+  """
+  videos = (record.assets or {}).get("videos") or []
+  return list(videos[-1]) if videos else None
+
+
+def _clip_of(record: RunRecord,
+             posters: Optional[Dict[str, str]] = None) -> Optional[Dict[str, str]]:
+  """The headline clip with its still, or None for a run nobody filmed.
+
+  ``posters`` maps a video key to a poster key -- see
+  :func:`rlmcp.records.poster.ensure_posters`. A record may also carry the
+  poster itself as a third element of the asset entry, which wins: a still
+  written down at attach time is a fact about the record, and a derived one is
+  a cache.
+  """
+  entry = headline_video(record)
+  if not entry:
+    return None
+  src = entry[0] if entry else ""
+  poster = entry[2] if len(entry) > 2 and entry[2] else (posters or {}).get(src, "")
+  return {
+      "src": src,
+      "caption": entry[1] if len(entry) > 1 else "",
+      "poster": poster,
+  }
+
+
+def to_payload(graph: Graph,
+               posters: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
   """Everything a viewer needs, with the derived bits derived here."""
   payload = []
   for node_id in graph.order:
@@ -208,6 +243,13 @@ def to_payload(graph: Graph) -> List[Dict[str, Any]]:
             "prior": record.prior,
             "scratch": record.weights is None,
             "proposed_by": record.proposed_by,
+            "summary": record.one_line(),
+            # Where the sentence came from, because "what this run found" and
+            # "what this run set out to find" are different claims and the
+            # story view must not let them read as the same one.
+            "summary_source": ("outcome" if record.outcome.strip()
+                               else "hypothesis" if record.hypothesis.strip()
+                               else ""),
             "hypothesis": record.hypothesis,
             "prediction": record.prediction,
             "falsifier": record.falsifier.prose,
@@ -220,6 +262,9 @@ def to_payload(graph: Graph) -> List[Dict[str, Any]]:
             "recipe": recipe,
             "session": record.session,
             "assets": record.assets,
+            # The clip that stands for the run, hoisted out of assets so a
+            # node, a story tile and a thumbnail do not each re-derive it.
+            "clip": _clip_of(record, posters),
         }
     )
   return payload

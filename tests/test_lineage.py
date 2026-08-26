@@ -343,3 +343,122 @@ def test_comparison_truncates_to_a_matched_iteration():
 def test_comparison_says_so_when_the_runs_share_no_metric():
   series = {"001": {"a": [[0, 1.0]]}, "002": {"b": [[0, 1.0]]}}
   assert plot_run_comparison(series, ["c"])[:4] == b"\x89PNG"
+
+
+# The three views: the tree is the structure, the story is the order, the
+# parameters are the numbers. All three ship in the one interactive page.
+
+
+def _cytoscape_or_skip(records, **kw):
+  if not vendored():
+    pytest.skip("graph libraries are not vendored in this checkout")
+  return render_lineage_html(records, engine="cytoscape", **kw)
+
+
+def test_the_headline_clip_is_the_last_video_attached():
+  """Attachments arrive in time order, so the last one is the most recent look
+  at the policy -- which is the one a reader of the tree wants."""
+  record = _r("001", 1)
+  record.assets = {"videos": [["001/videos/early.mp4", "at 500"],
+                              ["001/videos/late.mp4", "at 4000"]]}
+
+  clip = to_payload(build([record]))[0]["clip"]
+
+  assert clip["src"] == "001/videos/late.mp4"
+  assert clip["caption"] == "at 4000"
+  assert clip["poster"] == ""  # nothing derived one
+
+
+def test_a_run_nobody_filmed_has_no_clip_rather_than_an_empty_one():
+  """Most runs carry no video. The story tile, the node and the strip all key
+  off clip being falsy, so a stub with empty strings would draw holes."""
+  record = _r("001", 1)
+  record.assets = {"plots": [["001/plots/curves.png", "curves"]]}
+
+  assert to_payload(build([record]))[0]["clip"] is None
+
+
+def test_a_derived_poster_reaches_the_payload_and_a_written_one_wins():
+  """A still cached by the renderer is a cache; one written into the record at
+  attach time is a fact about the record, and facts beat caches."""
+  derived, written = _r("001", 1), _r("002", 2)
+  derived.assets = {"videos": [["001/videos/tour.mp4", "tour"]]}
+  written.assets = {"videos": [["002/videos/tour.mp4", "tour",
+                                "002/posters/written.png"]]}
+  posters = {"001/videos/tour.mp4": "001/posters/derived.png",
+             "002/videos/tour.mp4": "002/posters/ignored.png"}
+
+  payload = to_payload(build([derived, written]), posters)
+
+  assert payload[0]["clip"]["poster"] == "001/posters/derived.png"
+  assert payload[1]["clip"]["poster"] == "002/posters/written.png"
+
+
+def test_the_summary_is_the_outcome_while_there_is_one_and_the_hypothesis_before():
+  """The story tile shows one sentence per run, and which claim it is matters:
+  what a run found and what it set out to find are not the same statement."""
+  closed = _r("001", 1, outcome="The failure rate dropped by a third. It also ran faster.",
+              hypothesis="A smaller penalty keeps the behaviour.")
+  open_ = _r("002", 2, verdict="running", hypothesis="Halving the step size settles it.")
+
+  payload = to_payload(build([closed, open_]))
+
+  assert payload[0]["summary"] == "The failure rate dropped by a third."
+  assert payload[0]["summary_source"] == "outcome"
+  assert payload[1]["summary"] == "Halving the step size settles it."
+  assert payload[1]["summary_source"] == "hypothesis"
+
+
+def test_the_interactive_page_carries_all_three_views():
+  page = _cytoscape_or_skip([_r("001", 1)])
+
+  assert '[["tree","tree"],["story","story"],["params","parameters"]]' in page
+  assert 'id="storyflow"' in page and "function drawStory(" in page
+  assert 'id="params"' in page and "function drawChart(" in page
+  assert "function drawBar(" in page and "function drawPanel(" in page
+  assert "function drawStrip(" in page
+  # The seam between graph and record, and the thumbnail toggle above it.
+  assert 'id="grip"' in page and "cursor:col-resize" in page
+  assert "body.resizing" in page
+  assert 'id="thumbs"' in page and "function applyThumbs(" in page
+
+
+def test_the_parameter_payload_travels_with_the_page():
+  page = _cytoscape_or_skip([_r("001", 1)])
+
+  assert "const PARAMS=" in page and ", PATHS=" in page
+  assert "__PARAMS__" not in page and "__PATHS__" not in page
+
+
+def test_thumbnails_are_bigger_than_dots_and_only_when_there_is_a_still():
+  """A node with a still is worth four times the area of one without; a node
+  with nothing to show stays a dot rather than a frame around emptiness."""
+  page = _cytoscape_or_skip([_r("001", 1)])
+
+  assert 'ele=>ele.data("poster")?76:15' in page
+  assert 'ele=>ele.data("poster")?57:15' in page
+  assert '"background-image":ele=>ele.data("poster")||"none"' in page
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_hostile_poster_key_is_escaped_like_every_other_media_path(engine):
+  record = _r("001", 1)
+  record.assets = {"videos": [["001/videos/c.mp4", "cap",
+                               '"><svg onload=alert(6)>/p.png']]}
+
+  page = render_lineage_html([record], engine=engine)
+
+  assert '"><svg onload=alert(6)>' not in page
+  if engine == "cytoscape":
+    assert 'src="${esc(mediaUrl(clip.poster))}"' in page
+
+
+def test_the_page_still_draws_when_a_session_directory_is_gone():
+  """A records store whose logs were cleaned up loses the traces, not the tree.
+  build_history reads every session; a failure there must not take the page."""
+  record = _r("001", 1, session="/nowhere/at/all", config={"reward.a.weight": 1.0})
+
+  page = render_lineage_html([record])
+
+  assert "const PARAMS=" in page
+  assert "run_001" in page

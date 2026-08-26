@@ -345,6 +345,26 @@ class RunRecord:
   def display(self) -> str:
     return f"{self.id}-{self.slug}"
 
+  def one_line(self, limit: int = 200) -> str:
+    """The first sentence of what the run said.
+
+    A closed run is summarised by its outcome and an open one by its
+    hypothesis, because that is the most recent claim each has made. This is
+    what a tile in the story view or a label on a node shows: an id and a slug
+    say which run it is, and this says why anyone should care.
+    """
+    source = (self.outcome or self.hypothesis or "").strip()
+    if not source:
+      return ""
+    # Sentence-ish: a period followed by a space, but not the one inside
+    # "0.25" or "it3000." at a line end that has no successor.
+    match = re.search(r"(?<=[.!?])\s+(?=[A-Z(])", source)
+    sentence = source[: match.start()] if match else source
+    sentence = " ".join(sentence.split())
+    if len(sentence) > limit:
+      sentence = sentence[: limit - 1].rsplit(" ", 1)[0] + "…"
+    return sentence
+
   def summary(self) -> Dict[str, Any]:
     """The row form, for listings and index tables."""
     return {
