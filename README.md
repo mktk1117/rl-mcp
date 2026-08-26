@@ -262,6 +262,57 @@ because unpickling a file you did not write runs code.
 Clips are captured during ordinary rollout steps, so a video shows real training
 behaviour, not a separate evaluation.
 
+## Playing a finished run
+
+Everything above talks to a *live* trainer. Once the run has exited, the only
+evidence left is a checkpoint on disk — and `rlmcp play` is how you look at it:
+
+```bash
+rlmcp play                                     # newest run, last checkpoint, 8s clip
+rlmcp play logs/rsl_rl/my_run/model_final_4375.pt --device cpu
+rlmcp play --stage 2_hardest --seconds 12      # the rung this checkpoint was on
+rlmcp play --mode native                       # MuJoCo's own viewer
+rlmcp play --mode viser                        # a viewer in the browser
+```
+
+`--mode video` renders offscreen, so it works over ssh and in a cron job, and
+`--device cpu` lets it run while the GPU is busy training. The clip lands in the
+run's `artifacts/` directory and is opened for you in a terminal, exactly like
+`rlmcp video`. `--mode native` and `--mode viser` need a viewer to be installed;
+without one they say so and point back at `--mode video`.
+
+**The part that matters is what `play` does before it renders.** A checkpoint
+remembers weights and an iteration number. It does not remember the curriculum
+rung it was climbing — and a task's `play=True` config is rung zero by
+construction. Replaying a late checkpoint against a fresh config therefore shows
+a policy failing at a task it was never asked to do, which looks exactly like a
+bad policy. That is the worst kind of wrong evidence: legible, confident, and
+accusing the wrong thing.
+
+So `play` folds the session's event log first. Every curriculum entry recorded
+the parameters it set and the commands it ran; every live `rlmcp set` recorded
+its key and new value. Replaying those in order puts the environment back where
+the policy left it, and the result payload says exactly what was restored.
+`--stage <name>` stops the fold at the end of a named rung, which is what you
+want for a checkpoint saved during it; `--set key=value` overrides afterwards,
+so it wins; `--no-replay` turns the whole thing off.
+
+If something cannot be restored — a command this build of the task no longer
+has, a parameter it no longer accepts — `play` refuses to render and says which
+fix applies to which problem, because "unknown command" and "the command changed
+its arguments" send you to look in different places. `--allow-partial` renders
+anyway when you have decided the difference does not matter.
+
+The reconstruction lives in `rlmcp/core/replay.py` and imports no simulator, so
+it is a plain parse-and-fold over the event log.
+
+Two smaller things worth knowing. The task has to be registered before its
+config can be loaded, so pass `--task-package <module>` exactly as you would to
+`rlmcp train` — or set `RLMCP_TASK_PACKAGES` once for the shell. And a play
+session is itself a session: it publishes into `<run>/rlmcp/play/<stamp>/` and
+can be steered from another shell while you watch it, but it is marked as a play
+session so it never becomes the answer to "the latest session here".
+
 ## What can be tuned live
 
 `list_parameters` discovers everything from the running environment — for the G1

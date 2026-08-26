@@ -577,6 +577,27 @@ class RlMcp:
 
     self.session.respond(Response(req_id=request.req_id, ok=True, result=result))
 
+  def run_command(self, cmd: str, /, **args: Any) -> Any:
+    """Run one command in this process, right now, and return its result.
+
+    Every other route into a command goes through the session inbox, because
+    every other caller is in another process. An in-process caller -- a play
+    session restoring the conditions a checkpoint was trained under -- has no
+    inbox to post to and no service loop to wait for, so it needs the handler
+    table directly. Errors raise rather than becoming a Response: there is a
+    caller here with a stack to unwind into.
+
+    A deferred command is returned as its :class:`DeferredJob` rather than
+    submitted; whoever asked for it owns the decision to queue it.
+    """
+    handler = self._handlers.get(cmd)
+    if handler is None:
+      raise KeyError(
+          f"Unknown command '{cmd}'. This run has: "
+          f"{', '.join(sorted(self._handlers))}"
+      )
+    return handler(**args)
+
   def _schedule_job(self, job: DeferredJob) -> None:
     """Admit a deferred job for step feeding, or refuse truthfully.
 
@@ -1339,6 +1360,11 @@ class RlMcp:
       try:
         handler(**(action.args or {}))
         applied.setdefault("actions", []).append(action.describe())
+        # The same call as data, for whoever reads this log back. `describe()`
+        # is prose meant for a person and only parses back when every argument
+        # has a literal repr; `to_dict()` always survives the round trip. See
+        # rlmcp.core.replay, which prefers this and falls back to the prose.
+        applied.setdefault("calls", []).append(action.to_dict())
       except Exception as exc:
         applied.setdefault("action_errors", {})[action.cmd] = str(exc)
 

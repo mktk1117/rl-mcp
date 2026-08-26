@@ -34,6 +34,15 @@ from typing import Any, Dict, Iterator, List, Optional
 
 SCHEMA_VERSION = 1
 
+PLAY_SESSION_KIND = "rlmcp-play-session"
+"""``kind`` a play session writes into its session.json.
+
+A play session is a real session -- it can be steered from another shell like
+any other -- but it is not the run. Discovery skips it by default so that
+looking at a finished run does not leave a newer, dead session sitting in front
+of the training one every bare ``rlmcp`` command resolves to.
+"""
+
 _SUBMIT_SEQ = 0  # Process-local tiebreaker for same-millisecond submissions.
 
 _SUBDIRS = ("inbox", "outbox", "artifacts")
@@ -678,8 +687,14 @@ def _walk_session_files(root: Path) -> Iterator[Path]:
       yield Path(dirpath) / "session.json"
 
 
-def iter_sessions(root: Path | str) -> Iterator[Session]:
-  """Yield every rlmcp session under ``root``, newest first by ``started_at``."""
+def iter_sessions(root: Path | str, include_play: bool = False) -> Iterator[Session]:
+  """Yield every rlmcp session under ``root``, newest first by ``started_at``.
+
+  Play sessions are left out unless asked for: they are newer than the run they
+  replay and would otherwise become the answer to "the latest session here",
+  which is never what somebody looking at a run means. A command whose job is
+  to say what exists -- ``rlmcp sessions`` -- passes ``include_play=True``.
+  """
   root = Path(root).expanduser()
   if not root.exists():
     return
@@ -687,6 +702,8 @@ def iter_sessions(root: Path | str) -> Iterator[Session]:
   for session_file in _walk_session_files(root):
     info = _read_json(session_file)
     if isinstance(info, dict) and "schema_version" in info:
+      if not include_play and info.get("kind") == PLAY_SESSION_KIND:
+        continue
       started = info.get("started_at")
       found.append((
           started if isinstance(started, (int, float)) else 0.0,

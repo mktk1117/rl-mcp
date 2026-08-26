@@ -62,6 +62,7 @@ class RlMcpEnvWrapper:
       service_every_steps: int = 24,
       robot_name: Optional[str] = None,
       task_id: str = "",
+      session_kind: str = "",
       trace_capacity: int = 6000,
       curriculum_kwargs: Optional[Dict[str, Any]] = None,
       extensions: Optional[Sequence[str]] = None,
@@ -89,6 +90,9 @@ class RlMcpEnvWrapper:
         trace_capacity=trace_capacity,
         records=records,
         session_info={
+            # Empty means "a training run", which is what the controller
+            # already writes; only a play session needs to say otherwise.
+            **({"kind": session_kind} if session_kind else {}),
             "task": task_id,
             "num_envs": sim_adapter.num_envs(),
             "device": str(getattr(self.unwrapped, "device", "")),
