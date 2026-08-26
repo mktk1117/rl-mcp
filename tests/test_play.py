@@ -331,3 +331,393 @@ def test_discovery_skips_play_sessions_but_sessions_lists_them(tmp_path):
 
   assert Session.find_latest(tmp_path).dir == run / "rlmcp"
   assert len(list(iter_sessions(tmp_path, include_play=True))) == 2
+
+
+# Live controls: which stage a checkpoint belongs to.
+
+
+def _session(tmp_path, name="run", events=(), task="Example-Task-v0"):
+  """A run directory with a session and an event log to fold."""
+  run = tmp_path / name
+  session = run / "rlmcp"
+  session.mkdir(parents=True)
+  (session / "session.json").write_text(json.dumps(
+      {"task": task, "pid": 1, "started_at": 0.0, "schema_version": 1}))
+  if events:
+    (session / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n")
+  return run
+
+
+def _stage_event(name, iteration, parameters=None):
+  return {"t": 0.0, "kind": "curriculum_stage", "to": name, "iteration": iteration,
+          "applied": {"parameters": parameters or {}, "calls": []}}
+
+
+def test_the_stage_a_checkpoint_was_saved_under_is_the_last_one_entered_before_it(
+    tmp_path):
+  run = _session(tmp_path, events=[
+      _stage_event("0_flat", 0), _stage_event("1_rough", 500),
+      _stage_event("2_stairs", 2000),
+  ])
+
+  from rlmcp.play import stage_at_iteration
+
+  assert stage_at_iteration(run / "rlmcp", 900) == "1_rough"
+  assert stage_at_iteration(run / "rlmcp", 500) == "1_rough"
+  assert stage_at_iteration(run / "rlmcp", 499) == "0_flat"
+
+
+def test_a_checkpoint_whose_name_carries_no_iteration_reads_as_the_end_of_the_run(
+    tmp_path):
+  """`policy.pt` says nothing about when it was saved, and an unnamed
+  checkpoint is nearly always the last one."""
+  run = _session(tmp_path, events=[_stage_event("0_flat", 0),
+                                   _stage_event("1_rough", 500)])
+
+  from rlmcp.play import stage_at_iteration
+
+  assert stage_at_iteration(run / "rlmcp", -1) == "1_rough"
+
+
+def test_a_run_with_no_curriculum_has_no_stage_to_report(tmp_path):
+  from rlmcp.play import stage_at_iteration
+
+  run = _session(tmp_path, events=[{"t": 0.0, "kind": "note", "text": "hello"}])
+
+  assert stage_at_iteration(run / "rlmcp", 100) == ""
+  assert stage_at_iteration(None, 100) == ""
+
+
+# Live controls: swapping the acting policy.
+
+
+class _Policy:
+  """A stand-in for an inference policy: says which checkpoint it came from."""
+
+  def __init__(self, name: str, fits: bool = True):
+    self.name = name
+    self.fits = fits
+
+  def __call__(self, obs):
+    if not self.fits:
+      raise RuntimeError("expected 48 observations, got 36")
+    return f"{self.name}:{obs}"
+
+
+@pytest.fixture
+def play_lab(tmp_path, fake_sim, fake_terrain):
+  """A play session's controller: the real one, over a fake simulator."""
+  from rlmcp.core.controller import RlMcp
+  from rlmcp.session import PLAY_SESSION_KIND
+
+  controller = RlMcp(
+      sim_adapter=fake_sim,
+      session_dir=tmp_path / "play-session",
+      extensions=[fake_terrain],
+      session_info={"kind": PLAY_SESSION_KIND, "task": "Example-Task-v0"},
+  )
+  yield controller
+  controller.close()
+
+
+def _swap(play_lab, holder, *, stage="", session_dir=None, loads=None, probes=True):
+  """Register the play-side swap extension against a controller."""
+  from rlmcp.core.replay import apply_conditions
+  from rlmcp.play import PolicySwap
+
+  def load(path):
+    return (loads or {}).get(path.name) or _Policy(path.stem)
+
+  def probe(policy):
+    policy("obs")
+
+  extension = PolicySwap(
+      holder=holder,
+      load=load,
+      session_dir=session_dir,
+      stage=stage,
+      restore=lambda conditions: apply_conditions(play_lab, conditions),
+      probe=probe if probes else None,
+  )
+  assert play_lab.add_extension(extension)
+  return extension
+
+
+def _holder(tmp_path, name="model_100.pt"):
+  from rlmcp.play import SwappablePolicy
+
+  path = tmp_path / name
+  path.write_bytes(b"weights")
+  return SwappablePolicy(_Policy(path.stem), path)
+
+
+def test_the_rollout_calls_one_object_that_starts_forwarding_somewhere_else(tmp_path):
+  """The viewer is handed the policy once and never told about the swap."""
+  holder = _holder(tmp_path)
+  assert holder("obs") == "model_100:obs"
+
+  holder.swap(_Policy("model_900"), tmp_path / "model_900.pt")
+
+  assert holder("obs") == "model_900:obs"
+  assert holder.checkpoint.name == "model_900.pt"
+
+
+def test_swapping_the_policy_is_a_command_the_play_session_answers(play_lab, tmp_path):
+  """Contributed through the extension registry, so it is reachable from
+  `rlmcp run`, from MCP and from a curriculum stage at once."""
+  _swap(play_lab, _holder(tmp_path))
+
+  assert "load_policy" in play_lab.cmd_help()["commands"]
+  assert "list_policies" in play_lab.cmd_help()["commands"]
+  assert play_lab.cmd_status()["extensions"]["play_policy"]["iteration"] == 100
+
+
+def test_a_swap_loads_the_named_checkpoint_and_says_where_it_came_from(
+    play_lab, tmp_path):
+  holder = _holder(tmp_path)
+  _swap(play_lab, holder)
+  later = tmp_path / "model_900.pt"
+  later.write_bytes(b"weights")
+
+  result = play_lab.run_command("load_policy", checkpoint=str(later))
+
+  assert result["loaded"] is True
+  assert result["checkpoint"] == str(later)
+  assert result["iteration"] == 900
+  assert result["previous_checkpoint"].endswith("model_100.pt")
+  assert holder("obs") == "model_900:obs"
+
+
+def test_a_swap_is_written_to_the_event_log_like_every_other_steering_action(
+    play_lab, tmp_path):
+  from rlmcp.session import Session
+
+  _swap(play_lab, _holder(tmp_path))
+  (tmp_path / "model_900.pt").write_bytes(b"weights")
+
+  play_lab.run_command("load_policy", checkpoint=str(tmp_path / "model_900.pt"))
+
+  logged = [e for e in Session.open(play_lab.session.dir).events()
+            if e["kind"] == "load_policy"]
+  assert logged[-1]["checkpoint"].endswith("model_900.pt")
+
+
+def test_a_checkpoint_that_is_not_there_leaves_the_running_policy_alone(
+    play_lab, tmp_path):
+  holder = _holder(tmp_path)
+  _swap(play_lab, holder)
+
+  with pytest.raises(PlayError):
+    play_lab.run_command("load_policy", checkpoint=str(tmp_path / "gone" / "x.pt"))
+
+  assert holder("obs") == "model_100:obs"
+  assert holder.swaps == []
+
+
+def test_weights_that_do_not_fit_this_environment_are_refused_before_the_swap(
+    play_lab, tmp_path):
+  """A checkpoint whose observation width has moved on loads clean and only
+  fails when something asks it to act. Asking here, while the old policy is
+  still the one driving, is what keeps a swap from half-applying."""
+  holder = _holder(tmp_path)
+  wrong = tmp_path / "model_900.pt"
+  wrong.write_bytes(b"weights")
+  _swap(play_lab, holder, loads={"model_900.pt": _Policy("model_900", fits=False)})
+
+  with pytest.raises(PlayError) as caught:
+    play_lab.run_command("load_policy", checkpoint=str(wrong))
+
+  assert "unchanged" in str(caught.value)
+  assert "48 observations" in str(caught.value)
+  assert holder("obs") == "model_100:obs"
+
+
+def test_a_swap_within_the_same_rung_reports_a_match_and_says_nothing_more(
+    play_lab, tmp_path):
+  run = _session(tmp_path, events=[_stage_event("0_flat", 0),
+                                   _stage_event("1_rough", 500)])
+  (run / "model_900.pt").write_bytes(b"weights")
+  _swap(play_lab, _holder(tmp_path), stage="1_rough", session_dir=run / "rlmcp")
+
+  result = play_lab.run_command("load_policy", checkpoint=str(run / "model_900.pt"))
+
+  assert result["conditions"]["match"] is True
+  assert result["conditions"]["same_run"] is True
+  assert result["conditions"]["warning"] is None
+
+
+def test_a_checkpoint_from_another_rung_is_loaded_but_the_conditions_are_not(
+    play_lab, tmp_path, fake_sim):
+  """The bug core/replay.py exists to prevent, stated in the response instead
+  of committed: the weights move, the environment holds still, and the payload
+  names both stages so nothing reading it can miss the difference."""
+  run = _session(tmp_path, events=[
+      _stage_event("0_flat", 0),
+      _stage_event("2_stairs", 800, {"reward.action_rate_l2.weight": -0.9}),
+  ])
+  (run / "model_900.pt").write_bytes(b"weights")
+  _swap(play_lab, _holder(tmp_path), stage="0_flat", session_dir=run / "rlmcp")
+  before = fake_sim.get_parameter("reward.action_rate_l2.weight")
+
+  result = play_lab.run_command("load_policy", checkpoint=str(run / "model_900.pt"))
+
+  conditions = result["conditions"]
+  assert result["loaded"] is True
+  assert conditions["match"] is False
+  assert conditions["checkpoint_stage"] == "2_stairs"
+  assert conditions["applied_stage"] == "0_flat"
+  assert "2_stairs" in conditions["warning"] and "replay=true" in conditions["warning"]
+  assert fake_sim.get_parameter("reward.action_rate_l2.weight") == before
+
+
+def test_replay_puts_the_environment_back_where_that_checkpoint_trained(
+    play_lab, tmp_path, fake_sim):
+  run = _session(tmp_path, events=[
+      _stage_event("0_flat", 0),
+      _stage_event("2_stairs", 800, {"reward.action_rate_l2.weight": -0.9}),
+  ])
+  (run / "model_900.pt").write_bytes(b"weights")
+  _swap(play_lab, _holder(tmp_path), stage="0_flat", session_dir=run / "rlmcp")
+
+  result = play_lab.run_command(
+      "load_policy", checkpoint=str(run / "model_900.pt"), replay=True)
+
+  conditions = result["conditions"]
+  assert conditions["replayed"] is True
+  assert conditions["applied_stage"] == "2_stairs"
+  assert conditions["restored_parameters"] == 1
+  assert conditions["restore_errors"] == []
+  assert fake_sim.get_parameter("reward.action_rate_l2.weight") == -0.9
+
+
+def test_a_second_swap_compares_against_the_conditions_the_first_one_restored(
+    play_lab, tmp_path):
+  """Replaying moves where the environment is, so the next swap must be judged
+  against the new position rather than the one the session started at."""
+  run = _session(tmp_path, events=[_stage_event("0_flat", 0),
+                                   _stage_event("2_stairs", 800)])
+  (run / "model_900.pt").write_bytes(b"weights")
+  (run / "model_400.pt").write_bytes(b"weights")
+  _swap(play_lab, _holder(tmp_path), stage="0_flat", session_dir=run / "rlmcp")
+
+  play_lab.run_command("load_policy", checkpoint=str(run / "model_900.pt"),
+                       replay=True)
+  second = play_lab.run_command("load_policy", checkpoint=str(run / "model_400.pt"))
+
+  assert second["conditions"]["applied_stage"] == "2_stairs"
+  assert second["conditions"]["checkpoint_stage"] == "0_flat"
+  assert second["conditions"]["match"] is False
+
+
+def test_a_checkpoint_with_no_session_beside_it_says_it_cannot_tell(
+    play_lab, tmp_path):
+  """Unknown is not the same answer as mismatched, and an agent deciding what
+  to do next needs the difference."""
+  loose = tmp_path / "loose" / "model_900.pt"
+  loose.parent.mkdir()
+  loose.write_bytes(b"weights")
+  _swap(play_lab, _holder(tmp_path), stage="1_rough")
+
+  result = play_lab.run_command("load_policy", checkpoint=str(loose))
+
+  assert result["loaded"] is True
+  assert result["conditions"]["match"] is None
+  assert result["conditions"]["checkpoint_stage"] is None
+  assert "no way to tell" in result["conditions"]["warning"]
+
+
+def test_replay_needs_a_run_to_replay_and_refuses_without_one(play_lab, tmp_path):
+  holder = _holder(tmp_path)
+  loose = tmp_path / "loose" / "model_900.pt"
+  loose.parent.mkdir()
+  loose.write_bytes(b"weights")
+  _swap(play_lab, holder)
+
+  with pytest.raises(PlayError) as caught:
+    play_lab.run_command("load_policy", checkpoint=str(loose), replay=True)
+
+  assert "no rlmcp session beside it" in str(caught.value)
+  assert holder("obs") == "model_100:obs"
+
+
+def test_naming_a_stage_without_replay_is_refused_rather_than_ignored(
+    play_lab, tmp_path):
+  run = _session(tmp_path, events=[_stage_event("0_flat", 0)])
+  (run / "model_900.pt").write_bytes(b"weights")
+  _swap(play_lab, _holder(tmp_path), stage="0_flat", session_dir=run / "rlmcp")
+
+  with pytest.raises(PlayError):
+    play_lab.run_command("load_policy", checkpoint=str(run / "model_900.pt"),
+                         stage="0_flat")
+
+
+def test_a_run_directory_swaps_to_the_checkpoint_that_run_ended_on(
+    play_lab, tmp_path):
+  """The same resolution `rlmcp play` itself uses, so 'show me that run'
+  needs no path to a file."""
+  run = _run(tmp_path, name="other")
+  _swap(play_lab, _holder(tmp_path))
+
+  result = play_lab.run_command("load_policy", checkpoint=str(run))
+
+  assert result["checkpoint"].endswith("model_final_900.pt")
+
+
+def test_the_session_lists_what_else_could_be_loaded(play_lab, tmp_path):
+  run = _run(tmp_path, name="listed")
+  from rlmcp.play import SwappablePolicy
+
+  holder = SwappablePolicy(_Policy("model_100"), run / "model_100.pt")
+  _swap(play_lab, holder)
+
+  listed = play_lab.run_command("list_policies")
+
+  assert listed["current"].endswith("model_100.pt")
+  names = [(row["path"].split("/")[-1], row["iteration"]) for row in
+           listed["checkpoints"]]
+  assert ("model_final_900.pt", 900) in names
+  assert [row["current"] for row in listed["checkpoints"]].count(True) == 1
+
+
+# Live controls: stopping cleanly.
+
+
+def test_a_requested_stop_is_reported_as_a_result_not_as_an_exception(play_lab):
+  """`rlmcp stop` against a play session has to end like closing the window:
+  the loop unwinds, and what comes back describes the stop."""
+  from rlmcp.play import _stop_state
+  from rlmcp.core.controller import SessionStopped
+
+  assert _stop_state(play_lab) == ""
+
+  play_lab.run_command("stop_training", reason="seen enough")
+
+  assert play_lab.should_stop()
+  assert _stop_state(play_lab) == "seen enough"
+  assert _stop_state(play_lab, SessionStopped("unwound out of the viewer")) == (
+      "unwound out of the viewer")
+
+
+def test_a_viewer_that_swallows_the_exception_still_reports_the_stop(play_lab):
+  """The reason a session ended must not depend on how thoroughly somebody
+  else's loop catches things."""
+  from rlmcp.play import _stop_state
+
+  play_lab.run_command("stop_training", reason="")
+
+  assert _stop_state(play_lab) == "stop requested"
+
+
+def test_closing_a_stopped_play_session_records_its_end(tmp_path, fake_sim):
+  from rlmcp.core.controller import RlMcp
+  from rlmcp.session import PLAY_SESSION_KIND, Session
+
+  controller = RlMcp(sim_adapter=fake_sim, session_dir=tmp_path / "ending",
+                     session_info={"kind": PLAY_SESSION_KIND})
+  controller.run_command("stop_training", reason="closed from another shell")
+  controller.close()
+
+  ended = [e for e in Session.open(controller.session.dir).events()
+           if e["kind"] == "session_end"]
+  assert ended and ended[-1]["stop_reason"] == "closed from another shell"

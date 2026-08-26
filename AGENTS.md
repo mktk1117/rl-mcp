@@ -44,6 +44,8 @@ without the variable set; it is a scratch directory, not the records.
 | judge smoothness from reward curves | `rlmcp diagnose` (measures HF power share, jerk, effort) |
 | tell the user "it improved" | `rlmcp video` / `rlmcp plot`, then show them |
 | look at a policy whose run has already exited | `rlmcp play` — it restores the conditions the checkpoint trained under first |
+| call `env.reset()` yourself to clear a bad state | `rlmcp reset-envs` (`--where key=value` to restart only some) |
+| restart `rlmcp play` to see a different checkpoint | `rlmcp run load_policy checkpoint=<path>` — same env, same conditions, new weights |
 | compare a metric across several runs | `rlmcp record compare`, or `rlmcp record graph` for the lineage |
 | keep the record of an experiment in a scratch file | `rlmcp record new` / `rlmcp record close` — it belongs **in** the records |
 

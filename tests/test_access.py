@@ -1155,3 +1155,94 @@ def test_load_checkpoint_still_reports_a_missing_file(tmp_path):
   """Thawing runs before the load, but must not mask the file check."""
   with pytest.raises(FileNotFoundError):
     MjlabRunnerAdapter(_FakeRunner()).load_checkpoint(str(tmp_path / "nope.pt"))
+
+# Restarting episodes.
+
+
+class _ResettableEnv:
+  """The reset surface of a manager-based env, and nothing else.
+
+  ``_reset_idx(env_ids)`` is what such an environment calls for whichever of
+  its environments terminated this tick; the adapter reuses it so a requested
+  reset runs the same event and randomisation terms a natural one does.
+  """
+
+  def __init__(self, num_envs: int = 4, private: bool = True):
+    self.num_envs = num_envs
+    self.device = "cpu"
+    self.episode_length_buf = torch.arange(num_envs)
+    self.reset_calls: List[Any] = []
+    self.full_resets = 0
+    if private:
+      self._reset_idx = self._record
+    else:
+      self.reset_idx = self._record
+
+  def _record(self, env_ids):
+    self.reset_calls.append([int(i) for i in env_ids])
+
+  def reset(self):
+    self.full_resets += 1
+
+
+def _sim_for(env):
+  """The adapter over one environment, without its constructor.
+
+  ``reset_envs`` reads nothing but ``self.env``; building the whole adapter
+  would drag in parameter discovery and state sampling, which have their own
+  tests above and their own demands on the fake environment.
+  """
+  from rlmcp.adapters.mjlab.sim_adapter import MjlabSimAdapter
+
+  sim = object.__new__(MjlabSimAdapter)
+  sim.env = env
+  return sim
+
+
+def test_reset_envs_restarts_the_environments_it_was_given():
+  env = _ResettableEnv()
+  result = _sim_for(env).reset_envs([1, 3])
+
+  assert env.reset_calls == [[1, 3]]
+  assert result["num_reset"] == 2
+  # The restarted episodes get a clock at zero; the others keep theirs.
+  assert env.episode_length_buf.tolist() == [0, 0, 2, 0]
+
+
+def test_reset_envs_with_nothing_named_restarts_all_of_them():
+  env = _ResettableEnv()
+  result = _sim_for(env).reset_envs()
+
+  assert env.reset_calls == [[0, 1, 2, 3]]
+  assert result["num_reset"] == 4
+
+
+def test_reset_envs_prefers_a_public_spelling_when_the_backend_has_one():
+  env = _ResettableEnv(private=False)
+  assert _sim_for(env).reset_envs([0])["method"] == "reset_idx"
+
+
+def test_reset_envs_falls_back_to_a_full_reset_only_when_all_were_asked_for():
+  """Restarting every environment because the caller asked for two would be
+  worse than refusing."""
+
+  class OnlyFullReset(_ResettableEnv):
+    def __init__(self):
+      super().__init__()
+      del self._reset_idx
+
+  env = OnlyFullReset()
+  assert _sim_for(env).reset_envs()["method"] == "reset"
+  assert env.full_resets == 1
+
+  with pytest.raises(NotSupported):
+    _sim_for(OnlyFullReset()).reset_envs([1])
+
+
+def test_reset_envs_refuses_an_environment_that_does_not_exist():
+  env = _ResettableEnv(num_envs=4)
+  with pytest.raises(ValueError) as caught:
+    _sim_for(env).reset_envs([9])
+
+  assert "9" in str(caught.value) and "0..3" in str(caught.value)
+  assert env.reset_calls == []

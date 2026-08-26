@@ -47,6 +47,7 @@ class FakeSimAdapter(SimAdapter):
     self.enabled = ["flat"]
     self.step_count = 0
     self.command_range_calls: List[Dict[str, Any]] = []
+    self.resets: List[List[int]] = []
 
   def discover_parameters(self) -> List[ParameterSpec]:
     specs = []
@@ -125,6 +126,15 @@ class FakeSimAdapter(SimAdapter):
             self.terrain_levels.mean() / max(1, self.level_ceiling - 1)
         ),
     }
+
+  def reset_envs(self, env_ids=None) -> Dict[str, Any]:
+    # Optional capability: a backend without one leaves this to the base class,
+    # which raises NotSupported. Records what it was asked to restart so a test
+    # can see that a --where query narrowed it.
+    chosen = (list(range(self._num_envs)) if env_ids is None
+              else [int(i) for i in env_ids])
+    self.resets.append(chosen)
+    return {"num_reset": len(chosen)}
 
   def render(self, env_id: int = 0) -> np.ndarray:
     return np.full((8, 8, 3), fill_value=env_id % 255, dtype=np.uint8)

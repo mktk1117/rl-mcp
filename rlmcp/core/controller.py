@@ -45,6 +45,7 @@ with an error instead of hanging it. Per-job overridable via the
 :class:`DeferredJob` constructor.
 """
 
+
 MAX_CONCURRENT_JOBS = 4
 """In-flight deferred jobs allowed at once.
 
@@ -56,6 +57,24 @@ its raw frames in RAM until it encodes, and a max-length clip is ~1000 frames
 frame -- so four in flight is already a multi-GB worst case. Requests past the
 cap are refused with a busy error naming what is in flight.
 """
+
+
+class SessionStopped(RuntimeError):
+  """Raised inside a stepping loop when an agent asks the session to stop.
+
+  Stopping is delivered by unwinding, not by a return value: the loop polls
+  :meth:`RlMcp.should_stop` at each service point and raises, because the
+  backend integration is usually inside somebody else's ``learn()`` or viewer
+  loop with no place to return to (see :meth:`RunnerAdapter.request_stop`).
+
+  Whoever owns the loop catches this and finishes cleanly. A trainer saves a
+  final checkpoint and exits; a play session closes its viewer and reports the
+  stop as a result. Neither should let it reach a user as a traceback -- an
+  asked-for stop is not a crash.
+
+  :class:`~rlmcp.adapters.mjlab.env_wrapper.TrainingStopped` is this exception
+  under the name the training entrypoints already catch.
+  """
 
 
 class DeferredJob:
@@ -717,6 +736,31 @@ class RlMcp:
       return int(env_id)
     if not where:
       return 0
+    return (self._resolve_env_ids(None, where) or [0])[0]
+
+  def _resolve_env_ids(
+      self,
+      env_ids: Optional[Sequence[int]] = None,
+      where: Optional[Dict[str, Any]] = None,
+  ) -> Optional[List[int]]:
+    """Pick a set of environments: explicit ids, a ``where`` query, or all.
+
+    The plural of :meth:`_resolve_env_id`, and it answers a different question:
+    that one picks *an* environment to look at and falls back to env 0, while
+    this one returns ``None`` for "all of them" -- because a command that acts
+    on environments must act on every one unless somebody narrowed it, and
+    silently acting on env 0 alone would be a lie.
+
+    ``where`` is the extensions' vocabulary, exactly as in ``shot --where``, so
+    narrowing by a property of the task costs the core no new concepts.
+    """
+    if env_ids is not None:
+      chosen = [int(i) for i in env_ids]
+      if not chosen:
+        raise ValueError("env_ids was empty; omit it to mean every environment.")
+      return chosen
+    if not where:
+      return None
     candidates = self.extensions.select_envs(**where)
     if candidates is None:
       raise ValueError(
@@ -728,7 +772,7 @@ class RlMcp:
           f"No environment currently matches {where!r}. Check the status payload "
           "for what is actually populated."
       )
-    return candidates[0]
+    return [int(i) for i in candidates]
 
   # Handlers.
 
@@ -740,6 +784,7 @@ class RlMcp:
         "get_parameter": self.cmd_get_parameter,
         "set_parameter": self.cmd_set_parameter,
         "reset_parameters": self.cmd_reset_parameters,
+        "reset_envs": self.cmd_reset_envs,
         "list_metrics": self.cmd_list_metrics,
         "get_metrics": self.cmd_get_metrics,
         "plot_metrics": self.cmd_plot_metrics,
@@ -931,6 +976,53 @@ class RlMcp:
       )
       self.session.publish_params(self.parameters.export_schema_json())
     return {"restored_count": len(restored), "restored": restored}
+
+  def cmd_reset_envs(
+      self,
+      env_ids: Optional[Sequence[int]] = None,
+      where: Optional[Dict[str, Any]] = None,
+      rationale: str = "",
+  ) -> Dict[str, Any]:
+    """Start fresh episodes in some or all environments.
+
+    Episodes, not parameter values: ``reset_parameters`` puts the *knobs* back
+    where they started and leaves the robot mid-fall, this puts the robot back
+    on its feet and leaves the knobs alone. They are different verbs on purpose
+    and neither implies the other.
+
+    Narrow it with ``env_ids``, or with ``where`` in whatever vocabulary this
+    run's extensions provide -- ``where={"terrain": "pyramid_stairs"}``
+    restarts only the environments on that part of the task. Both omitted means
+    every environment.
+
+    Lands at a service boundary like every other command, so it cannot race the
+    simulator, and is refused truthfully on a backend with no reset path.
+    """
+    selected = self._resolve_env_ids(env_ids, where)
+    try:
+      detail = self.sim.reset_envs(selected) or {}
+    except NotSupported as exc:
+      raise RuntimeError(
+          f"This backend cannot reset episodes on demand ({exc}). Nothing was "
+          "reset. An environment that can be restarted implements "
+          "SimAdapter.reset_envs; one that cannot is left alone rather than "
+          "pretending."
+      ) from exc
+    counted = (
+        len(selected) if selected is not None
+        else (self._safe(self.sim.num_envs, None) or 0)
+    )
+    result: Dict[str, Any] = {
+        "scope": "all" if selected is None else "selection",
+        "env_ids": selected,
+        "num_reset": int(detail.get("num_reset", counted)),
+        **{k: v for k, v in detail.items() if k != "num_reset"},
+    }
+    self.session.append_event(
+        "reset_envs",
+        {"iteration": self.iteration, "rationale": rationale, **result},
+    )
+    return result
 
   def _default_metric_names(self, limit: int = 4) -> List[str]:
     """A sensible default selection, drawn from what this run actually records."""

@@ -110,7 +110,7 @@ appended by the trace recorder itself; adapters never emit it.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -232,6 +232,27 @@ class SimAdapter(ABC):
     publishing a number computed from the wrong signal.
     """
     return {}
+
+  def reset_envs(self, env_ids: Optional[Sequence[int]] = None) -> Dict[str, Any]:
+    """Start fresh episodes in some or all environments.
+
+    ``env_ids`` is ``None`` for every environment, or the subset to restart;
+    the controller resolves ``--where`` into that subset through the extension
+    registry, so a caller can restart only the environments on one part of the
+    task without this method learning what that part is.
+
+    Called from :meth:`~rlmcp.core.controller.RlMcp.service`, i.e. between
+    steps, like every other mutation. The observation the training loop is
+    holding was computed before the reset and is one step stale; the next step
+    recomputes it from the restarted episodes, which is the same ordering a
+    termination-driven reset already has.
+
+    Returns a dict describing what happened -- at minimum ``num_reset`` -- and
+    raises :class:`NotSupported` on a backend with no reset path, which is the
+    honest default: an environment nobody can restart on demand should say so
+    rather than silently do nothing.
+    """
+    raise NotSupported("reset_envs")
 
   def get_env_state(self) -> Dict[str, Any]:
     """Environment-side state worth carrying through a checkpoint.
