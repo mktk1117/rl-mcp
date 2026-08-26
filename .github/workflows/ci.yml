@@ -16,6 +16,18 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    # F821 (undefined name) is the check that would have caught `wrap()` raising
+    # NameError on every call: byte-compiling cannot see it, and no test reached
+    # the line. It costs a second; run it before spending minutes on the suite.
+    runs-on: ubuntu-latest
+    name: lint (undefined names)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check for undefined names and redefinitions
+        run: uv run --with ruff ruff check --select F821,F811 rlmcp tests examples
+
   test:
     runs-on: ubuntu-latest
     strategy:
