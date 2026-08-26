@@ -1,5 +1,16 @@
 # rl-mcp
 
+> ### 🚀 How to use
+>
+> Give your coding agent one line:
+>
+> ```text
+> Wrap my mjlab env with rlmcp (github.com/mktk1117/rl-mcp) and show me how to use it.
+> ```
+>
+> It reads the docs here, adds the wrapper to your training script, and drives
+> the run for you from there.
+
 **An MCP server for RL training.** Point an agent at a running job and it can
 **watch, diagnose and steer** the run — read the metrics, look at the robot,
 change a reward weight, roll back — without restarting.
