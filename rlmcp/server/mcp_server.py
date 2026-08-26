@@ -536,11 +536,22 @@ def create_mcp_server(
     raise ImportError(SDK_MISSING)
 
   handle = _SessionHandle(session_dir, root)
+
+  def announce() -> None:
+    # Registry entry, refreshed whenever the pin changes: what lets a CLI in
+    # another shell detect this server and search where it is searching.
+    from rlmcp import registry
+
+    pinned = handle._pinned
+    registry.register(registry.KIND_SERVER, root=handle.root,
+                      session_dir=str(pinned.dir) if pinned else None)
+
   try:
     print(f"[rlmcp-server] pinned session: {handle.get().dir}", file=sys.stderr)
   except (FileNotFoundError, RuntimeError) as exc:
     # No run yet; the first tool call (or switch_session) pins one.
     print(f"[rlmcp-server] no session pinned yet: {exc}", file=sys.stderr)
+  announce()
   mcp = MCPServer(name)
 
   # Session selection.
@@ -569,7 +580,10 @@ def create_mcp_server(
     Returns what it attached to: directory, task, started_at and liveness
     state, so a switch to a dead or stalled run is visible immediately.
     """
-    return _switch_payload(handle, target)
+    out = _switch_payload(handle, target)
+    if out.get("ok"):
+      announce()
+    return out
 
   # Status and telemetry.
 
