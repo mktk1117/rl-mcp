@@ -39,6 +39,12 @@ from typing import Any, Dict, List, Optional, Tuple
 # ``MCPServer`` in mcp>=2, ``FastMCP`` in mcp 1.x, and the standalone ``fastmcp``
 # package outside the official SDK. The surface we use (tool/resource decorators,
 # Image, run) is the same in all three.
+SDK_MISSING = (
+    "No MCP server SDK found in this interpreter. Install one with "
+    "`pip install mcp` (or `uv pip install mcp`) -- it is deliberately an "
+    "optional dependency, since the training process does not need it."
+)
+
 try:
   from mcp.server.mcpserver import Image, MCPServer as _Server
 except ImportError:
@@ -48,12 +54,13 @@ except ImportError:
     try:
       from fastmcp import FastMCP as _Server  # type: ignore
       from fastmcp.utilities.types import Image  # type: ignore
-    except ImportError as exc:  # pragma: no cover - depends on the install.
-      raise SystemExit(
-          "No MCP server SDK found in this interpreter. Install one with "
-          "`pip install mcp` (or `uv pip install mcp`) -- it is deliberately an "
-          "optional dependency, since the training process does not need it."
-      ) from exc
+    except ImportError:  # pragma: no cover - depends on the install.
+      # Importing this module must stay harmless: something that merely reads
+      # it -- a test monkeypatching `main`, a tool listing entry points -- gets
+      # no server, not a dead interpreter. `create_mcp_server` and `main` are
+      # where the absence actually matters, and they say so there.
+      _Server = None  # type: ignore[assignment]
+      Image = None  # type: ignore[assignment]
 
 MCPServer = _Server
 
@@ -507,6 +514,9 @@ def create_mcp_server(
   live-command tools explain themselves; ``switch_session`` is the one way to
   attach to a different run.
   """
+  if MCPServer is None:
+    raise ImportError(SDK_MISSING)
+
   handle = _SessionHandle(session_dir, root)
   try:
     print(f"[rlmcp-server] pinned session: {handle.get().dir}", file=sys.stderr)
@@ -822,6 +832,10 @@ def create_mcp_server(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+  if MCPServer is None:
+    print(SDK_MISSING, file=sys.stderr)
+    return 1
+
   parser = argparse.ArgumentParser(prog="rlmcp serve", description=__doc__.splitlines()[0])
   parser.add_argument("--session", help="Path to a specific session directory")
   parser.add_argument(

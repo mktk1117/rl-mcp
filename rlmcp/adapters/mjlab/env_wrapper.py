@@ -38,7 +38,6 @@ from rlmcp.core.controller import RlMcp
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.adapters.mjlab.viz_check import check_marker_colors
 from rlmcp.core.palette import format_report
-from rlmcp.core.extensions import Extension
 from rlmcp.extensions import discover as discover_extensions
 
 CurriculumArg = Union[None, str, StageSchedule, Sequence[Any]]

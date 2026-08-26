@@ -23,7 +23,7 @@ import sys
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
