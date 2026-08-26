@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rl-mcp"
+version = "0.3.0"
+description = "An MCP server for RL training: watch, diagnose and steer a running job from an agent or a shell"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Takahiro Miki" }
+]
+keywords = ["mcp", "model-context-protocol", "reinforcement-learning", "robotics", "mujoco", "mjlab", "agentic-ai", "llm"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+    "pillow>=10.0.0",
+    "imageio>=2.30.0",
+    "imageio-ffmpeg>=0.4.9",
+]
+
+[project.scripts]
+rlmcp = "rlmcp.cli:main"
+
+[project.optional-dependencies]
+server = [
+    "mcp>=1.2.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black",
+    "ruff",
+]
+mjlab = [
+    "mjlab>=1.5.0",
+    "torch>=2.0.0",
+    "mujoco>=3.0.0",
+]
+
+# Third-party capabilities register themselves by publishing an entry point in
+# this group; see rlmcp/extensions/__init__.py.
+#   [project.entry-points."rlmcp.extensions"]
+#   my_capability = "my_project.rlmcp_ext"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rlmcp*"]
+
+[tool.setuptools.package-data]
+rlmcp = ["py.typed"]

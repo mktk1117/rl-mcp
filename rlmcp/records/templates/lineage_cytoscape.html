@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>__TITLE__</title>
+<style>
+:root{
+  --bg:#EFF1F3; --surface:#fff; --ink:#17212B; --muted:#5B6A79; --faint:#8A98A6;
+  --line:#D4DBE1; --cfg:#8595A5; --warm:#C99A3A; --prior:#9A7FD1; --sel:#1F77B4;
+  --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme=light]){
+  --bg:#0E151C; --surface:#17212B; --ink:#E2EAF1; --muted:#94A4B4; --faint:#6E7F90;
+  --line:#293542; --cfg:#5A6B7D;
+}}
+:root[data-theme=dark]{--bg:#0E151C;--surface:#17212B;--ink:#E2EAF1;--muted:#94A4B4;
+  --faint:#6E7F90;--line:#293542;--cfg:#5A6B7D;}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:15px;display:flex;flex-direction:column;overflow:hidden}
+header{padding:14px 20px 10px;border-bottom:1px solid var(--line);flex:none}
+h1{margin:0;font-size:17px;letter-spacing:-.01em}
+h1 span{font-family:var(--mono);color:var(--faint);font-size:12.5px;font-weight:400}
+.controls{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px;align-items:center}
+input[type=search]{font:inherit;font-size:13px;padding:5px 9px;border:1px solid var(--line);
+  border-radius:3px;background:var(--surface);color:var(--ink);min-width:210px}
+input:focus-visible,button:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.chip{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+  padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--surface);
+  color:var(--muted);cursor:pointer}
+.chip.on{color:#fff;border-color:transparent}
+.chip .n{opacity:.72;margin-left:5px}
+main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 372px;min-height:0}
+@media (max-width:900px){main{grid-template-columns:1fr;grid-template-rows:1fr auto}}
+#cy{width:100%;height:100%;background:var(--bg)}
+aside{overflow:auto;padding:16px 20px 40px;border-left:1px solid var(--line);
+  background:var(--surface)}
+aside h2{margin:0 0 2px;font-size:16px;font-family:var(--mono)}
+aside h3{margin:15px 0 5px;font-size:10px;font-family:var(--mono);letter-spacing:.1em;
+  text-transform:uppercase;color:var(--faint)}
+aside p{margin:0 0 8px;font-size:13.5px;line-height:1.5}
+aside ul{margin:0;padding-left:17px;font-size:13.5px;line-height:1.5}
+.kv{width:100%;border-collapse:collapse;font-size:12.5px}
+.kv td{padding:3px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.kv td:last-child{text-align:right;font-family:var(--mono);padding-left:10px}
+.badge{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;
+  border-radius:999px;color:#fff}
+.note{font-size:12px;color:var(--muted);border-left:3px solid var(--warm);
+  padding:8px 10px;background:var(--bg);border-radius:0 3px 3px 0;margin-top:10px}
+.note.calm{border-left-color:var(--cfg)}
+.recipe li{margin-bottom:4px}
+.recipe .rid{font-family:var(--mono);color:var(--faint);font-size:11px}
+.cap{font-size:11.5px;color:var(--muted);margin-top:4px}
+.segs{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.plotgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.plotgrid figure{margin:0;cursor:zoom-in}
+.plotgrid img{width:100%;border:1px solid var(--line);border-radius:3px;display:block}
+.plotgrid figcaption{font-size:10px;color:var(--faint);margin-top:2px}
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;
+  justify-content:center;z-index:50;cursor:zoom-out;padding:24px}
+.lightbox img{max-width:100%;max-height:100%;border-radius:4px}
+footer{flex:none;padding:7px 20px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.legend b{color:var(--ink);font-weight:600}
+</style></head><body>
+<header>
+  <h1>__TITLE__ <span id="stat"></span></h1>
+  <div class="controls">
+    <input type="search" id="q" placeholder="search id, slug, hypothesis, outcome" />
+    <span id="chips"></span>
+    <button class="chip" id="fit">fit</button>
+    <button class="chip" id="dir">rotate</button>
+    <span id="edgetoggles"></span>
+  </div>
+</header>
+<main>
+  <div id="cy"></div>
+  <aside id="panel"><p style="color:var(--muted)">Select a run.</p></aside>
+</main>
+<footer class="legend">
+  <b>—</b> config lineage &nbsp; <b>- -</b> warm start (from the run whose weights were taken)
+  &nbsp; <b>·····</b> prior &nbsp;·&nbsp; drag to pan, scroll to zoom, click a node
+</footer>
+<script>__CYTOSCAPE__</script>
+<script>__DAGRE__</script>
+<script>__CYTOSCAPE_DAGRE__</script>
+<script>
+const RUNS=__RUNS__, EDGES=__EDGES__, STATS=__STATS__, COLORS=__COLORS__, MEDIA=__MEDIA__;
+const byId=Object.fromEntries(RUNS.map(r=>[r.id,r]));
+let filter=new Set(), query="", rankDir="TB";
+const showEdge={config:true, warm:true, prior:false};
+
+document.getElementById("stat").textContent =
+  `${STATS.records} runs · ${STATS.from_scratch} from scratch · ${STATS.warm_started} warm`;
+
+cytoscape.use(cytoscapeDagre);
+
+const elements=[];
+RUNS.forEach(r=>elements.push({data:{
+  id:r.id, label:`${r.id}  ${r.slug}`, verdict:r.verdict, scratch:r.scratch?1:0,
+}}));
+EDGES.config.forEach(([a,b])=>{ if(byId[a]&&byId[b])
+  elements.push({data:{id:`c_${a}_${b}`,source:a,target:b,kind:"config"}}); });
+EDGES.warm.forEach(([a,b])=>{ if(byId[a]&&byId[b])
+  elements.push({data:{id:`w_${a}_${b}`,source:a,target:b,kind:"warm"}}); });
+EDGES.prior.forEach(([a,b])=>{ if(byId[a]&&byId[b])
+  elements.push({data:{id:`p_${a}_${b}`,source:a,target:b,kind:"prior"}}); });
+
+const cy=cytoscape({
+  container:document.getElementById("cy"),
+  elements, wheelSensitivity:0.25, maxZoom:2.5, minZoom:0.1,
+  style:[
+    {selector:"node",style:{
+      "label":"data(label)","font-family":"ui-monospace,Menlo,monospace","font-size":11,
+      "text-valign":"center","text-halign":"right","text-margin-x":7,
+      "color":"#5B6A79","width":15,"height":15,
+      "text-max-width":150,"text-overflow-wrap":"anywhere",
+      "background-color":ele=>COLORS[ele.data("verdict")]||"#8A98A6",
+      "shape":ele=>ele.data("scratch")?"ellipse":"round-rectangle",
+      "border-width":2,"border-color":"#fff","transition-property":"opacity,width,height",
+    }},
+    {selector:"node.dim",style:{"opacity":0.18}},
+    {selector:"node.hit",style:{"width":22,"height":22,"border-color":"#1F77B4"}},
+    {selector:"node:selected",style:{
+      "border-color":"#1F77B4","border-width":3,"width":22,"height":22,"color":"#17212B"}},
+    {selector:"edge",style:{
+      "width":1.6,"curve-style":"bezier","target-arrow-shape":"triangle",
+      "arrow-scale":0.7,"line-color":"#8595A5","target-arrow-color":"#8595A5"}},
+    {selector:'edge[kind="warm"]',style:{
+      "line-color":"#C99A3A","target-arrow-color":"#C99A3A","line-style":"dashed"}},
+    {selector:'edge[kind="prior"]',style:{
+      "line-color":"#9A7FD1","target-arrow-color":"#9A7FD1","line-style":"dotted"}},
+    {selector:"edge.dim",style:{"opacity":0.06}},
+    {selector:"edge.hi",style:{"width":2.6,"opacity":1}},
+  ],
+});
+
+function layout(){
+  // Labels sit to the right of each node, so nodes sharing a rank need room for
+  // the label rather than for the dot -- nodeSep is sized for the text.
+  const wide = rankDir==="TB";
+  cy.layout({name:"dagre", rankDir,
+             nodeSep: wide?170:26, rankSep: wide?60:190, edgeSep:12,
+             animate:false, fit:true, padding:34}).run();
+  // Fitting 50+ nodes makes every label unreadable, which is a bad first
+  // impression of a graph whose labels are the point. Open at reading zoom on
+  // the selected node instead; "fit" is a button for when you want the shape.
+  const focus=cy.$(":selected");
+  cy.zoom(0.95);
+  cy.center(focus.nonempty()?focus:cy.nodes().first());
+}
+layout();
+
+// Filters and search.
+const chips=document.getElementById("chips");
+Object.entries(STATS.verdicts).forEach(([v,n])=>{
+  const b=document.createElement("button");
+  b.className="chip"; b.innerHTML=`${esc(v)}<span class="n">${n}</span>`;
+  b.onclick=()=>{
+    filter.has(v)?filter.delete(v):filter.add(v);
+    b.classList.toggle("on",filter.has(v));
+    b.style.background=filter.has(v)?COLORS[v]:"";
+    apply();
+  };
+  chips.appendChild(b);
+});
+const et=document.getElementById("edgetoggles");
+[["config","config"],["warm","warm"],["prior","priors"]].forEach(([k,label])=>{
+  const b=document.createElement("button");
+  const col={config:"var(--cfg)",warm:"var(--warm)",prior:"var(--prior)"}[k];
+  b.className="chip"+(showEdge[k]?" on":""); b.textContent=label;
+  b.style.background=showEdge[k]?col:"";
+  b.onclick=()=>{showEdge[k]=!showEdge[k]; b.classList.toggle("on",showEdge[k]);
+    b.style.background=showEdge[k]?col:""; apply();};
+  et.appendChild(b);
+});
+document.getElementById("q").addEventListener("input",e=>{
+  query=e.target.value.toLowerCase(); apply();});
+document.getElementById("fit").onclick=()=>cy.fit(undefined,30);
+document.getElementById("dir").onclick=()=>{rankDir=rankDir==="TB"?"LR":"TB"; layout();};
+
+function matches(r){
+  if(filter.size && !filter.has(r.verdict)) return false;
+  if(!query) return true;
+  return [r.id,r.slug,r.hypothesis,r.outcome,r.stage].join(" ").toLowerCase().includes(query);
+}
+function apply(){
+  cy.batch(()=>{
+    cy.nodes().forEach(n=>{
+      const ok=matches(byId[n.id()]);
+      n.toggleClass("dim",!ok);
+      n.toggleClass("hit", !!query && ok);
+    });
+    cy.edges().forEach(e=>{
+      const kindOn=showEdge[e.data("kind")];
+      const ends=!e.source().hasClass("dim") && !e.target().hasClass("dim");
+      e.toggleClass("dim", !(kindOn && ends));
+    });
+  });
+}
+
+// Selection: highlight the node's own lineage, not just the node.
+cy.on("tap","node",e=>select(e.target.id()));
+cy.on("tap",e=>{ if(e.target===cy){ cy.edges().removeClass("hi"); } });
+
+function esc(s){return (s==null?"":String(s))
+  .replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function mediaUrl(p){return MEDIA+String(p||"").split("/").map(encodeURIComponent).join("/");}
+
+function select(id){
+  const r=byId[id]; if(!r) return;
+  cy.$(":selected").unselect(); cy.getElementById(id).select();
+  cy.edges().removeClass("hi");
+  const chain=r.recipe.map(s=>s.id);
+  chain.forEach((n,i)=>{ if(i) cy.getElementById(`c_${chain[i-1]}_${n}`).addClass("hi"); });
+  if(r.warm_run) cy.getElementById(`w_${r.warm_run}_${r.id}`).addClass("hi");
+
+  const P=document.getElementById("panel");
+  let h=`<h2>${esc(r.id)} <span class="badge" style="background:${COLORS[r.verdict]||"#8A98A6"}">`
+   +`${esc(r.verdict)}</span></h2>`
+   +`<p style="font-family:var(--mono);color:var(--muted);font-size:12.5px">${esc(r.slug)}`
+   +` · ${esc(r.stage)} · ${esc(r.date)} · ${esc(r.proposed_by)}</p>`;
+  h+=`<h3>origin</h3><p>${r.scratch?"random init":"warm start from <b>"+esc(r.warm)+"</b>"}`
+   +`${r.parent?` · config parent <b>${esc(r.parent)}</b>`:" · root"}`
+   +`${r.prior?` · prior ${esc(r.prior)}`:""}</p>`;
+
+  const vids=(r.assets&&r.assets.videos)||[], plots=(r.assets&&r.assets.plots)||[];
+  if(vids.length){
+    h+=`<h3>watched</h3><video id="vp" controls loop muted playsinline `
+      +`src="${esc(mediaUrl(vids[0][0]))}" style="width:100%;border-radius:3px;background:#000">`
+      +`</video><p class="cap">${esc(vids[0][1]||"")}</p>`;
+    if(vids.length>1) h+=`<div class="segs">`+vids.map((v,i)=>
+      `<button class="chip" data-src="${esc(mediaUrl(v[0]))}">${esc(v[1]||("clip "+(i+1)))}</button>`
+      ).join("")+`</div>`;
+  }
+  if(plots.length) h+=`<h3 id="plothead">plots</h3><div class="plotgrid">`+plots.map(pl=>
+    `<figure><img loading="lazy" src="${esc(mediaUrl(pl[0]))}" alt="${esc(pl[1]||"")}" />`
+    +`<figcaption>${esc(pl[1]||"")}</figcaption></figure>`).join("")+`</div>`;
+
+  if(r.hypothesis) h+=`<h3>hypothesis</h3><p>${esc(r.hypothesis)}</p>`;
+  if(r.prediction) h+=`<h3>prediction</h3><p>${esc(r.prediction)}</p>`;
+  if(r.falsifier||r.falsifier_conditions.length){
+    h+=`<h3>falsifier</h3><p>${esc(r.falsifier)}</p>`;
+    if(r.falsifier_conditions.length)
+      h+=`<ul>${r.falsifier_conditions.map(c=>`<li><code>${esc(c)}</code></li>`).join("")}</ul>`;
+  }
+  if(r.change.length) h+=`<h3>change vs ${esc(r.parent||"root")}</h3>`
+    +`<ul>${r.change.map(c=>`<li>${esc(c)}</li>`).join("")}</ul>`;
+  if(r.multi) h+=`<div class="note">Multiple changes in one run — the outcome is `
+    +`directional, not attributable to any single change.</div>`;
+  if(r.outcome) h+=`<h3>outcome</h3><p>${esc(r.outcome)}</p>`;
+  if(r.metrics.length) h+=`<h3>evidence</h3><table class="kv">`
+    +r.metrics.map(m=>`<tr><td>${esc(m[0])}</td><td>${esc(m[1])}</td></tr>`).join("")+`</table>`;
+  if(!r.scratch) h+=`<div class="note">Warm-started: this shows the change `
+    +`<b>preserves</b> a behaviour, not that it creates one. Capped at `
+    +`<code>provisional</code> until a from-scratch run promotes it.</div>`;
+  h+=`<h3>recipe at this node — the fold of ${r.recipe.length} diff(s)</h3><ul class="recipe">`
+    +r.recipe.map(s=>`<li><span class="rid">${esc(s.id)}</span> — `
+      +`${esc((s.change||[]).join("; ")||"(no change recorded)")}</li>`).join("")+`</ul>`
+    +`<div class="note calm">Highlighted on the graph. The recipe is not stored anywhere — `
+    +`it is computed by walking the config edges from the root, so provenance and the `
+    +`current recipe cannot drift apart.</div>`;
+  if(r.session) h+=`<h3>session</h3><p style="font-family:var(--mono);font-size:11px;`
+    +`word-break:break-all">${esc(r.session)}</p>`;
+  P.innerHTML=h; P.scrollTop=0;
+
+  P.querySelectorAll(".segs .chip").forEach(b=>b.onclick=()=>{
+    const v=document.getElementById("vp"); v.src=b.dataset.src; v.play();});
+  const v=document.getElementById("vp");
+  if(v) v.addEventListener("error",()=>{
+    v.outerHTML=`<p class="cap">Video not reachable from this copy of the page — open it `
+      +`next to the lab directory, or fetch the file from the record.</p>`;},{once:true});
+  P.querySelectorAll(".plotgrid img").forEach(img=>{
+    img.addEventListener("error",()=>{
+      img.closest("figure").style.display="none";
+      const grid=P.querySelector(".plotgrid"), head=document.getElementById("plothead");
+      if(grid && head && ![...grid.children].some(f=>f.style.display!=="none")){
+        head.style.display="none"; grid.style.display="none";
+      }
+    },{once:true});
+    img.onclick=()=>{const box=document.createElement("div"); box.className="lightbox";
+      box.innerHTML=`<img src="${esc(img.src)}" />`; box.onclick=()=>box.remove();
+      document.body.appendChild(box);};
+  });
+}
+
+apply();
+select((RUNS.find(r=>r.verdict==="best")||RUNS[RUNS.length-1]||{}).id);
+cy.zoom(0.95); cy.center(cy.$(":selected"));
+</script></body></html>

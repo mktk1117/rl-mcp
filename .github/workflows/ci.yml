@@ -1,0 +1,39 @@
+# Runs the test suite exactly the way it is run locally:
+#
+#   uv run --index https://download.pytorch.org/whl/cpu \
+#     --with pytest --with numpy --with matplotlib --with pillow \
+#     --with imageio --with torch python -m pytest tests -q
+#
+# Two dependency variants: the base training-side deps (CPU torch from the
+# PyTorch index), and base plus the optional MCP SDK, which un-skips the
+# server tests.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+        deps:
+          - { name: base, extra: "" }
+          - { name: base+mcp, extra: "--with mcp" }
+    name: test (py${{ matrix.python-version }}, ${{ matrix.deps.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run tests
+        run: >
+          uv run --index https://download.pytorch.org/whl/cpu
+          --with pytest --with numpy --with matplotlib --with pillow
+          --with imageio --with torch ${{ matrix.deps.extra }}
+          python -m pytest tests -q
