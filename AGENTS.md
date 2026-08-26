@@ -18,7 +18,7 @@ Two repositories, on purpose:
 * **this one** — the harness, adapters, CLI and MCP server. Its history should
   be about the tool.
 * **your records** — your mjlab task packages and `records/`, the run records.
-  [rlmcp-records](https://github.com/mktk1117/rlmcp-records) is the worked
+  [rl-mcp-tasks](https://github.com/mktk1117/rl-mcp-tasks) is the worked
   example: `juggle/` and `shand/` are task packages, `records/` is the records they
   filled, and its own `AGENTS.md` carries the guidance for *running* experiments
   (mjlab traps, verification checks, the run-record lifecycle).

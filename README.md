@@ -486,7 +486,7 @@ git clone git@github.com:mktk1117/rl-mcp.git ../rlmcp   # the tooling
 export RLMCP_RECORDS=$PWD/records                               # point the harness here
 ```
 
-[rlmcp-records](https://github.com/mktk1117/rl-mcp-tasks) is a worked
+[rl-mcp-tasks](https://github.com/mktk1117/rl-mcp-tasks) is a worked
 example of the right-hand side — two task packages (`juggle/`, a G1 with two
 hands learning to juggle; `shand/`, in-hand cube reorientation) and the records
 their runs filled. The files named below are in it.
