@@ -113,6 +113,15 @@ def test_launchers_hand_off_without_argparse_touching_their_flags(command, monke
     seen["argv"] = argv
     return 0
 
+  if command == "serve":
+    # The server module raises SystemExit at import time when no MCP SDK is
+    # present, so monkeypatching into it needs the optional dependency. The
+    # base CI variant has no `mcp`; that is the absence, not a failure.
+    try:
+      import rlmcp.server.mcp_server  # noqa: F401
+    except (ImportError, SystemExit):
+      pytest.skip("`rlmcp serve` needs the optional MCP SDK, which is absent here")
+
   target = {
       "train": "rlmcp.train.main",
       "serve": "rlmcp.server.mcp_server.main",
