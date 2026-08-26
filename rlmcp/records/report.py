@@ -14,7 +14,7 @@ is the excuse that assembling the evidence was too much work.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from rlmcp.records.record import RunRecord, fold_recipe
 from rlmcp.session import Session

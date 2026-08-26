@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from pathlib import Path
 
-from rlmcp.records.lineage import Graph, build, summarize, to_payload
+from rlmcp.records.lineage import build, summarize, to_payload
 from rlmcp.records.params import build_history, leaf_paths
 from rlmcp.records.record import RunRecord
 

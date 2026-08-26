@@ -72,3 +72,7 @@ MUJOCO_LOG.TXT
 
 # Ad-hoc uv runs resolve fresh from pyproject; no lockfile is managed
 uv.lock
+
+# Agent worktrees of this repository, created under .claude/. They are
+# checkouts, not content: committing one embeds a git repo inside this one.
+.claude/worktrees/
