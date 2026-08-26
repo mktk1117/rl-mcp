@@ -964,7 +964,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(SDK_MISSING, file=sys.stderr)
     return 1
 
-  parser = argparse.ArgumentParser(prog="rlmcp serve", description=__doc__.splitlines()[0])
+  # Reachable as `rlmcp serve` and as the `rlmcp-server` console script; name
+  # the usage line after whichever one the reader typed.
+  invoked = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+  parser = argparse.ArgumentParser(
+      prog=invoked if invoked.startswith("rlmcp-") else "rlmcp serve",
+      description=__doc__.splitlines()[0],
+  )
   parser.add_argument("--session", help="Path to a specific session directory")
   parser.add_argument(
       "--root", default=os.environ.get("RLMCP_ROOT", "."),

@@ -21,7 +21,15 @@ from __future__ import annotations
 
 from typing import Any
 
-__version__ = "0.2.0"
+# Read from the installed metadata rather than a second literal: the two used
+# to drift (0.2.0 here against 0.3.0 in pyproject.toml), and the version a bug
+# report quotes should be the one that was installed.
+try:
+  from importlib.metadata import PackageNotFoundError, version as _dist_version
+
+  __version__ = _dist_version("rl-mcp")
+except PackageNotFoundError:  # A source tree that was never installed.
+  __version__ = "0.0.0+unknown"
 
 _LAZY = {
     # Session protocol (dependency-free).
@@ -38,6 +46,8 @@ _LAZY = {
     # Curriculum.
     "CurriculumStage": "rlmcp.core.curriculum",
     "StageSchedule": "rlmcp.core.curriculum",
+    "Condition": "rlmcp.core.curriculum",
+    "Action": "rlmcp.core.curriculum",
     # Adapters.
     "SimAdapter": "rlmcp.adapters.base",
     "RunnerAdapter": "rlmcp.adapters.base",
