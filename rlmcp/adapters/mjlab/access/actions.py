@@ -41,8 +41,6 @@ class ActionAccess(AccessProvider):
               getter=lambda n=name: self.get_gain(n),
               setter=lambda value, n=name: self.set_gain(n, float(value)),
               default=1.0,
-              min_value=0.05,
-              max_value=5.0,
               description=(
                   f"Multiplier on the configured action scale of '{name}'. "
                   "Lowering it shrinks the reachable joint-target range, which is "

@@ -36,6 +36,8 @@ from rlmcp.adapters.mjlab.runner_adapter import MjlabRunnerAdapter
 from rlmcp.adapters.mjlab.sim_adapter import MjlabSimAdapter
 from rlmcp.core.controller import RlMcp
 from rlmcp.core.curriculum import StageSchedule
+from rlmcp.adapters.mjlab.viz_check import check_marker_colors
+from rlmcp.core.palette import format_report
 from rlmcp.core.extensions import Extension
 from rlmcp.extensions import discover as discover_extensions
 
@@ -119,6 +121,8 @@ class RlMcpEnvWrapper:
     self._log_sums: Dict[str, torch.Tensor] = {}
     self._log_counts: Dict[str, int] = {}
 
+    self._warn_about_marker_colors()
+
     active = self.rlmcp.extensions.names()
     print(
         f"[rlmcp] session ready: {self.rlmcp.session.dir}\n"
@@ -126,6 +130,29 @@ class RlMcpEnvWrapper:
         f"[rlmcp] inspect it with: rlmcp status --session {self.rlmcp.session.dir}",
         flush=True,
     )
+
+  def _warn_about_marker_colors(self) -> None:
+    """Say so at startup if a debug overlay is the colour of a scene object.
+
+    Twice in this project a visualisation has made the system look like it was
+    doing something it was not -- a landing marker the same yellow as a ball,
+    and neighbouring envs composited into one frame -- and both times the search
+    went after a physics bug that did not exist. The check is cheap, the failure
+    is silent, and nobody thinks to look for it, so it runs unasked. It only
+    ever warns: a colour clash is a legibility problem, not a reason to refuse
+    to train.
+    """
+    try:
+      collisions = check_marker_colors(self.unwrapped)
+    except Exception as exc:  # a diagnostic must never take the run down
+      self.rlmcp.session.append_event(
+          "viz_check_failed", {"error": f"{type(exc).__name__}: {exc}"}
+      )
+      return
+    if not collisions:
+      return
+    print(f"[rlmcp] {format_report(collisions)}", flush=True)
+    self.rlmcp.session.append_event("viz_color_collision", {"collisions": collisions})
 
   # Construction helpers.
 

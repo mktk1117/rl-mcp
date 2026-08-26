@@ -22,6 +22,7 @@ from rlmcp.adapters import base
 from rlmcp.adapters.base import NotSupported, RunnerAdapter, SimAdapter
 from rlmcp.adapters.mjlab.access import ParameterAccess
 from rlmcp.adapters.mjlab.access import paths
+from rlmcp.adapters.mjlab import runner_adapter
 from rlmcp.adapters.mjlab.runner_adapter import MjlabRunnerAdapter
 from rlmcp.adapters.mjlab.state import metrics as state_metrics
 from rlmcp.adapters.mjlab.state import rendering
@@ -282,13 +283,13 @@ def test_types_and_categories_are_carried(access):
   )
 
 
-def test_reward_weight_gets_sign_aware_description_and_bounds(access):
+def test_reward_weight_gets_a_sign_aware_description_and_no_bounds(access):
   specs = {s.key: s for s in access.discover()}
   penalty = specs["reward.foot_slip.weight"]
   reward = specs["reward.track_linear_velocity.weight"]
   assert "penalty" in penalty.description
   assert "reward" in reward.description
-  assert penalty.min_value is not None and penalty.max_value is not None
+  assert penalty.min_value is None and penalty.max_value is None
 
 
 # Reads and writes.
@@ -436,6 +437,12 @@ def test_action_gain_scales_the_configured_value(access):
   access.set("action.joint_pos.scale_gain", 0.5)
   assert term._scale == 0.25  # Half of the configured 0.5.
   assert access.get("action.joint_pos.scale_gain") == 0.5
+
+
+def test_action_gain_carries_no_bounds(access):
+  """Only the task knows the scale a gain works at, so the adapter invents none."""
+  gain = {s.key: s for s in access.discover()}["action.joint_pos.scale_gain"]
+  assert gain.min_value is None and gain.max_value is None
 
 
 def test_action_gain_is_relative_to_the_baseline_not_the_last_value(access):
@@ -1001,6 +1008,23 @@ def test_request_stop_is_advisory():
   # is delivered by the loop polling should_stop().
   adapter = MjlabRunnerAdapter(SimpleNamespace(alg=None))
   assert adapter.request_stop() is False
+
+
+def test_rl_bounds_are_only_the_definitional_ones():
+  """Pins the whole table: re-adding a taste bound like `learning_rate max` fails here."""
+  assert {
+      name: (meta.get("min"), meta.get("max"))
+      for name, meta in runner_adapter._ALG_PARAMS.items()
+  } == {
+      "learning_rate": (0.0, None),
+      "entropy_coef": (None, None),
+      "clip_param": (0.0, None),
+      "desired_kl": (0.0, None),
+      "gamma": (0.0, 1.0),
+      "lam": (0.0, 1.0),
+      "max_grad_norm": (0.0, None),
+      "value_loss_coef": (None, None),
+  }
 
 
 def test_unknown_hyperparameter_raises_naming_what_exists():

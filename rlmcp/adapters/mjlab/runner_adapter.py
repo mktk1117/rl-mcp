@@ -15,27 +15,45 @@ from typing import Any, Dict, List, Optional
 from rlmcp.adapters.base import NotSupported, RunnerAdapter
 from rlmcp.core.parameters.spec import ParameterCategory, ParameterSpec
 
+# Only bounds true by the parameter's own definition: a value outside them is
+# meaningless, not merely unusual. Omit "min"/"max" rather than guessing at a
+# sensible range -- that depends on the task. Guidance belongs in "desc".
 _ALG_PARAMS: Dict[str, Dict[str, Any]] = {
     "learning_rate": {
-        "min": 1e-6,
-        "max": 1e-2,
+        "min": 0.0,  # Negative is gradient ascent; 0.0 legitimately freezes.
         "desc": "PPO optimiser learning rate (switches schedule to 'fixed' when set)",
     },
     "entropy_coef": {
-        "min": 0.0,
-        "max": 0.2,
-        "desc": "Entropy bonus weight; raise it when the policy collapses too early",
+        "desc": (
+            "Entropy bonus weight; raise it when the policy collapses too "
+            "early. Typically 0-0.05, but the useful range is task-dependent"
+        ),
     },
-    "clip_param": {"min": 0.01, "max": 0.5, "desc": "PPO surrogate clipping epsilon"},
+    "clip_param": {
+        "min": 0.0,  # The surrogate clip is a half-width; negative inverts it.
+        "desc": "PPO surrogate clipping epsilon (typically 0.1-0.3)",
+    },
     "desired_kl": {
-        "min": 1e-4,
-        "max": 0.1,
+        "min": 0.0,  # A target divergence cannot be negative.
         "desc": "Target KL for the adaptive learning-rate schedule",
     },
-    "gamma": {"min": 0.9, "max": 0.9999, "desc": "Discount factor"},
-    "lam": {"min": 0.8, "max": 1.0, "desc": "GAE lambda"},
-    "max_grad_norm": {"min": 0.1, "max": 10.0, "desc": "Gradient-norm clip"},
-    "value_loss_coef": {"min": 0.0, "max": 10.0, "desc": "Value loss weight"},
+    "gamma": {
+        "min": 0.0,
+        "max": 1.0,  # Discounted return diverges past 1; 1.0 is undiscounted.
+        "desc": "Discount factor",
+    },
+    "lam": {
+        "min": 0.0,
+        "max": 1.0,  # GAE interpolates TD(0) to Monte-Carlo; outside is undefined.
+        "desc": "GAE lambda",
+    },
+    "max_grad_norm": {
+        "min": 0.0,  # A norm ceiling cannot be negative.
+        "desc": "Gradient-norm clip",
+    },
+    "value_loss_coef": {
+        "desc": "Value loss weight",
+    },
 }
 
 
@@ -69,8 +87,8 @@ class MjlabRunnerAdapter(RunnerAdapter):
               data_type="float",
               current_value=float(value),
               default_value=float(value),
-              min_value=meta["min"],
-              max_value=meta["max"],
+              min_value=meta.get("min"),
+              max_value=meta.get("max"),
               description=meta["desc"],
               category=ParameterCategory.RL_HYPERPARAMETER,
           )

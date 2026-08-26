@@ -58,6 +58,8 @@ class FakeSimAdapter(SimAdapter):
               data_type="range" if is_range else "float",
               current_value=value,
               default_value=value,
+              # This fake's own bounds, so registry enforcement has something
+              # to enforce; the real providers declare none.
               min_value=None if is_range else -10.0,
               max_value=None if is_range else 10.0,
               description=f"fake parameter {key}",

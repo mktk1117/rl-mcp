@@ -263,9 +263,16 @@ rough task that is 97 knobs:
 | `action` | `action.joint_pos.scale_gain` — a direct lever on jerkiness |
 | `rl` | `rl.learning_rate`, `rl.entropy_coef`, `rl.clip_param`, `rl.desired_kl` |
 
-Values are bounds-checked, applied between rollout batches (never mid-step), and
-every change is written to the session event log with the rationale the caller
-gave. `reset_parameters` restores the startup values.
+Values are shape- and type-checked, applied between rollout batches (never
+mid-step), and every change is written to the session event log with the
+rationale the caller gave. `reset_parameters` restores the startup values.
+Magnitudes are *not* second-guessed. The only bounds the adapter declares are
+the ones true by a parameter's definition — `gamma` and `lam` live in `[0, 1]`,
+a learning rate or a gradient-norm ceiling cannot be negative. Everything else
+is unbounded, because only the task knows the scale it works at: a reward
+weight of 600, an action gain of 10 and a clip epsilon of 0.8 are all
+legitimate experiments, and a limit invented here would refuse them while
+catching nothing.
 
 Every parameter also carries a *liveness*: `live` values take effect next
 batch; `at_reset` values are re-read on episode reset, and the write's response
@@ -311,6 +318,11 @@ One session is one run. `rlmcp record` keeps the record *across* runs: every run
 gets a numbered record with its hypothesis, config snapshot, lineage (which run
 it evolved from, which checkpoint it warm-started from), and a close-out verdict
 backed by measurements.
+
+The records themselves do not live in this repository. They are a directory that
+belongs beside your own task packages, and `$RLMCP_RECORDS` is what points every
+`rlmcp record` command at it — see
+[Using it on your own task](#using-it-on-your-own-task).
 
 ```bash
 rlmcp record new "lower action scale stops the arm buzz" --parent 011
@@ -440,6 +452,302 @@ rlmcp status
 rlmcp curriculum
 rlmcp diagnose --seconds 4
 ```
+
+## Using it on your own task
+
+Everything above drives a task that ships with mjlab. Your own task is not one
+of those, and it does not belong in this repository. The arrangement that works
+is two repositories:
+
+```
+rl-mcp/                  the tooling — harness, adapters, CLI, MCP server (this repo)
+
+your-tasks/              your work
+  mytask/                an ordinary mjlab task package: env cfg, mdp terms, assets
+    rlmcp_ext.py           the task's vocabulary, as an rlmcp Extension
+    curriculum.py          the ladder, as a StageSchedule
+    train_curriculum.py    the launcher that calls rlmcp.wrap
+  records/               the run records — written and read by `rlmcp record`
+```
+
+rlmcp is a dependency of your repository, never the other way round. The two
+are split because they have different lifecycles: a tool's history should be
+about the tool, and run records carry training logs, plots and video — large,
+regenerable, and silent about the harness. Four runs of one task came to 24 MB.
+
+`$RLMCP_RECORDS` is what holds that line at runtime. The records root resolves to
+the explicit argument first (`rlmcp record --records-root`, `rlmcp.wrap(records_root=)`),
+then `$RLMCP_RECORDS`, then `./records`. Set the variable once and every `rlmcp record`
+command writes into the same records from any directory; leave it unset and you
+get a scratch `records/` wherever you happened to be standing.
+
+```bash
+git clone git@github.com:mktk1117/rl-mcp.git ../rlmcp   # the tooling
+export RLMCP_RECORDS=$PWD/records                               # point the harness here
+```
+
+[rlmcp-records](https://github.com/mktk1117/rl-mcp-tasks) is a worked
+example of the right-hand side — two task packages (`juggle/`, a G1 with two
+hands learning to juggle; `shand/`, in-hand cube reorientation) and the records
+their runs filled. The files named below are in it.
+
+### 1. Wrap the environment
+
+One call, between building the environment and building the runner. This is
+`juggle/train_curriculum.py` with the argument parsing cut out; the whole file
+is about a hundred lines:
+
+```python
+import rlmcp
+from rlmcp.adapters.mjlab import TrainingStopped
+
+import mytask                 # registers the task with mjlab
+import mytask.rlmcp_ext      # registers the extension — importing is what registers
+from mytask.curriculum import build_curriculum
+
+env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device, render_mode=None)
+env = rlmcp.wrap(
+    env,
+    session_dir=log_dir / "rlmcp",
+    curriculum=build_curriculum(),
+    task_id=args.task,
+    service_every_steps=agent_cfg.num_steps_per_env,   # service once per iteration
+    record_run=args.record_run or None,                      # the record this run fills
+)
+
+vec_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+runner = runner_cls(vec_env, asdict(agent_cfg), str(log_dir), args.device)
+env.attach_runner(runner)      # PPO knobs, checkpoints, iteration boundaries
+
+try:
+    runner.learn(num_learning_iterations=agent_cfg.max_iterations)
+except TrainingStopped as stopped:
+    print(f"stopping: {stopped}")   # `rlmcp stop` arrives as this exception
+runner.save(str(log_dir / f"model_final_{runner.current_learning_iteration}.pt"))
+```
+
+Three things there are worth saying out loud.
+
+**Keep a name bound to the rlmcp wrapper.** `attach_runner` lives on it, and
+`RslRlVecEnvWrapper` does not forward attribute lookups, so the order above
+matters. Without `attach_runner` you still get parameters, metrics, video and
+curricula; you lose the PPO knobs, checkpointing and `stop`.
+
+**`render_mode=None` is fine.** rlmcp renders through the offscreen renderer
+for `shot` and `video` and does not need the environment's own render mode.
+
+**`rlmcp stop` arrives as an exception.** rsl_rl's `learn()` has no stop hook,
+so the request is raised as `TrainingStopped` inside it. Catch it and save: an
+aborted run that left no checkpoint has nothing to replay, and a clip of the
+final policy is the deliverable.
+
+Launch it with your package importable:
+
+```bash
+PYTHONPATH=. MUJOCO_GL=egl uv run --project ../rlmcp --extra mjlab \
+    python mytask/train_curriculum.py --num-envs 2048 --record-run 015
+```
+
+### 2. Give the task a vocabulary
+
+The core knows parameters, metrics, traces, frames and stages. It does not know
+what a "catch" is, and it should not — so that vocabulary goes in an `Extension`
+beside your task, not in here. `juggle/rlmcp_ext.py` is the worked example.
+
+```python
+from rlmcp.core.extensions import Extension
+from rlmcp.extensions import register
+
+@register
+class Juggling(Extension):
+  """Difficulty control and task-level metrics for the juggling task."""
+
+  name = "juggle"
+
+  def available(self) -> bool:
+    return "juggle" in self.env.unwrapped.command_manager._terms
+
+  def commands(self):
+    return {"set_juggle_difficulty": self.cmd_set_juggle_difficulty,
+            "juggle_status": self.cmd_juggle_status}
+
+  def metrics(self):
+    # Per minute of simulated time, not per episode -- see below.
+    return {"rlmcp/catch_rate_per_min": self._catch_rate()}
+
+  def select_envs(self, **criteria):
+    """Understands `airborne=true`."""
+    airborne = criteria.pop("airborne", None)
+    if criteria or airborne is None:
+      return None                       # not our vocabulary; let others answer
+    want = str(airborne).lower() in ("1", "true", "yes")
+    return [i for i, flying in enumerate(self._airborne()) if flying == want]
+```
+
+Those three hooks buy three different things at once, from one class:
+
+* `commands()` — `rlmcp run set_juggle_difficulty balls=2 pass_mode=alternate`
+  from a shell, `run_command` over MCP, **and** an `Action` a curriculum stage
+  can apply on entry. Values are parsed as JSON, so quote lists:
+  `rlmcp run set_objects names='["cube","mug"]'`.
+* `metrics()` — merged into telemetry, so they appear in `rlmcp metrics`,
+  `rlmcp plot`, and in curriculum promotion conditions.
+* `select_envs()` — `rlmcp shot --where airborne=true`. The core never parses a
+  `where` key; your extension is the only thing that knows what one means.
+
+`select_envs` is dispatched **by signature**: the registry tries to bind the
+`--where` keys as keyword arguments and silently moves on to the next extension
+when they do not fit. So declare it as `**criteria`, pop what you understand,
+and return `None` if anything is left over. A handler written as
+`select_envs(self, where: dict)` never binds and is skipped without a word.
+`rlmcp/extensions/terrain.py` is the reference.
+
+Write the docstrings for a reader who cannot see the code. A command's docstring
+is what `rlmcp commands` prints, and it is often all an agent has before
+calling it.
+
+Two ways to make an extension load. Importing the module registers it, which is
+what the launcher above does — enough for a script you control. To have it found
+without any import, publish an entry point from your `pyproject.toml`:
+
+```toml
+[project.entry-points."rlmcp.extensions"]
+mytask = "mytask.rlmcp_ext"
+```
+
+Either way `available()` decides whether it actually attaches, so an extension
+that does not fit the running environment is left out with a note instead of
+breaking the run. `rlmcp extensions` lists what is installed.
+
+### 3. Write the ladder as a curriculum
+
+If you catch yourself writing "when metric X passes Y, change weight Z" into a
+notes file, that is a `CurriculumStage`. Encoding it means the run drives itself,
+the ladder is saved with the run (`params/curriculum.json`), and a human can
+still override it live.
+
+`juggle/curriculum.py` is a non-terrain worked example — eight rungs, from
+catching a ball someone lobbed at you to a three-ball cascade:
+
+```python
+CurriculumStage(
+    name="1_toss_and_catch",
+    apply=[Action("set_juggle_difficulty",
+                  {"spawn_mode": "in_hand", "min_apex": 0.15,
+                   "min_separation": 0.15})],
+    parameters={"reward.catch.weight": 300.0,
+                "reward.throw_apex.weight": 60.0,
+                "reward.drop_penalty.weight": -120.0},
+    promote_when=[
+        Condition("Metrics/juggle/catches_per_min", ">=", 25.0),
+        Condition("Metrics/juggle/episode_dropped", "<=", 0.5),
+    ],
+    min_iterations=500,
+    hold_iterations=20,
+    notes="Goal: throw it up and catch it again, in the same hand.",
+)
+```
+
+`apply` speaks your extension's verbs; `parameters` speaks the keys `rlmcp
+params` discovered. Both are written to the event log when the stage is entered,
+which is what lets the lineage page draw what changed and when.
+
+**Pick promotion metrics the policy cannot buy.** Two rules, both learned the
+expensive way in the records:
+
+* *Task-external, not the reward being optimised.* A reward term rises when the
+  policy games it. Catches per minute, success rate and holding fraction do not.
+* *Normalised — rates and fractions, never per-episode counts.* An episode that
+  ends early on a failure is shorter for reasons unrelated to skill, so a raw
+  count promotes whatever survives longest. `juggle/rlmcp_ext.py` divides its
+  counts by `episode_length_buf * step_dt` for exactly this reason.
+
+A stage promotes only when every condition has held for `hold_iterations`
+consecutive iterations *and* `min_iterations` has passed. You can override that
+from a shell at any time:
+
+```bash
+rlmcp curriculum                     # which rung, and what it is waiting for
+rlmcp curriculum advance --why "the wider lob is solved"
+rlmcp curriculum goto 3_two_balls --why "the warm start already has the catch"
+rlmcp curriculum auto-off            # stop it promoting itself
+```
+
+### 4. Drive the run
+
+From another shell, while it trains. None of this pauses training: video, traces
+and diagnosis are deferred jobs serviced between rollout batches, and parameter
+edits apply between batches too, so nothing here can race the simulator.
+
+```bash
+rlmcp sessions                       # what is running
+rlmcp status                         # iteration, stage, headline metrics
+rlmcp metrics --list                 # every metric name this run publishes
+rlmcp metrics rlmcp/catch_rate_per_min --last-n 50
+rlmcp plot rlmcp/catch_rate_per_min --smooth 20
+
+rlmcp commands                       # every verb, including your extension's
+rlmcp run juggle_status              # what the task itself thinks is happening
+rlmcp shot --where airborne=true     # look at an env that is mid-flight
+rlmcp video --seconds 8
+rlmcp diagnose --seconds 4           # jerk, chatter, effort, posture, a verdict
+
+rlmcp set reward.drop_penalty.weight -150 --why "it is bailing out early"
+rlmcp note "takahiro says the palm should face up"
+
+rlmcp checkpoint before-experiment   # and `rlmcp load <path>` to undo
+rlmcp pause / rlmcp resume
+rlmcp stop --why "the falsifier fired"
+```
+
+Every one of those writes lands in the session event log with the rationale you
+gave, so `rlmcp events` after the fact reconstructs what you did and why. That
+includes `note` — a remark a human made about the run belongs in the record, not
+in a side file.
+
+### 5. Open a record before you launch, close it after
+
+One session is one run; the records are the record across runs. Open it *before*
+launching, while the prediction still costs something to write down:
+
+```bash
+rlmcp record new "fade the assist on hand tracking not catches" \
+    --hypothesis "catch rate is the helper's achievement while assist is on" \
+    --prediction "assist reaches 0 by iteration 1500, tracking error under 0.10 m" \
+    --falsifier "assist is still above 0.5 at iteration 2000" \
+    --falsify-when rlmcp/assist '>=' 0.5 --check-after 2000 \
+    --parent 014
+```
+
+The positional argument is a slug — it names the record's directory, so keep it
+short. `--falsify-when METRIC OP VALUE` is the machine-checked twin of
+`--falsifier`: training prints the moment it fires, and close-out records it as
+`FIRED`, `held`, or `not evaluable yet` if the run died first. `--check-after`
+is not optional in spirit — every policy is bad at iteration zero, and a
+falsifier with no floor fires during the warm-up.
+
+Pass the id to the launcher (`--record-run 015` above, reaching
+`rlmcp.wrap(record_run=...)`) so the config snapshot, events and metrics land on
+the record. Then close it:
+
+```bash
+rlmcp record close 015 validated \
+    --outcome "assist faded to 0 by iteration 1400; catch rate held at 62/min" \
+    --metric "rlmcp/assist=0.0" "rlmcp/catch_rate_per_min=62.1"
+rlmcp record asset 015 run.mp4 --kind videos --caption "final policy"
+rlmcp record graph          # the lineage, as an interactive page
+```
+
+`--metric` takes every measurement in one go; a second `--metric` flag replaces
+the first rather than adding to it. A `validated` verdict with no measurement is
+refused, and a warm-started run cannot claim `validated` at all — its result is
+not attributable to its own change. The rest of the vocabulary is `falsified`,
+`provisional`, `control`, `superseded`, `best` and `interrupted`, with `planned`
+and `running` meaning the run has not produced a result yet.
+
+Attach the clip. A video that stays in `logs/` is not a deliverable — `record asset`
+copies it into the records's own media store, so the record still has it after
+the training logs are cleaned, and the lineage page has something to show.
 
 ## How parameters are found
 
