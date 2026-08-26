@@ -25,7 +25,7 @@ import numpy as np
 
 from rlmcp.adapters.base import NotSupported, RunnerAdapter, SimAdapter
 from rlmcp.core import diagnostics as diag
-from rlmcp.core.curriculum import Action, StageSchedule
+from rlmcp.core.curriculum import StageSchedule
 from rlmcp.core.extensions import Extension, ExtensionContext, ExtensionRegistry
 from rlmcp.core.parameters.registry import ParameterRegistry
 from rlmcp.core.telemetry.buffer import TelemetryBuffer

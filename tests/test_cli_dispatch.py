@@ -113,6 +113,8 @@ def test_launchers_hand_off_without_argparse_touching_their_flags(command, monke
     seen["argv"] = argv
     return 0
 
+  # No skip for `serve`: the server module imports cleanly with or without the
+  # MCP SDK, so the hand-off is covered in both dependency variants.
   target = {
       "train": "rlmcp.train.main",
       "serve": "rlmcp.server.mcp_server.main",

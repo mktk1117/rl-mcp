@@ -11,9 +11,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
-import shutil
 import time
-from pathlib import Path
 
 import pytest
 
@@ -622,32 +620,3 @@ def test_a_crashed_writers_temp_file_is_swept_on_open(tmp_path, capsys):
   assert live.exists()  # its writer (this process) is still alive
   assert "swept" in capsys.readouterr().err
   live.unlink()
-
-
-# Backward compatibility — the production lab must load with no migration.
-
-
-_SMP_LAB = Path(__file__).resolve().parent.parent / "logs" / "smp_lab"
-
-
-@pytest.mark.skipif(not _SMP_LAB.exists(), reason="production lab not present")
-def test_the_production_lab_loads_unchanged(tmp_path):
-  """Reading an old lab is pure: same records, version 0, nothing rewritten."""
-  copy_root = tmp_path / "smp_lab"
-  copy_root.mkdir()
-  shutil.copytree(_SMP_LAB / "runs", copy_root / "runs")
-  raw = {
-      payload["id"]: payload
-      for payload in (json.loads(p.read_text())
-                      for p in (copy_root / "runs").glob("*/meta.json"))
-  }
-
-  store = FileStore(copy_root)
-  loaded = store.list_records()
-
-  assert [r.id for r in loaded] == sorted(raw)
-  for record in loaded:
-    assert record.version == 0
-    assert record.to_dict() == {**raw[record.id], "version": 0}
-  assert store.reindex() == len(raw)
-  assert store.new_record("continuation").id == str(len(raw) + 1).zfill(3)

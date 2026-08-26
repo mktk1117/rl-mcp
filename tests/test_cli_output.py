@@ -96,7 +96,7 @@ def test_long_prose_wraps_rather_than_truncating():
 
 
 def test_a_path_is_not_broken_across_lines():
-  path = "/home/x/logs/rsl_rl/2026-08-24_09-12-51_shand003/rlmcp/status.json"
+  path = "/logs/rsl_rl/2026-08-24_09-12-51_walk003/rlmcp/status.json"
   text = cli_output.render_generic({"session": path}, width=40)
   assert path in text.replace("\n", "").replace(" ", "") or path in text
 
