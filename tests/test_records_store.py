@@ -17,7 +17,8 @@ import time
 import pytest
 
 from rlmcp.records.filestore import FileStore
-from rlmcp.records.record import Falsifier, Feedback, RunRecord, Weights
+from rlmcp.records.record import (FEEDBACK_KINDS, Falsifier, Feedback,
+                                  RunRecord, Weights)
 from rlmcp.records.store import (
     ConflictError,
     SlotUnavailable,
@@ -775,3 +776,57 @@ def test_deleting_a_record_takes_its_feedback_out_of_the_timeline(store):
   store.delete_record(record.id)
 
   assert store.feedback_timeline() == []
+
+
+# ── a kind that is not a kind ────────────────────────────────────────────
+def test_feedback_with_an_unstorable_kind_is_refused_before_it_is_written(store):
+  """The failure this pins is not the refusal, it is what the refusal left
+  behind.
+
+  A client sent `kind` as a dict. `Feedback` types it `str` but nothing checked,
+  so it went into meta.json, and *then* the sqlite index refused to bind it. The
+  caller was told the write failed. The record had already taken it. And every
+  later write to that record failed the same way -- forever, across process
+  restarts, with no way back through this API. One malformed field permanently
+  destroyed a run's ledger.
+  """
+  record = store.new_record("kind_guard")
+
+  with pytest.raises(StoreError) as raised:
+    store.add_feedback(record.id, Feedback(text="poison", kind={"x": 1}))
+  assert "kind" in str(raised.value)
+
+  assert store.get_record(record.id).feedback == [], "nothing may be written"
+
+  # And the record is still usable, which is the whole point.
+  after = store.add_feedback(record.id, Feedback(text="a real remark", kind="observe"))
+  assert [f.text for f in after.feedback] == ["a real remark"]
+
+
+def test_an_unknown_kind_is_refused_with_the_list_of_real_ones(store):
+  record = store.new_record("kind_list")
+  with pytest.raises(StoreError) as raised:
+    store.add_feedback(record.id, Feedback(text="hm", kind="ponder"))
+  for kind in FEEDBACK_KINDS:
+    assert kind in str(raised.value)
+
+
+def test_a_record_already_poisoned_can_still_be_read_and_repaired(store, tmp_path):
+  """Recovery matters more than the guard: a store that already has one of
+  these cannot be fixed by upgrading, only by being readable enough to mend."""
+  record = store.new_record("already_poisoned")
+  path = store.record_dir(store.get_record(record.id)) / "meta.json"
+  payload = json.loads(path.read_text())
+  payload["feedback"] = [{"text": "from before the guard", "kind": {"x": 1}},
+                         {"text": "and another", "kind": 7}]
+  path.write_text(json.dumps(payload))
+
+  # Readable, with the unusable kinds turned into something a person can see.
+  reread = FileStore(store.root).get_record(record.id)
+  assert [f.text for f in reread.feedback] == ["from before the guard", "and another"]
+  assert all(isinstance(f.kind, str) for f in reread.feedback)
+
+  # And writable again, which it was not.
+  healed = FileStore(store.root).add_feedback(
+      record.id, Feedback(text="after the repair", kind="observe"))
+  assert len(healed.feedback) == 3
