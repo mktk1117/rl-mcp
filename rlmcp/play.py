@@ -1,4 +1,17 @@
-"""``rlmcp play``: watch a saved checkpoint, as a clip or in a viewer.
+"""``rlmcp play``: watch a task, as a clip or in a viewer.
+
+Usually that means watching a *saved checkpoint*, which is what the options
+below are shaped around. But a task being written has no checkpoint yet, and
+looking at it is the cheapest way to find out that it terminates on the first
+step or that the robot spawns inside the floor. ``--policy zero`` and
+``--policy random`` open the same session with no weights at all:
+
+    rlmcp play --task Mjlab-Velocity-Flat-Unitree-G1 --policy zero --mode viser
+
+Nothing else changes. The env is built from the task's own ``play`` config, the
+session is rlmcp-wrapped exactly as a training run is, and ``load_policy``
+still works -- so once a checkpoint exists you swap it into the session you are
+already watching, keeping the conditions and the camera.
 
 Everything else in rlmcp talks to a *live* trainer. That leaves a gap: a run
 ends -- normally, or because its falsifier fired -- and the one thing nobody can
@@ -63,6 +76,7 @@ from rlmcp.core.replay import (
 )
 
 MODES = ("video", "native", "viser")
+POLICIES = ("checkpoint", "zero", "random")
 
 TASK_PACKAGES_ENV = "RLMCP_TASK_PACKAGES"
 """Comma-separated packages to import before reading the task registry.
@@ -97,6 +111,14 @@ class PlayConfig:
 
   checkpoint: str = ""
   """A checkpoint file, or a run/session directory to take the latest from."""
+  policy: str = "checkpoint"
+  """Where the actions come from: ``checkpoint``, ``zero`` or ``random``.
+
+  ``zero`` and ``random`` need no weights, so they need no checkpoint and no
+  session to have produced one -- which is what makes them the way to look at a
+  task that does not train yet. Both require ``--task``: with no checkpoint
+  there is nothing to infer it from.
+  """
   task: str = ""
   """Defaults to the task recorded in the session this checkpoint belongs to."""
   mode: str = "video"
@@ -285,6 +307,56 @@ class SwappablePolicy:
 
   def __repr__(self) -> str:  # pragma: no cover - debugging aid.
     return f"SwappablePolicy({self.checkpoint.name})"
+
+
+class UntrainedPolicy:
+  """Actions for a task that has no policy yet: zeros, or samples.
+
+  Deliberately shaped like an inference policy -- called with the observation,
+  returns a batch of actions -- so everything downstream is unchanged.
+  :class:`SwappablePolicy` wraps it like any other, which is what lets
+  ``load_policy`` replace it with real weights mid-session without restarting:
+  the env, the restored conditions and the camera all survive.
+  """
+
+  def __init__(self, action_shape: Tuple[int, ...], device: str, mode: str = "zero"):
+    self.action_shape = action_shape
+    self.device = device
+    self.mode = mode
+
+  def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
+    import torch
+
+    if self.mode == "random":
+      # Uniform in [-1, 1]: mjlab action terms are scaled and offset from a
+      # normalised action, so this is the span a policy would emit, not a
+      # guess at joint limits.
+      return torch.rand(self.action_shape, device=self.device) * 2.0 - 1.0
+    return torch.zeros(self.action_shape, device=self.device)
+
+  def __repr__(self) -> str:  # pragma: no cover - debugging aid.
+    return f"UntrainedPolicy({self.mode})"
+
+
+def _untrained_policy(cfg: PlayConfig, vec_env: Any) -> UntrainedPolicy:
+  """Size an untrained actor from the env rather than from the task config."""
+  num_actions = None
+  for source in (
+      lambda: vec_env.num_actions,
+      lambda: vec_env.unwrapped.action_manager.total_action_dim,
+      lambda: vec_env.action_space.shape[-1],
+  ):
+    try:
+      num_actions = int(source())
+      break
+    except Exception:
+      continue
+  if not num_actions:
+    raise PlayError(
+        "Could not tell how many actions this task takes, so there is nothing "
+        "to send it. This is a task-side problem: check the action manager."
+    )
+  return UntrainedPolicy((cfg.num_envs, num_actions), cfg.device, cfg.policy)
 
 
 class PolicySwap(Extension):
@@ -538,22 +610,41 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
   """
   if cfg.mode not in MODES:
     raise PlayError(f"Unknown mode '{cfg.mode}'. Choose one of: {', '.join(MODES)}")
-
-  checkpoint = find_checkpoint(cfg.checkpoint or Path.cwd())
-  session_dir = session_for(checkpoint)
-  task = cfg.task or task_for(session_dir)
-  if not task:
+  if cfg.policy not in POLICIES:
     raise PlayError(
-        f"Could not tell which task {checkpoint.name} was trained on: there is "
-        "no session.json near it. Pass --task."
-    )
+        f"Unknown policy '{cfg.policy}'. Choose one of: {', '.join(POLICIES)}")
+
+  untrained = cfg.policy != "checkpoint"
+  if untrained:
+    # No weights, so nothing to find a session or a task from. Conditions are
+    # not restored either: there is no run whose conditions these would be, and
+    # the task's own play config is the right starting point.
+    checkpoint = None
+    session_dir = None
+    task = cfg.task
+    if not task:
+      raise PlayError(
+          f"--policy {cfg.policy} needs --task: with no checkpoint there is no "
+          "session to read the task from."
+      )
+  else:
+    checkpoint = find_checkpoint(cfg.checkpoint or Path.cwd())
+    session_dir = session_for(checkpoint)
+    task = cfg.task or task_for(session_dir)
+    if not task:
+      raise PlayError(
+          f"Could not tell which task {checkpoint.name} was trained on: there is "
+          "no session.json near it. Pass --task."
+      )
 
   _choose_gl_backend(cfg)
   env, lab, agent_cfg, vec_env = _build_env(cfg, task, session_dir)
 
   conditions, restored = _restore_conditions(cfg, lab, session_dir)
   policy = SwappablePolicy(
-      _load_policy(cfg, task, vec_env, checkpoint, agent_cfg), checkpoint
+      _untrained_policy(cfg, vec_env) if untrained
+      else _load_policy(cfg, task, vec_env, checkpoint, agent_cfg),
+      checkpoint or Path(cfg.policy),
   )
   # Registered against this session's own controller, so `load_policy` is one
   # more command a play session answers -- see PolicySwap for why it lives here
@@ -573,15 +664,16 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
 
   result: Dict[str, Any] = {
       "mode": cfg.mode,
-      "checkpoint": str(checkpoint),
-      "iteration": checkpoint_iteration(checkpoint),
+      "policy": cfg.policy,
+      "checkpoint": str(checkpoint) if checkpoint else None,
+      "iteration": checkpoint_iteration(checkpoint) if checkpoint else -1,
       "task": task,
       "device": cfg.device,
       "num_envs": cfg.num_envs,
       "trained_session": str(session_dir) if session_dir else None,
       "play_session": str(lab.session.dir),
       "conditions": {
-          "replayed": cfg.replay,
+          "replayed": cfg.replay and not untrained,
           "stage": conditions.stage or None,
           **restored,
       },
@@ -846,7 +938,7 @@ def _record(
     env: Any,
     vec_env: Any,
     policy: Any,
-    checkpoint: Path,
+    checkpoint: Optional[Path],
     session_dir: Optional[Path],
 ) -> Dict[str, Any]:
   """Roll the policy out and encode what it did."""
@@ -920,15 +1012,21 @@ def _record(
 
 
 def _default_out(
-    checkpoint: Path, session_dir: Optional[Path], cfg: PlayConfig
+    checkpoint: Optional[Path], session_dir: Optional[Path], cfg: PlayConfig
 ) -> Path:
-  """Beside the run's other evidence, named for what it shows."""
-  stem = f"play_{checkpoint.stem}"
+  """Beside the run's other evidence, named for what it shows.
+
+  With no checkpoint there is no run to sit beside, so the clip lands in the
+  play session's own artifacts -- which is where the studio looks anyway.
+  """
+  stem = f"play_{checkpoint.stem}" if checkpoint else f"play_{cfg.policy}"
   if cfg.stage:
     stem += f"_{cfg.stage}"
   if session_dir is not None:
     return session_dir / "artifacts" / f"{stem}.mp4"
-  return checkpoint.parent / f"{stem}.mp4"
+  if checkpoint is not None:
+    return checkpoint.parent / f"{stem}.mp4"
+  return Path(cfg.session_dir or ".") / "artifacts" / f"{stem}.mp4"
 
 
 def _headline(env: Any) -> Dict[str, float]:
@@ -1023,6 +1121,11 @@ def add_arguments(parser: Any) -> Any:
   )
   parser.add_argument("--mode", default="video", choices=list(MODES),
                       help="video: render an mp4. native/viser: open a viewer.")
+  parser.add_argument(
+      "--policy", default="checkpoint", choices=list(POLICIES),
+      help="Where actions come from. zero/random need no checkpoint, so they "
+           "are how you look at a task that does not train yet (needs --task).",
+  )
   parser.add_argument("--seconds", type=float, default=8.0)
   parser.add_argument("--out", default="", help="Video path (video mode)")
   parser.add_argument("--fps", type=int, default=None)
@@ -1068,6 +1171,7 @@ def config_from_args(args: Any, overrides: Dict[str, Any]) -> PlayConfig:
       checkpoint=args.checkpoint,
       task=args.task,
       mode=args.mode,
+      policy=args.policy,
       seconds=args.seconds,
       num_envs=args.num_envs,
       device=args.device,
