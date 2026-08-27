@@ -51,6 +51,29 @@ comes up with 22 tunable parameters — reward weights, their function
 parameters, termination bounds, the reset event ranges, the action scale —
 found by walking the environment's own manager configs.
 
+## Which Isaac Sim, and which driver
+
+These have to agree, and when they do not the failure is a segfault with no
+message — inside `librtx.scenedb.plugin.so`, at stage creation, before any
+rlmcp code runs:
+
+| Isaac Sim | validated Linux driver | Python |
+| --- | --- | --- |
+| 5.1.0 | 580.65.06 | 3.11 |
+| 6.0.1 | 595.58.03 | 3.12 |
+
+A driver from the R590 branch (595.x) crashes Isaac Sim 5.1's RTX renderer, so
+cameras — and therefore `shot`, `video` and progress clips — are unavailable
+there while everything else works headless. Isaac Sim 6.0.1 validates that
+branch and renders normally. Verified on an RTX 3090 with driver 595.84: 5.1
+crashes with cameras enabled and 21 GB of the card free; 6.0.1 does not.
+
+Two install notes for a machine without root, both learned the hard way:
+`./isaaclab.sh --install` shells out to `sudo apt-get`, so the source packages
+go in with `uv pip install --no-build-isolation --editable source/<pkg>`
+instead; and a dependency's `setup.py` imports `pkg_resources`, so the venv
+needs `setuptools<81` first.
+
 ## Frames need cameras, and that is decided at launch
 
 `shot`, `video` and [progress clips](tools.md#progress-clips-the-ones-you-do-not-have-to-ask-for)
