@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rlmcp.records.poster import ensure_posters, poster_key
+from rlmcp.records.poster import ensure_posters, poster_key, record_posters
 from rlmcp.records.record import RunRecord
 
 
@@ -157,3 +157,24 @@ def test_a_real_clip_becomes_a_real_still(tmp_path):
   stamp = still.stat().st_mtime_ns
   assert ensure_posters([record], tmp_path) == first
   assert still.stat().st_mtime_ns == stamp  # cached, not re-derived
+
+
+def test_a_run_that_filmed_itself_gets_a_still_per_clip(tmp_path):
+  """`ensure_posters` asks what each run looks like; this asks what one run
+  looked like over time, which is what a strip of progress clips is for."""
+  record = _r("001", [["001/videos/progress_env0_it000000.mp4", "iteration 0"],
+                      ["001/videos/progress_env0_it000200.mp4", "iteration 200"]])
+  for key in (entry[0] for entry in record.assets["videos"]):
+    cached = tmp_path / poster_key("001", key)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(b"\x89PNG\r\n")
+
+  stills = record_posters(record, tmp_path, derive=False)
+
+  assert sorted(stills) == [entry[0] for entry in record.assets["videos"]]
+  # And the headline-only view still returns exactly one, unchanged.
+  assert len(ensure_posters([record], tmp_path, derive=False)) == 1
+
+
+def test_a_run_with_no_clips_has_no_stills(tmp_path):
+  assert record_posters(_r("002"), tmp_path) == {}
