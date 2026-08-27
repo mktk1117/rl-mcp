@@ -52,9 +52,9 @@ rlmcp events --interventions                   # everything anyone did, and why
 rlmcp play                                     # watch a finished run's policy
 ```
 
-Almost all of that is an MCP tool too — 36 of them — so an agent can drive the
-whole loop, and **it sees the screenshots and plots**, not just their file
-paths. `play` is the exception, and stays CLI-only because it opens a window.
+Almost all of that is an MCP tool too, so an agent can drive the whole loop,
+and **it sees the screenshots and plots**, not just their file paths. `play` is
+the exception, and stays CLI-only because it opens a window.
 
 The CLI knows who is reading. A terminal gets aligned tables, and pictures open
 by themselves. A pipe gets JSON, and each command's JSON is a parsing contract
@@ -227,7 +227,7 @@ of JSON files.
   torch + a simulator               plain JSON files                  no simulator
 ┌───────────────────┐             ┌─────────────────┐             ┌──────────────────┐
 │ rlmcp-wrapped env │             │ status.json     │             │ MCP server       │
-│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (36 tools)       │
+│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (35 tools)       │
 │ records frames    │             │ events.jsonl    │             │ rlmcp CLI        │
 │ runs commands     │ ◄──reads─── │ artifacts/      │ ◄──writes── │ your own scripts │
 │ between batches   │             │ inbox/  outbox/ │             │                  │
