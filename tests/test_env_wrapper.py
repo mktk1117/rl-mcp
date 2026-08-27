@@ -14,6 +14,7 @@ constructor runs.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import pytest
@@ -167,3 +168,54 @@ def test_a_stop_unwinds_as_the_core_signal_under_the_backend_name(wrapper_cls,
     wrapper._service(iteration=1)
 
   assert "seen enough" in str(caught.value)
+
+
+# Where "once per learning iteration" lives, per runner.
+
+
+class _MjlabStyleRunner:
+  """mjlab: the runner owns a logger object with a `log(it=...)`."""
+
+  def __init__(self):
+    self.logger = SimpleNamespace(log=self._log)
+    self.seen = []
+
+  def _log(self, *args, **kwargs):
+    self.seen.append(kwargs.get("it", args[0] if args else None))
+
+
+class _RslRlStyleRunner:
+  """plain rsl_rl, which IsaacLab uses: `log(locs)` on the runner itself."""
+
+  def __init__(self):
+    self.seen = []
+
+  def log(self, locs, width=80, pad=35):
+    self.seen.append(locs.get("it"))
+
+
+@pytest.mark.parametrize("runner_type", [_MjlabStyleRunner, _RslRlStyleRunner],
+                         ids=["mjlab-logger", "rsl_rl-runner"])
+def test_the_iteration_hook_is_found_wherever_the_runner_keeps_it(
+    runner_type, wrapper_cls, tmp_path, monkeypatch):
+  """A backend that logs from the runner rather than from a logger object still
+  gets serviced on iteration boundaries -- not every N steps, which is the
+  fallback and answers commands at the wrong moment."""
+  wrapper = wrapper_cls(wrappable_env(), session_dir=tmp_path / "session",
+                        video_every=0)
+  serviced = []
+  monkeypatch.setattr(type(wrapper), "_service",
+                      lambda self, iteration=None: serviced.append(iteration))
+  runner = runner_type()
+  try:
+    wrapper.attach_runner(runner)
+    if isinstance(runner, _MjlabStyleRunner):
+      runner.logger.log(it=7)
+    else:
+      runner.log({"it": 7})
+  finally:
+    wrapper.rlmcp.close()
+
+  assert wrapper._runner_hooked is True
+  assert serviced == [7]
+  assert runner.seen == [7]     # and the runner's own logging still happened

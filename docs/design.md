@@ -95,8 +95,21 @@ Within that family, implement `SimAdapter` (and optionally `RunnerAdapter`) from
 control — has a default that reports "not supported by this backend", so tools
 degrade with an explanation instead of crashing.
 
-`rlmcp/adapters/mjlab/` is the reference implementation, and its `access/`
-package is reusable for any backend whose config is dataclasses and dicts.
+Two backends ship, and what they share is where most of the code lives:
+
+```
+rlmcp/adapters/manager_based/   parameter access, trace sampling, summary
+                                metrics, the env wrapper — written against the
+                                shape both backends have, not against either
+rlmcp/adapters/rsl_rl_runner.py the RunnerAdapter; both drive the same library
+rlmcp/adapters/mjlab/           MjlabSimAdapter + its offscreen renderer
+rlmcp/adapters/isaaclab/        IsaacLabSimAdapter + its Kit-app renderer
+```
+
+A backend adapter is only what is genuinely its own: how a robot is found in
+the scene, how a frame is rendered, and anything its simulator has that the
+others do not. `rlmcp/adapters/isaaclab/` is about 230 lines including both,
+which is the number to expect for a third.
 
 Anything your simulator has and others do not belongs in an
 [Extension](extensions.md), not in the adapter contract.

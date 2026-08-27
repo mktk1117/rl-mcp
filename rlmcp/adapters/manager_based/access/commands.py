@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
-from rlmcp.adapters.mjlab.access import paths
-from rlmcp.adapters.mjlab.access.base import AccessProvider, Term
+from rlmcp.adapters.manager_based.access import paths
+from rlmcp.adapters.manager_based.access.base import AccessProvider, Term
 from rlmcp.core.parameters.spec import ParameterCategory
 
 
