@@ -256,7 +256,7 @@ def validate(
 def _cycle_problems(
     records: Sequence[RunRecord], by_id: Dict[str, RunRecord]
 ) -> List[Problem]:
-  """Detect loops in the config lineage.
+  """Detect loops in the config ancestry.
 
   Absent from the method this ports, where a cycle would hang the viewer walking
   the chain. Cheap to check, so check.

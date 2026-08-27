@@ -2,7 +2,7 @@
 
 A training run that leaves no record is an island. This package is the memory --
 records with a hypothesis and a falsifier written before the run and an outcome
-written after, linked into a lineage whose edges say *config* or *warm start*,
+written after, linked into a graph whose edges say *config* or *warm start*,
 and validated by rules that refuse the claims a warm start cannot support.
 
 Stdlib only, so the whole layer works in an interpreter with no simulator:

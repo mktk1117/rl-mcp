@@ -105,8 +105,8 @@ record instead of a folder of logs. `rlmcp record graph` writes one
 self-contained HTML page — no server, no build step — and it looks like this:
 
 <p align="center">
-  <img src="docs/media/lineage-story.png"
-       alt="The rlmcp lineage page, story view, showing all ten cube reorientation runs">
+  <img src="docs/media/records-story.png"
+       alt="The rlmcp records page, story view, showing all ten cube reorientation runs">
 </p>
 
 Each card is one run: the clip it produced, and the one line it concluded. Click
@@ -124,7 +124,7 @@ with the cube held 99.4% of the time.
 That conclusion is not in any single run. It is in the shape of three siblings,
 which is the argument for keeping runs as a graph.
 
-The same page has a **tree** view for the lineage itself and a **parameters**
+The same page has a **tree** view for the ancestry itself and a **parameters**
 view for what changed across runs. More in [docs/records.md](docs/records.md).
 
 ## Install
@@ -172,7 +172,7 @@ The explicit-curriculum version of the same run is in
 | [docs/your-task.md](docs/your-task.md) | Putting rlmcp on your own task, in five steps. |
 | [docs/curriculum.md](docs/curriculum.md) | Writing the stage ladder. |
 | [docs/extensions.md](docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
-| [docs/records.md](docs/records.md) | Hypotheses, verdicts, feedback, the lineage graph. |
+| [docs/records.md](docs/records.md) | Hypotheses, verdicts, feedback, the record graph. |
 | [docs/design.md](docs/design.md) | How it fits together, how parameters are found, other simulators. |
 | [AGENTS.md](AGENTS.md) | Contributing to this repository. |
 

@@ -2,8 +2,8 @@
 
 Two renderers over the same layout, because the two readers want different
 things. An agent wants a picture it can look at in one tool call, so
-:func:`plot_lineage` returns PNG bytes. A person wants to click a node and read
-what the run claimed, so :func:`render_lineage_html` returns one self-contained
+:func:`plot_records` returns PNG bytes. A person wants to click a node and read
+what the run claimed, so :func:`render_records_html` returns one self-contained
 file -- no server, no build step, openable from a path.
 
 Both draw the config edge and the warm-start edge separately, and the HTML view
@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from pathlib import Path
 
-from rlmcp.records.lineage import build, summarize, to_payload
+from rlmcp.records.graph import build, summarize, to_payload
 from rlmcp.records.params import build_history, leaf_paths
 from rlmcp.records.record import RunRecord
 
@@ -42,7 +42,7 @@ VERDICT_COLORS = {
 }
 
 
-def plot_lineage(
+def plot_records(
     records: Sequence[RunRecord],
     title: Optional[str] = None,
     max_label: int = 30,
@@ -111,7 +111,7 @@ def plot_lineage(
   ax.axis("off")
   ax.legend(
       handles=[
-          Line2D([], [], color="#9AA7B5", lw=1.4, label="config lineage (parent)"),
+          Line2D([], [], color="#9AA7B5", lw=1.4, label="config parent"),
           Line2D([], [], color="#C99A3A", lw=1.4, ls="--", label="warm start (weights)"),
           Line2D([], [], marker="o", color="none", markerfacecolor="#5B6A79",
                  markersize=8, label="from scratch"),
@@ -120,7 +120,7 @@ def plot_lineage(
       ],
       loc="lower right", fontsize=7.5, framealpha=0.9,
   )
-  ax.set_title(title or "run lineage", fontsize=11, fontweight="bold", loc="left")
+  ax.set_title(title or "run records", fontsize=11, fontweight="bold", loc="left")
   fig.tight_layout()
   return _png(fig)
 
@@ -155,7 +155,7 @@ def _script_json(value: Any) -> str:
   return json.dumps(value).replace("<", "\\u003c")
 
 
-def render_lineage_html(
+def render_records_html(
     records: Sequence[RunRecord],
     title: str = "rlmcp run tree",
     media_base: str = "media/",
@@ -166,7 +166,7 @@ def render_lineage_html(
 
   Args:
     engine: ``cytoscape`` for the interactive view -- real DAG layout, pan and
-      zoom, lineage highlighting -- or ``simple`` for a dependency-free renderer
+      zoom, ancestry highlighting -- or ``simple`` for a dependency-free renderer
       that draws the same graph with none of that. ``auto`` picks cytoscape when
       the vendored libraries are present.
     posters: video key to poster key, from
@@ -182,7 +182,7 @@ def render_lineage_html(
   payload = to_payload(graph, posters)
   stats = summarize(graph)
   # Reading every session's event log to draw parameter traces is the most
-  # expensive thing this function does, and a lineage whose logs are gone still
+  # expensive thing this function does, and an ancestry whose logs are gone still
   # has to render: a failure here costs the parameter view, not the page.
   try:
     history = build_history(graph)
@@ -213,7 +213,7 @@ def render_lineage_html(
           f"The graph libraries are not vendored in {VENDOR}. Use engine='simple', "
           "or see vendor/README.md for what to drop in."
       )
-    page = (TEMPLATES / "lineage_cytoscape.html").read_text()
+    page = (TEMPLATES / "records_cytoscape.html").read_text()
     for token, name in (
         ("__CYTOSCAPE__", "cytoscape.min.js"),
         ("__DAGRE__", "dagre.min.js"),
@@ -474,7 +474,7 @@ function select(id){
 }
 document.getElementById("foot").textContent=
   `roots: ${STATS.roots.join(", ")} · leaves: ${STATS.leaves.join(", ")} · `
-  +`solid = config lineage, dashed amber = warm start, dotted violet = prior `
+  +`solid = config parent, dashed amber = warm start, dotted violet = prior `
   +`(priors hidden by default — toggle above)`;
 select((RUNS.find(r=>r.verdict==="best")||RUNS[RUNS.length-1]||{}).id);
 paint();

@@ -79,7 +79,7 @@ env = rlmcp.wrap(env, session_dir=..., curriculum=schedule)
 ```
 
 Both `parameters` and `apply` are written to the event log when the stage is
-entered. That is what lets the lineage page draw what changed and when, and what
+entered. That is what lets the records page draw what changed and when, and what
 lets `rlmcp play` put a checkpoint back on its own rung.
 
 ## Pick promotion metrics the policy cannot buy

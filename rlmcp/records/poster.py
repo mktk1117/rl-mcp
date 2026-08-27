@@ -137,7 +137,7 @@ def ensure_posters(records: Sequence[RunRecord], media_root: Path | str,
   directory -- is left out of the map. The viewer's no-poster path is the
   common case anyway: most records carry no video at all.
   """
-  from rlmcp.records.lineage import headline_video
+  from rlmcp.records.graph import headline_video
 
   root = Path(media_root)
   out: Dict[str, str] = {}

@@ -104,7 +104,7 @@ def test_deleting_removes_it_from_listings(store):
 # Query.
 
 
-def test_query_filters_on_the_lineage_and_the_text(store):
+def test_query_filters_on_the_ancestry_and_the_text(store):
   root = store.new_record("baseline", stage="locomotion",
                           hypothesis="walking works on flat")
   child = store.new_record("stairs", stage="locomotion", parent=root.id,
@@ -330,7 +330,7 @@ def test_the_store_reopens_where_it_left_off(tmp_path):
   assert (first.id, second.id) == ("001", "002")
 
 
-def test_warm_start_lineage_survives_a_round_trip(store):
+def test_warm_start_ancestry_survives_a_round_trip(store):
   root = store.new_record("scratch")
   warm = store.new_record(
       "finetune", parent=root.id, weights=Weights(root.id, "model_100.pt")

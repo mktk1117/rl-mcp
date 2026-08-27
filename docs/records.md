@@ -1,7 +1,7 @@
 # Records: the runs, and what they showed
 
 One session is one run. A **record** is what you keep across runs: the
-hypothesis, the config snapshot, the lineage, the verdict, and what the humans
+hypothesis, the config snapshot, the ancestry, the verdict, and what the humans
 said along the way.
 
 Records do not live in the rl-mcp repository. They belong beside your own task
@@ -60,7 +60,7 @@ Verdicts: `validated`, `falsified`, `provisional`, `control`, `superseded`,
 
 Attach the clip. A video that stays in `logs/` is not a deliverable. `record asset`
 copies it into the records' own media store, so the record still has it after
-the training logs are cleaned, and the lineage page has something to show.
+the training logs are cleaned, and the records page has something to show.
 
 ## Falsifiers
 
@@ -105,14 +105,14 @@ generated from the records every time, so it cannot drift from them.
 **MCP tools:** `attach_feedback`, `answer_feedback`, `get_feedback_timeline`,
 `set_record_headline`. `record_feedback` is the live-run one.
 
-## The lineage graph
+## The record graph
 
 A list of runs tells you what you did. It does not tell you what you learned,
 because what you learned lives in the *differences* between runs. So records are
 kept as a graph.
 
 ```bash
-rlmcp record graph                         # writes records/lineage.html, opens it
+rlmcp record graph                         # writes records/records.html, opens it
 rlmcp record graph --png --out tree.png    # a picture an agent reads in one call
 ```
 
@@ -136,7 +136,7 @@ derives one edge from the other will draw it wrong.
 
 Here is a real one: ten runs of in-hand cube reorientation on a SharpaWave hand.
 
-![The rlmcp lineage page, tree view, showing the ten cube reorientation runs](media/lineage-tree.png)
+![The rlmcp records page, tree view, showing the ten cube reorientation runs](media/records-tree.png)
 
 ```
 001 reorient_baseline .............. falsified   froze in a pinch grip; learned to survive, not to rotate
@@ -179,7 +179,7 @@ hypothesis in twenty minutes is information-dense.
 
 The page has three tabs, and the file holds all of them:
 
-- **tree** — the lineage, as above. Click a node for that run's full record.
+- **tree** — the ancestry, as above. Click a node for that run's full record.
 - **story** — one card per run with its clip and its one-line conclusion, in
   order. This is the view to read when you want the argument rather than the
   structure.

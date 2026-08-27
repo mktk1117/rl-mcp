@@ -6,10 +6,10 @@ import json
 
 import pytest
 
-from rlmcp.records.lineage import build, frontier, summarize, to_payload
+from rlmcp.records.graph import build, frontier, summarize, to_payload
 from rlmcp.records.record import RunRecord, Weights
 from rlmcp.records.views import (
-    plot_lineage, plot_run_comparison, render_lineage_html, vendored,
+    plot_records, plot_run_comparison, render_records_html, vendored,
 )
 
 ENGINES = ["simple"] + (["cytoscape"] if vendored() else [])
@@ -148,20 +148,20 @@ def test_payload_flags_a_multi_change_result_but_not_a_plan():
 def test_a_cycle_does_not_hang_the_payload():
   records = [_r("001", 1, parent="002"), _r("002", 2, parent="001")]
   payload = to_payload(build(records))
-  assert any("lineage error" in str(p["recipe"]) for p in payload)
+  assert any("graph error" in str(p["recipe"]) for p in payload)
 
 
 # Rendering.
 
 
 def test_the_png_renders():
-  png = plot_lineage([_r("001", 1), _r("002", 2, parent="001",
+  png = plot_records([_r("001", 1), _r("002", 2, parent="001",
                                        weights=Weights("001"))])
   assert png[:4] == b"\x89PNG"
 
 
 def test_the_png_handles_an_empty_records():
-  assert plot_lineage([])[:4] == b"\x89PNG"
+  assert plot_records([])[:4] == b"\x89PNG"
 
 
 def test_the_viewer_is_one_self_contained_file():
@@ -171,7 +171,7 @@ def test_the_viewer_is_one_self_contained_file():
          verdict="provisional"),
   ]
 
-  page = render_lineage_html(records, title="tree")
+  page = render_records_html(records, title="tree")
 
   assert page.startswith("<!doctype html>")
   _assert_nothing_is_fetched(page)
@@ -189,7 +189,7 @@ def test_media_is_referenced_relatively_so_the_page_works_from_a_file_path():
       "plots": [["001/plots/curves.png", "training curves"]],
   }
 
-  page = render_lineage_html([record], media_base="media/")
+  page = render_records_html([record], media_base="media/")
 
   assert '"media/"' in page  # the base the page resolves against
   assert "001/videos/tour.mp4" in page
@@ -204,7 +204,7 @@ def test_the_interactive_engine_inlines_its_libraries():
   if not vendored():
     pytest.skip("graph libraries are not vendored in this checkout")
 
-  page = render_lineage_html([_r("001", 1)], engine="cytoscape")
+  page = render_records_html([_r("001", 1)], engine="cytoscape")
 
   assert "cytoscape.use(cytoscapeDagre)" in page
   _assert_nothing_is_fetched(page)
@@ -212,7 +212,7 @@ def test_the_interactive_engine_inlines_its_libraries():
 
 
 def test_the_simple_engine_needs_no_vendored_libraries():
-  page = render_lineage_html([_r("001", 1)], engine="simple")
+  page = render_records_html([_r("001", 1)], engine="simple")
   assert "cytoscape" not in page
   assert len(page) < 200_000
 
@@ -220,12 +220,12 @@ def test_the_simple_engine_needs_no_vendored_libraries():
 def test_auto_picks_the_interactive_engine_when_available():
   from rlmcp.records.views import vendored
 
-  page = render_lineage_html([_r("001", 1)], engine="auto")
+  page = render_records_html([_r("001", 1)], engine="auto")
   assert ("cytoscape" in page) == vendored()
 
 
 def test_a_run_with_no_media_renders_no_player():
-  page = render_lineage_html([_r("001", 1)])
+  page = render_records_html([_r("001", 1)])
   assert "<video" not in page.split("const RUNS=")[0]
 
 
@@ -233,7 +233,7 @@ def test_a_run_with_no_media_renders_no_player():
 def test_the_viewer_escapes_record_text(engine):
   """The whole page. The old form checked page.split("const RUNS=")[0] -- the
   half that never contained the payload, which is where the bug lived."""
-  page = render_lineage_html([_r("001", 1, hypothesis="<script>alert(1)</script>")],
+  page = render_records_html([_r("001", 1, hypothesis="<script>alert(1)</script>")],
                              engine=engine)
   assert "<script>alert(1)</script>" not in page
 
@@ -245,7 +245,7 @@ def test_a_hostile_hypothesis_cannot_close_the_script_element(engine):
   the rest of the text to the parser as markup. Every "<" in the embedded JSON
   is serialised as \\u003c, so the raw byte sequence cannot occur at all."""
   evil = "</script><img src=x onerror=alert(1)>"
-  page = render_lineage_html([_r("001", 1, hypothesis=evil)], engine=engine)
+  page = render_records_html([_r("001", 1, hypothesis=evil)], engine=engine)
 
   assert evil not in page
   assert "\\u003c/script>\\u003cimg src=x onerror=alert(1)>" in page
@@ -282,7 +282,7 @@ def test_hostile_ids_slugs_verdicts_and_asset_keys_stay_escaped(engine):
       "videos": [["<video onplay=alert(4)>/clip.mp4", "cap"]],
       "plots": [["<svg onload=alert(5)>/p.png", "curves"]],
   }
-  page = render_lineage_html([record], engine=engine)
+  page = render_records_html([record], engine=engine)
 
   for raw in ("<img src=x onerror=alert(1)>", "</b><svg onload=alert(2)>",
               "<script>alert(3)", "<video onplay=alert(4)>",
@@ -312,7 +312,7 @@ def test_free_text_containing_a_placeholder_is_data_not_a_template_hole(engine):
   contained __STATS__ got the stats JSON spliced into the payload. One-pass
   substitution: the text survives verbatim, the real slot is still filled."""
   evil = "watch __STATS__ and __EDGES__ and __COLORS__ closely"
-  page = render_lineage_html([_r("001", 1, hypothesis=evil)], engine=engine)
+  page = render_records_html([_r("001", 1, hypothesis=evil)], engine=engine)
 
   assert json.dumps(evil) in page           # verbatim, still one JSON string
   assert 'STATS={"records": 1' in page      # the template slot got the stats
@@ -321,10 +321,10 @@ def test_free_text_containing_a_placeholder_is_data_not_a_template_hole(engine):
 
 @pytest.mark.parametrize("engine", ENGINES)
 def test_an_empty_lab_still_renders_a_working_page(engine):
-  """render_lineage_html([]) calls select(undefined) on load; without a guard
+  """render_records_html([]) calls select(undefined) on load; without a guard
   the simple engine threw before drawing anything. Not executable here, so the
   pin is structural: select() bails out before its first use of the record."""
-  page = render_lineage_html([], engine=engine)
+  page = render_records_html([], engine=engine)
 
   assert "const RUNS=[]" in page
   body = page[page.index("function select("):]
@@ -352,7 +352,7 @@ def test_comparison_says_so_when_the_runs_share_no_metric():
 def _cytoscape_or_skip(records, **kw):
   if not vendored():
     pytest.skip("graph libraries are not vendored in this checkout")
-  return render_lineage_html(records, engine="cytoscape", **kw)
+  return render_records_html(records, engine="cytoscape", **kw)
 
 
 def test_the_headline_clip_is_the_last_video_attached():
@@ -446,7 +446,7 @@ def test_a_hostile_poster_key_is_escaped_like_every_other_media_path(engine):
   record.assets = {"videos": [["001/videos/c.mp4", "cap",
                                '"><svg onload=alert(6)>/p.png']]}
 
-  page = render_lineage_html([record], engine=engine)
+  page = render_records_html([record], engine=engine)
 
   assert '"><svg onload=alert(6)>' not in page
   if engine == "cytoscape":
@@ -458,7 +458,7 @@ def test_the_page_still_draws_when_a_session_directory_is_gone():
   build_history reads every session; a failure there must not take the page."""
   record = _r("001", 1, session="/nowhere/at/all", config={"reward.a.weight": 1.0})
 
-  page = render_lineage_html([record])
+  page = render_records_html([record])
 
   assert "const PARAMS=" in page
   assert "run_001" in page
