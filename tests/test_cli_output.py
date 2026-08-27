@@ -275,6 +275,7 @@ SHAPES = {
     "params": BARE,        # --live flips it to the envelope; pinned below
     "extensions": BARE,    # --available flips it; pinned below
     "record": BARE,        # via `record list`; the record family has its own test
+    "recipe": ENVELOPE,    # the store answers; "ok" beside the recipe's own keys
     "help": ENVELOPE,
     "get": ENVELOPE,
     "set": ENVELOPE,
@@ -319,8 +320,11 @@ _SHAPE_ARGS = {
     "analyze": ["/nonexistent/trace.npz"],
     "play": ["/nonexistent/checkpoint.pt"],
     "record": ["list"],
+    # A record that does not exist: the failure half of the envelope, which is
+    # the half a store command can show without a live trainer.
+    "recipe": ["build", "404"],
 }
-_REFUSALS = {"play", "analyze"}
+_REFUSALS = {"play", "analyze", "recipe"}
 
 # `train` and `serve` hand the line to another program; there is no payload.
 _NO_OUTPUT = {"train", "serve"}

@@ -59,7 +59,7 @@ the answer came from:
 | --- | --- | --- |
 | session files on disk | the payload itself — an object, or a list for `sessions` and `events` | `status`, `info`, `sessions`, `events`, `params`, `metrics --list`, `extensions`, `record list`, `record timeline` |
 | the training process, or an offline stand-in for it | `{"ok": true, "result": …}`, or `{"ok": false, "error": "…"}` plus hints | `get`, `set`, `metrics`, `plot`, `shot`, `video`, `curriculum`, `run`, … and `play`, `analyze` |
-| the record store | `"ok"` beside the record's own keys | the other `record …` subcommands |
+| the record store | `"ok"` beside the record's own keys | the other `record …` subcommands, `recipe build` |
 
 **For a parser:** look for a top-level `"ok"`. Absent, the payload is the whole
 output. Present and the command is not `record`, take `"result"` on success and
@@ -90,6 +90,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 | what was done to this run | [`events --interventions`](#events) | `get_events` |
 | write something down | [`note`](#note), [`feedback`](#feedback), [`events`](#events) | `add_note`, `record_feedback`, `get_events` |
 | watch a finished run | [`play`](#play) | (CLI only) |
+| run it again | [`recipe build`](records.md#making-a-run-runnable-again-rlmcp-recipe-build) | (CLI only) |
 | what code a run used | [`record code`](records.md#what-the-code-was-the-other-half-of-a-recipe) | (CLI only) |
 | the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
 

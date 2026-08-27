@@ -124,6 +124,46 @@ Whitespace-only changes are *marked*, never dropped. Deciding whether an edit
 changes behaviour is undecidable in general, so the honest version records
 everything and lets a viewer grey the noise.
 
+## Making a run runnable again: `rlmcp recipe build`
+
+A record says what was tried and what happened. What it does not say is *how to
+do it again* — and the answer is spread across four places: the package the run
+used, the config it started from, the ladder it climbed, and the ad-hoc edits
+somebody made while it trained.
+
+```bash
+rlmcp recipe build 011              # writes recipe-011/ beside the records
+```
+
+```
+recipe-011/
+  package/          the task package at the tree that run launched with
+  config.json       the resolved parameters it started from
+  curriculum.json   the ladder — loads into StageSchedule.from_dict unchanged
+  launch.sh         the command, as close as the record can say
+  phases.md         the warm-start chain, flattened
+  expect.json       the numbers a replay is checked against
+  README.md         generated
+```
+
+**Distillation, not transcription.** An edit made at iteration 900 because the
+entropy had collapsed does not belong in a replay as "wait 900 iterations, then
+panic". It becomes the value that rung *starts* with, carrying the reason it was
+needed. A run that had a curriculum keeps its rungs and their promotion
+conditions — those were written before the run, so they are real — and the
+mid-rung edits fold into the rung that was active when they happened. A run with
+no curriculum gets one rung per change, each held for as long as the original
+ran before the next one. Refused edits are left out: they never applied.
+
+**It reproduces the procedure, not the policy.** RL is not bit-reproducible —
+GPU nondeterminism, a different env count, a different seed. That is why
+`expect.json` names numbers to check rather than a hash to match. Claim
+"statistically equivalent", never "identical".
+
+Every part is best-effort and says so: a run with no code snapshot still gets its
+config, its ladder and its chain, and the README names what is missing. A recipe
+that refused to exist because one input was absent would be a worse answer.
+
 ## Falsifiers
 
 A falsifier is the condition that would prove the run wrong, written down before

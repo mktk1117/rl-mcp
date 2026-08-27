@@ -1045,6 +1045,19 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("stop", help="Stop a run -- or a play session -- cleanly")
   p.add_argument("--why", default="")
 
+  p = sub.add_parser(
+      "recipe", help="Turn a finished run into something that runs again",
+      description="Assembles the package, the config, the ladder and the "
+                  "warm-start chain into a directory you can launch.")
+  recipe_sub = p.add_subparsers(dest="action", required=True)
+  q = recipe_sub.add_parser("build", help="Write recipe-<id>/ for a run")
+  q.add_argument("record_id")
+  q.add_argument("--out", help="Where to write it (default: recipe-<id>/ beside the records)")
+  q.add_argument("--session", dest="from_session",
+                 help="Read the intervention history from this session instead")
+  q.add_argument("--records-root",
+                 help="Records directory (default: $RLMCP_RECORDS or ./records)")
+
   rec = sub.add_parser("record", help="Run records: plans, outcomes, ancestry")
   rec.add_argument("--records-root", help="Records directory (default: $RLMCP_RECORDS or ./records)")
   rec.add_argument("--slots", type=int, default=1,
@@ -1297,6 +1310,21 @@ def main(argv: Optional[List[str]] = None) -> int:
   if cmd == "analyze":
     return _analyze_offline(args.trace_path, plot=args.plot,
                             allow_legacy=args.allow_legacy)
+
+  if cmd == "recipe":
+    from rlmcp.records import open_store
+    from rlmcp.records.recipe import build
+
+    store = open_store(getattr(args, "records_root", None),
+                       slots=getattr(args, "slots", 1))
+    out = args.out or (Path(store.root) / f"recipe-{args.record_id}")
+    try:
+      _emit({"ok": True, **build(store, args.record_id, out,
+                                 session_dir=args.from_session)})
+    except ValueError as exc:
+      _emit({"ok": False, "error": str(exc)})
+      return 1
+    return 0
 
   if cmd == "record":
     return _record_command(args)
