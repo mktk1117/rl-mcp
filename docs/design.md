@@ -53,14 +53,20 @@ and dicts, so rlmcp walks them and emits a key for every leaf that is a number, 
 bool or a `[min, max]` pair.
 
 ```
-rlmcp/adapters/mjlab/
-  sim_adapter.py          # thin: implements SimAdapter by delegating
+rlmcp/adapters/manager_based/
   access/                 # parameters: discovery, reads, writes
     paths.py              #   the reflective core: walk, resolve, coerce
     base.py               #   what a provider supplies
     rewards.py  terminations.py  events.py  commands.py  actions.py
-  state/                  # live state: sampling, metrics, rendering
+  sampling.py  metrics.py # live state, read the same way on either backend
+  env_wrapper.py          # servicing, telemetry, curricula, records, clips
+rlmcp/adapters/mjlab/
+  sim_adapter.py          # thin: implements SimAdapter by delegating
+  state/                  # what is mjlab's own: rendering, terrain
 ```
+
+None of that is mjlab's, which is why it does not live there: term configs are
+dataclasses in IsaacLab too, and the same walk finds the same kinds of leaf.
 
 A provider answers one question — *which objects hold tunable values, and what
 are they called* — in 20 to 90 lines. Adding a family means adding a file and one
