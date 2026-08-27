@@ -784,6 +784,57 @@ def test_an_untrained_play_never_looks_for_a_checkpoint(tmp_path, monkeypatch):
   assert looked == []
 
 
+def test_an_untrained_run_asks_for_no_replay_at_all(monkeypatch, play_lab):
+  """The regression: `replay` stayed true with no checkpoint, so the branch
+  that warns "no rlmcp session found next to this checkpoint" ran for a run
+  that never had one -- sending whoever read it looking for a session
+  directory that was never supposed to exist. `--set` still has to arrive."""
+  seen = {}
+
+  def record(cfg, lab, session_dir):
+    seen["cfg"] = cfg
+    raise PlayError("stop here: the conditions are decided")
+
+  monkeypatch.setattr("rlmcp.play._choose_gl_backend", lambda cfg: None)
+  monkeypatch.setattr("rlmcp.play._build_env",
+                      lambda cfg, task, session_dir: (None, play_lab, None, None))
+  monkeypatch.setattr("rlmcp.play._restore_conditions", record)
+
+  with pytest.raises(PlayError, match="stop here"):
+    run_play(PlayConfig(policy="zero", task="Some-Task",
+                        overrides={"reward.action_rate_l2.weight": -0.5}))
+
+  assert seen["cfg"].replay is False
+  assert seen["cfg"].overrides == {"reward.action_rate_l2.weight": -0.5}
+
+
+def test_a_policy_free_run_restores_nothing_and_warns_about_nothing(
+    play_lab, capsys):
+  """What the caller ends up seeing: the task's own play configuration, the
+  `--set` overrides on top, and no note about a missing session."""
+  from rlmcp.play import _restore_conditions
+
+  conditions, restored = _restore_conditions(
+      PlayConfig(policy="zero", task="Some-Task", replay=False,
+                 overrides={"reward.action_rate_l2.weight": -0.5}),
+      play_lab, None)
+
+  assert conditions.warnings == ()
+  assert restored["parameters"] == {"reward.action_rate_l2.weight": -0.5}
+  assert "nothing to replay" not in capsys.readouterr().out
+
+
+def test_a_checkpoint_with_no_session_beside_it_still_warns(play_lab):
+  """The other half of the same branch, and the reason it exists: here the
+  conditions really are missing, and an environment silently back at rung zero
+  makes a good policy look like a bad one."""
+  from rlmcp.play import _restore_conditions
+
+  conditions, _ = _restore_conditions(PlayConfig(quiet=True), play_lab, None)
+
+  assert any("nothing to replay" in w for w in conditions.warnings)
+
+
 def test_the_policy_choice_round_trips_through_the_command_line():
   import argparse
 
