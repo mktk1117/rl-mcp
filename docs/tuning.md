@@ -142,10 +142,15 @@ was sampled once per iteration mid-swing; with 25 consecutive holds required,
 promotion probability was zero for any policy — the fix was averaging over
 every step, not lowering the bar).
 
-Render progress clips during training, on CPU while the GPU trains, from every
-checkpoint. Then verify the watcher actually produced its first clip: one
-wall-clock-keyed watcher produced zero clips across two long runs, and every
-clip that existed had been captured by hand.
+The run films itself while it trains -- [progress
+clips](tools.md#progress-clips-the-ones-you-do-not-have-to-ask-for) at
+iteration 0, 50, 100, 200, 400 ... each one attached to the record -- so the
+trajectory exists without a watcher script. Still verify the first clip
+actually landed (`rlmcp video --schedule`, or the `progress_clip` events): one
+hand-rolled wall-clock-keyed watcher produced zero clips across two long runs,
+and every clip that existed had been captured by hand. A schedule that is
+silently failing says so in `progress_clip_skipped` rather than in the absence
+of files nobody checked for.
 
 Three caveats on curriculum level as evidence: it is blind to falls (one
 terrain family held the second-highest level and the worst fall rate — grade
@@ -182,8 +187,10 @@ being asked to do yet.
 `--set command.assist=1.0` vs `0.0` — measured 75 vs 0 catches/min and
 settled in minutes what the training curves could not.
 
-**Attach what you rendered.** A clip left in `logs/` is not a deliverable;
-register it on the record so the record views can show it.
+**Attach what you rendered.** Progress clips file themselves; anything *you*
+rendered -- a counterfactual, an eval render, the final `play` -- does not. A
+clip left in `logs/` is not a deliverable; register it on the record so the
+record views can show it.
 
 ## 5. Chatter and jerkiness are measured, not seen
 
