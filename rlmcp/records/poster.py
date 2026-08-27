@@ -145,35 +145,66 @@ def ensure_posters(records: Sequence[RunRecord], media_root: Path | str,
     entry = headline_video(record)
     if not entry:
       continue
-    video_key = entry[0]
-    # A record that already names its own still -- a store that extracts one
-    # at attach time, or an import that carried one across -- is believed.
-    if len(entry) > 2 and entry[2]:
-      out[video_key] = entry[2]
-      continue
-    key = poster_key(record.id, video_key)
-    target = _under(root, key)
-    if target is None:
-      continue
-    if target.exists():
-      out[video_key] = key
-      continue
-    if not derive:
-      continue
-    source = _under(root, video_key)
-    if source is None or not source.exists():
-      continue
-    # Written to a scratch file and moved into place, so a render interrupted
-    # half a frame in cannot leave a truncated PNG that every later render
-    # then treats as a cache hit.
-    with tempfile.TemporaryDirectory() as tmp:
-      still = extract_poster(source, Path(tmp) / "poster.png")
-      if still is None:
-        continue
-      try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(still.read_bytes())
-      except OSError:
-        continue
-    out[video_key] = key
+    still = _poster_for(record.id, entry, root, derive=derive)
+    if still:
+      out[entry[0]] = still
   return out
+
+
+def record_posters(record: RunRecord, media_root: Path | str,
+                   derive: bool = True, kind: str = "videos") -> Dict[str, str]:
+  """Stills for *every* clip on one record, keyed by each clip's key.
+
+  The plural of :func:`ensure_posters` along the other axis, and it answers a
+  different question: that one asks "what does each of these runs look like",
+  this one asks "what does this run look like over time". A run that films
+  itself every couple of hundred iterations carries a strip of clips, and a
+  strip is only scannable if each frame shows the robot rather than a row of
+  identical play buttons.
+
+  Same failure policy: anything that cannot be decoded or cached is simply
+  absent from the map.
+  """
+  root = Path(media_root)
+  out: Dict[str, str] = {}
+  for entry in (record.assets or {}).get(kind) or []:
+    if not entry:
+      continue
+    still = _poster_for(record.id, entry, root, derive=derive)
+    if still:
+      out[entry[0]] = still
+  return out
+
+
+def _poster_for(record_id: str, entry: Sequence[str], root: Path,
+                derive: bool) -> Optional[str]:
+  """The cached still for one ``[key, caption]`` asset entry, or None."""
+  video_key = entry[0]
+  # A record that already names its own still -- a store that extracts one
+  # at attach time, or an import that carried one across -- is believed.
+  if len(entry) > 2 and entry[2]:
+    return str(entry[2])
+  key = poster_key(record_id, video_key)
+  target = _under(root, key)
+  if target is None:
+    return None
+  if target.exists():
+    return key
+  if not derive:
+    return None
+  source = _under(root, video_key)
+  if source is None or not source.exists():
+    return None
+  # Written to a scratch file and moved into place, so a render interrupted
+  # half a frame in cannot leave a truncated PNG that every later render then
+  # treats as a cache hit.
+  with tempfile.TemporaryDirectory() as tmp:
+    still = extract_poster(source, Path(tmp) / "poster.png")
+    if still is None:
+      return None
+    try:
+      target.parent.mkdir(parents=True, exist_ok=True)
+      target.write_bytes(still.read_bytes())
+    except OSError:
+      return None
+  return key

@@ -720,6 +720,31 @@ def create_mcp_server(
         seconds=seconds, env_id=env_id, where=where,
     )
 
+  @mcp.tool()
+  def set_progress_video(
+      every: Optional[str] = None,
+      seconds: Optional[float] = None,
+      env_id: Optional[int] = None,
+      budget_mb: Optional[float] = None,
+  ) -> Dict[str, Any]:
+    """Read or change the run's automatic clip schedule.
+
+    A run films itself at iteration 0 and at gaps that double after that --
+    50, 100, 200, 400 ... -- filing each clip in the run record, so its history
+    is watchable without anyone asking for clips. Call with no arguments to see
+    the schedule.
+
+    Args:
+      every: the cadence. "double" (the default), "double:<first>:<cap>", a
+        flat interval like "200", or "0" to stop taking clips. A change takes
+        effect at the next iteration.
+      seconds: length of each clip.
+      env_id: which environment to film.
+      budget_mb: disk the clips may use before the schedule stops itself.
+    """
+    return _call(handle, "progress_video", every=every, seconds=seconds,
+                 env_id=env_id, budget_mb=budget_mb)
+
   # Motion analysis.
 
   @mcp.tool()

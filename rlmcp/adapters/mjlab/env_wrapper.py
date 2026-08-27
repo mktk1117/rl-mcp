@@ -8,6 +8,7 @@ reaches through ``.unwrapped``.
 What it adds:
 
 * per-step hooks that feed traces and video capture,
+* a clip of the policy every so many iterations, filed in the run record,
 * per-iteration servicing of agent commands,
 * accumulation of mjlab's episode logs into rlmcp's telemetry,
 * an optional terrain curriculum that advances itself.
@@ -77,6 +78,10 @@ class RlMcpEnvWrapper:
       records_root: Optional[str] = None,
       record_slot: str = "",
       record_strict: bool = False,
+      video_every: Any = None,
+      video_seconds: float = 4.0,
+      video_env_id: int = 0,
+      video_budget_mb: Optional[float] = None,
   ):
     self.env = env
     self.service_every_steps = max(1, int(service_every_steps))
@@ -95,6 +100,10 @@ class RlMcpEnvWrapper:
         curriculum=None,  # Set below, once extensions can inform the plan.
         trace_capacity=trace_capacity,
         records=records,
+        video_every=video_every,
+        video_seconds=video_seconds,
+        video_env_id=video_env_id,
+        **({} if video_budget_mb is None else {"video_budget_mb": video_budget_mb}),
         session_info={
             # Empty means "a training run", which is what the controller
             # already writes; only a play session needs to say otherwise.
@@ -291,6 +300,18 @@ class RlMcpEnvWrapper:
     """
     adapter = MjlabRunnerAdapter(runner)
     self.rlmcp.attach_runner(adapter)
+
+    # The clip schedule is only decided once the runner says how long the run
+    # is, and a cadence nobody was told about is one nobody trusts.
+    clips = self.rlmcp.progress_video
+    if clips.active:
+      print(
+          f"[rlmcp] progress clips: {clips.seconds:g}s of env {clips.env_id}, "
+          f"{clips.cadence.prose()}; each one is filed in the run record "
+          f"(budget {clips.budget_mb:g} MB). Change it with "
+          "`rlmcp video --every <cadence>`.",
+          flush=True,
+      )
 
     logger = getattr(runner, "logger", None)
     if logger is None or not hasattr(logger, "log"):

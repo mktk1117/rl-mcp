@@ -12,6 +12,7 @@ Stdlib only, so the whole layer works in an interpreter with no simulator:
     run = store.new_record("faster_commands", hypothesis="...", ...)
 """
 
+from rlmcp.records.clips import caption_for, from_record as clips_of, iteration_of
 from rlmcp.records.filestore import FileStore, open_store
 from rlmcp.records.record import (
     FEEDBACK_KINDS,
@@ -58,6 +59,9 @@ __all__ = [
     "VERDICTS",
     "Weights",
     "ancestors",
+    "caption_for",
+    "clips_of",
+    "iteration_of",
     "check_verdict_change",
     "children",
     "fold_recipe",

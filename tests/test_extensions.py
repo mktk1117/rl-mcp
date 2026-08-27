@@ -290,6 +290,7 @@ def watcher_lab(tmp_path, fake_sim, fake_runner):
       runner_adapter=fake_runner,
       session_dir=tmp_path / "watch",
       extensions=[watcher],
+      video_every=0,   # this asserts on the job queue; see test_progress_video
   )
   yield lab, watcher
   lab.paused = False

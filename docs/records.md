@@ -62,6 +62,19 @@ Attach the clip. A video that stays in `logs/` is not a deliverable. `record ass
 copies it into the records' own media store, so the record still has it after
 the training logs are cleaned, and the records page has something to show.
 
+**Progress clips arrive on their own.** A supervised run attaches a clip of
+itself at iteration 0 and at doubling gaps after that -- 50, 100, 200, 400 --
+each captioned `iteration 400`, so `assets.videos` already holds the run's
+trajectory by the time you close it — see [progress clips](tools.md#progress-clips-the-ones-you-do-not-have-to-ask-for).
+`record asset` is still how a *chosen* clip lands: the end-of-run `rlmcp play`
+render, or the one frame of the run worth showing somebody.
+
+A reader wanting the series rather than the attachments asks
+`rlmcp.records.clips_of(record)`, which returns one entry per clip ordered by
+iteration (with `rlmcp.records.poster.record_posters` for the stills). The
+iteration lives in the caption, and that module is the only thing that writes
+or reads that format.
+
 ## Falsifiers
 
 A falsifier is the condition that would prove the run wrong, written down before
