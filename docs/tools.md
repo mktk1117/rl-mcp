@@ -645,11 +645,12 @@ rlmcp play logs/rsl_rl/my_run/model_final_4375.pt --device cpu
 rlmcp play --stage 2_hardest --seconds 12
 rlmcp play --mode native                        # MuJoCo's own viewer
 rlmcp play --mode viser                         # a viewer in the browser
+rlmcp play --task My-Task --policy zero --mode hold   # built, stepping, serving nothing
 ```
 
 | flag | meaning |
 | --- | --- |
-| `--mode video\|native\|viser` | render an mp4 (works over ssh), or open a viewer |
+| `--mode video\|native\|viser\|hold` | render an mp4 (works over ssh), open a viewer, or hold the env open and serve nothing |
 | `--device cpu` | play without touching a GPU that is training |
 | `--stage NAME` | restore conditions as of the end of that stage |
 | `--set KEY=VALUE` | override a parameter after the replay, so it wins. Repeatable |
@@ -658,6 +659,31 @@ rlmcp play --mode viser                         # a viewer in the browser
 | `--task-package MODULE` | import this first so your tasks register. Repeatable |
 | `--num-envs`, `--extra-envs` | how many robots, and how many composited into the frame |
 | `--seconds`, `--fps`, `--out`, `--render-width/-height` | clip options |
+
+### `--mode hold`: an environment to drive rather than watch
+
+The other three modes end with somebody *looking* at the robot — a file, a
+window, a browser tab. `hold` opens nothing. It steps the environment at its
+own control rate and waits, which turns a task into something you can drive
+with everything else rlmcp already has:
+
+```bash
+rlmcp play --task My-Task --policy zero --mode hold --session-dir /tmp/preview &
+rlmcp --session /tmp/preview view --on          # look at it, when you want to
+rlmcp --session /tmp/preview shot               # a frame
+rlmcp --session /tmp/preview set reward.alive.weight 0.5 --why "it just stands"
+rlmcp --session /tmp/preview reset-envs
+rlmcp --session /tmp/preview stop
+```
+
+No renderer, no window, no port, no display, no GPU, and with `--policy zero`
+no checkpoint — which makes it the cheapest way to have a task standing in
+front of you. `--seconds` bounds it; the default is to hold until `rlmcp stop`.
+
+It paces itself to the environment's control rate on purpose. An unpaced hold
+advances simulated time as fast as the machine can integrate it, so a view
+attached to it shows a robot sprinting and anything measured "per second" is
+measuring the machine. If the loop cannot keep up it says so and how often.
 
 ### Why `play` replays the run first
 
