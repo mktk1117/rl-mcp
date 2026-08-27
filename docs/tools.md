@@ -77,6 +77,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 | a graph of them | [`plot`](#plot) | `plot_metrics` |
 | a picture of the robot | [`shot`](#shot) | `take_screenshot` |
 | a clip of the robot | [`video`](#video) | `record_video` |
+| clips taken automatically | [`video --every`](#video) | `set_progress_video` |
 | why does it move badly | [`diagnose`](#diagnose) | `diagnose_motion` |
 | raw per-step signals | [`trace`](#trace), [`plot-trace`](#plot-trace), [`analyze`](#analyze) | `record_trace`, `plot_joint_trace` |
 | what can I tune | [`params`](#params), [`get`](#get) | `list_parameters` |
@@ -214,6 +215,49 @@ rlmcp video --seconds 8 --where terrain=random_rough
 ```
 
 **MCP:** `record_video({"seconds": 4.0, "where": {...}})`
+
+### Progress clips: the ones you do not have to ask for
+
+Every training run films itself. A clip is taken at **iteration 0**, and after
+that at gaps that double -- 50, 100, 200, 400, 800, 1600 -- so the clips are
+minutes apart while the behaviour is changing fastest and thin out on their own
+later. Each is copied into the run record captioned with its iteration, so a
+finished record holds the run's trajectory as something you can watch, in
+order, without anyone having remembered to type `rlmcp video` at the right
+moment.
+
+```
+0   50   100   200   400   800   1600   3200   5200   7200 …
+└────────── gaps double ─────────┘      └─── every 2000 ──┘
+```
+
+The gap stops doubling at 2 000 so a long run still shows what it is doing
+*now* rather than a clip from days ago.
+
+```bash
+rlmcp video --schedule            # cadence, next iteration, clips taken, MB spent
+rlmcp video --every 50            # flat: every 50 iterations from here
+rlmcp video --every double:200    # doubling, starting at 200
+rlmcp video --every 0             # off
+rlmcp video --budget-mb 500       # let the clips use more disk
+rlmcp-train <task> --video-every double --video-seconds 4      # at launch
+```
+
+`--video-every` / `--every` / `wrap(video_every=…)` / `set_progress_video` all
+take the same value: `double`, `double:<first>:<cap>`, a flat interval like
+`200`, or `0`. Anything else is refused with the reason rather than rounded
+into a different schedule.
+
+**What it costs.** Frames are rendered during the training rollout, one per
+environment step, so a clip shows the actual training environment --
+exploration noise, curriculum stage and all -- and costs a render per step only
+while it is collecting. On disk, doubling keeps a 50 000-iteration run to about
+thirty clips; on top of that a **200 MB budget** per run stops the schedule and
+says so (`--video-budget-mb`, `0` for no limit).
+
+A scheduled clip never takes the last deferred-job slot from a command you are
+waiting on; if it cannot start it says so in the events
+(`progress_clip_skipped`) and waits for the next gap.
 
 ## `diagnose`
 

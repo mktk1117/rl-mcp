@@ -28,6 +28,8 @@ from rlmcp.core import diagnostics as diag
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.core.extensions import Extension, ExtensionContext, ExtensionRegistry
 from rlmcp.core.parameters.registry import ParameterRegistry
+from rlmcp.core.progress_video import DEFAULT_BUDGET_MB, ProgressVideoSchedule
+from rlmcp.records.clips import PROGRESS_STEM
 from rlmcp.core.telemetry.buffer import TelemetryBuffer
 from rlmcp.core.telemetry import plotter
 from rlmcp.core.telemetry.trace import TraceRecorder
@@ -169,11 +171,19 @@ class _VideoJob(DeferredJob):
       fps: int,
       seconds: float,
       where: Optional[Dict[str, Any]],
+      stem: str = "clip",
+      label_iteration: Optional[int] = None,
   ):
     super().__init__(env_id=env_id, steps_needed=steps_needed)
     self.fps = int(fps)
     self.seconds = float(seconds)
     self.where = where
+    self.stem = stem
+    # Which iteration the clip is *of*. A clip collects for a few hundred
+    # steps, so by the time it encodes the run has moved on; naming the file
+    # after the iteration it was asked for is what makes a directory of them
+    # sort into the order they were taken.
+    self.label_iteration = label_iteration
     self.frames: List[np.ndarray] = []
 
   def feed(self, lab: "RlMcp") -> None:
@@ -187,7 +197,8 @@ class _VideoJob(DeferredJob):
       raise RuntimeError("No frames captured; is render_mode='rgb_array' enabled?")
     import imageio.v2 as imageio
 
-    path = lab._artifact(f"clip_env{self.env_id}", ".mp4")
+    path = lab._artifact(
+        f"{self.stem}_env{self.env_id}", ".mp4", iteration=self.label_iteration)
     frames = [np.asarray(f).astype(np.uint8) for f in self.frames]
     fps = self.fps
     faststart = True
@@ -218,6 +229,63 @@ class _VideoJob(DeferredJob):
         "where": self.where,
         "note": self.error,
     }
+
+
+class _ProgressVideoJob(_VideoJob):
+  """A scheduled clip: the same job, plus filing the result where it belongs.
+
+  Nothing about the capture differs from an asked-for clip -- that is the point
+  of it being a subclass. What it adds is what a human would have had to do
+  afterwards and would not have: file the mp4 on the run record, and announce
+  it so a watching GUI shows it as it lands. Filing failures are notes, never
+  exceptions -- a records hiccup must not fail a job whose output exists.
+  """
+
+  kind = "progress_video"
+
+  def __init__(self, env_id: int, steps_needed: int, fps: int, seconds: float,
+               iteration: int):
+    super().__init__(
+        env_id=env_id, steps_needed=steps_needed, fps=fps, seconds=seconds,
+        where=None, stem=PROGRESS_STEM, label_iteration=iteration,
+    )
+    self.iteration = int(iteration)
+
+  def complete(self, lab: "RlMcp") -> Dict[str, Any]:
+    try:
+      result = super().complete(lab)
+    except Exception as exc:
+      lab._progress_clip_failed(self.iteration, f"{type(exc).__name__}: {exc}")
+      raise
+    result["iteration"] = self.iteration
+    result["scheduled"] = True
+    result["asset_key"] = lab._file_progress_clip(
+        result["video_path"], self.iteration)
+    # Measured, not derived from the rounded size_mb the payload shows: the
+    # budget is only a guard if what it counts is the actual bytes on disk.
+    try:
+      size_bytes = Path(result["video_path"]).stat().st_size
+    except OSError:
+      size_bytes = 0
+    spent = lab.progress_video.completed(
+        self.iteration, result["video_path"], size_bytes=size_bytes)
+    lab.session.append_event(
+        "progress_clip",
+        {"iteration": self.iteration, "video_path": result["video_path"],
+         "asset_key": result["asset_key"], "seconds": result["seconds"],
+         "env_id": self.env_id, "size_bytes": size_bytes,
+         "total_mb": lab.progress_video.megabytes},
+    )
+    if spent:
+      result["note"] = spent
+      lab.session.append_event(
+          "progress_clips_stopped",
+          {"iteration": self.iteration, "reason": spent,
+           "clips": lab.progress_video.count,
+           "megabytes": lab.progress_video.megabytes},
+      )
+      print(f"[rlmcp] {spent}", flush=True)
+    return result
 
 
 class _TraceJob(DeferredJob):
@@ -315,6 +383,10 @@ class RlMcp:
       trace_capacity: int = 6000,
       extensions: Optional[Sequence[Extension]] = None,
       records: Optional[Any] = None,
+      video_every: Any = None,
+      video_seconds: float = 4.0,
+      video_env_id: int = 0,
+      video_budget_mb: float = DEFAULT_BUDGET_MB,
   ):
     self.sim = sim_adapter
     self.runner = runner_adapter
@@ -330,6 +402,13 @@ class RlMcp:
     )
     self.parameters = ParameterRegistry()
     self.telemetry = TelemetryBuffer(maxlen=20000, on_drop=self._on_telemetry_drop)
+
+    # Progress clips: one at iteration 0, then gaps that double -- 50, 100,
+    # 200, 400 ... See rlmcp.core.progress_video for the cadence vocabulary;
+    # `video_every=0` turns them off, and the budget bounds what they cost.
+    self.progress_video = ProgressVideoSchedule(
+        every=video_every, seconds=video_seconds, env_id=video_env_id,
+        budget_mb=video_budget_mb)
 
     # Ceiling on steps per trace job; each job allocates its own recorder.
     self._trace_capacity = int(trace_capacity)
@@ -525,6 +604,9 @@ class RlMcp:
     # same tick.
     self._advance_curriculum(merged)
     self._drain_inbox()
+    # After the inbox, never before it: a scheduled clip must not take the
+    # last deferred-job slot from a command somebody is waiting on.
+    self._maybe_start_progress_clip()
     self._publish_status()
 
     # Pause loop: keep answering commands so the agent can inspect and resume.
@@ -708,10 +790,66 @@ class RlMcp:
         self._respond_job(job, ok=False, error=f"{type(exc).__name__}: {exc}")
     self._jobs = remaining
 
+  # Progress clips.
+
+  def _maybe_start_progress_clip(self) -> None:
+    """Start the scheduled clip, if one is due at this iteration.
+
+    Refusals are absorbed here on purpose: a clip that cannot start -- job cap
+    full, run paused, backend cannot render -- is an event and a skipped count,
+    never an exception reaching the training loop. The schedule still advances,
+    so a busy run waits for the next gap instead of retrying every iteration.
+    """
+    schedule = self.progress_video
+    if not schedule.due(self.iteration):
+      return
+    iteration = self.iteration
+    schedule.fired(iteration)
+    try:
+      job = self._build_progress_clip_job(iteration)
+      self.submit_job(job)
+    except Exception as exc:
+      self._progress_clip_failed(iteration, f"{type(exc).__name__}: {exc}")
+
+  def _progress_clip_failed(self, iteration: int, reason: str) -> None:
+    """One clip that did not happen, counted and said in the event log."""
+    self.progress_video.failed(iteration, reason)
+    self.session.append_event(
+        "progress_clip_skipped", {"iteration": iteration, "reason": reason})
+
+  def _build_progress_clip_job(self, iteration: int) -> DeferredJob:
+    schedule = self.progress_video
+    dt = self._safe(self.sim.step_dt, 0.02)
+    seconds = float(min(max(schedule.seconds, 0.2), _MAX_VIDEO_SECONDS))
+    return _ProgressVideoJob(
+        env_id=schedule.env_id,
+        steps_needed=max(1, int(round(seconds / dt))),
+        fps=int(round(1.0 / dt)),
+        seconds=seconds,
+        iteration=iteration,
+    )
+
+  def _file_progress_clip(self, path: str, iteration: int) -> str:
+    """Copy a finished clip into the run record. Returns the asset key or ""."""
+    if self.records is None:
+      return ""
+    from rlmcp.records.clips import caption_for
+
+    return self.records.attach_asset(
+        path, caption=caption_for(iteration), kind="videos") or ""
+
   # Artifacts.
 
-  def _artifact(self, stem: str, suffix: str) -> Path:
-    return self.session.artifact_path(f"{stem}_it{self.iteration:06d}{suffix}")
+  def _artifact(self, stem: str, suffix: str,
+                iteration: Optional[int] = None) -> Path:
+    """A session artifact path, stamped with the iteration it belongs to.
+
+    ``iteration`` overrides the current one for an artifact that is *about* an
+    earlier iteration -- a clip that took a few hundred steps to collect
+    belongs to the iteration it started at, not the one it finished in.
+    """
+    stamp = self.iteration if iteration is None else int(iteration)
+    return self.session.artifact_path(f"{stem}_it{stamp:06d}{suffix}")
 
   def write_artifact(self, stem: str, suffix: str, payload: bytes) -> Path:
     """Save bytes as a session artifact. Extensions use this for their plots."""
@@ -790,6 +928,7 @@ class RlMcp:
         "plot_metrics": self.cmd_plot_metrics,
         "screenshot": self.cmd_screenshot,
         "record_video": self.cmd_record_video,
+        "progress_video": self.cmd_progress_video,
         "record_trace": self.cmd_record_trace,
         "plot_trace": self.cmd_plot_trace,
         "diagnose": self.cmd_diagnose,
@@ -848,6 +987,7 @@ class RlMcp:
         "renderer_built": bool(self._safe(
             getattr(self.sim, "renderer_ready", lambda: False), False)),
         "pending_jobs": [j.describe() for j in self._jobs],
+        "progress_video": self.progress_video.describe(),
     }
     if self.curriculum is not None:
       payload["curriculum"] = self.curriculum.status(self.iteration)
@@ -1124,6 +1264,31 @@ class RlMcp:
         seconds=seconds,
         where=where,
     )
+
+  def cmd_progress_video(
+      self,
+      every: Any = None,
+      seconds: Optional[float] = None,
+      env_id: Optional[int] = None,
+      budget_mb: Optional[float] = None,
+  ) -> Dict[str, Any]:
+    """Read or change the automatic clip schedule (``every=0`` turns it off).
+
+    Called with nothing, this reports the schedule. ``every`` is ``"double"``
+    (gaps of 50, 100, 200, 400 ...), ``"double:<first>:<cap>"``, or a flat
+    interval like ``200``; a change takes effect at the next iteration rather
+    than at the end of the current gap.
+    """
+    self.progress_video.configure(
+        every=every, seconds=seconds, env_id=env_id, budget_mb=budget_mb,
+        iteration=self.iteration,
+    )
+    if every is not None or budget_mb is not None:
+      self.session.append_event(
+          "progress_video_configured",
+          {"iteration": self.iteration, **self.progress_video.describe()},
+      )
+    return self.progress_video.describe()
 
   def cmd_record_trace(
       self,

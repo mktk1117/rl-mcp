@@ -79,6 +79,9 @@ runner.save(str(log_dir / f"model_final_{runner.current_learning_iteration}.pt")
 | `record_run` | `None` | the record id this run fills |
 | `records_root` | `$RLMCP_RECORDS` | where records live |
 | `record_slot` | `""` | resource lease to claim, e.g. `gpu0` |
+| `video_every` | `"double"` | the [progress-clip](tools.md#progress-clips-the-ones-you-do-not-have-to-ask-for) cadence: `"double"` (0, 50, 100, 200, 400 …), a flat `200`, or `0` to turn them off |
+| `video_seconds` | `4.0` | how long each progress clip is |
+| `video_budget_mb` | `200` | disk the clips may use before the schedule stops itself |
 | `robot_name`, `trace_capacity` | auto, `6000` | rarely needed |
 
 ### Three things worth saying out loud
@@ -89,7 +92,9 @@ matters. Without `attach_runner` you still get parameters, metrics, video and
 curricula. You lose the PPO knobs, checkpointing and `stop`.
 
 **`render_mode=None` is fine.** rlmcp renders through the offscreen renderer for
-`shot` and `video` and does not need the environment's own render mode.
+`shot` and `video` and does not need the environment's own render mode. Note
+that progress clips build that renderer at iteration 0 of every run, so its GPU
+memory is now part of a normal run's footprint; `video_every=0` opts out.
 
 **`rlmcp stop` arrives as an exception.** rsl_rl's `learn()` has no stop hook, so
 the request is raised as `TrainingStopped` inside it. Catch it and save: an

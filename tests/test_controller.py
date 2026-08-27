@@ -64,6 +64,10 @@ def lab(tmp_path, fake_sim, fake_runner, fake_terrain) -> RlMcp:
       session_dir=tmp_path / "session",
       curriculum=_plan(),
       extensions=[fake_terrain],
+      # No progress clips: these fixtures assert on the deferred-job
+      # queue, and a scheduled clip sitting in it is noise. Clips have
+      # their own suite (tests/test_progress_video.py).
+      video_every=0,
   )
   yield controller
   controller.close()
@@ -76,6 +80,7 @@ def bare_lab(tmp_path, fake_sim, fake_runner) -> RlMcp:
       sim_adapter=fake_sim,
       runner_adapter=fake_runner,
       session_dir=tmp_path / "bare",
+      video_every=0,
   )
   yield controller
   controller.close()

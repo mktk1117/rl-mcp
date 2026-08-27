@@ -39,7 +39,7 @@ run from there.
 rlmcp status                                   # iteration, stage, headline metrics
 rlmcp diagnose --seconds 4                     # is the gait smooth? is it tracking?
 rlmcp shot --where terrain=pyramid_stairs      # look at a robot on the stairs
-rlmcp video --seconds 5
+rlmcp video --seconds 5                        # and one at 0, 50, 100, 200 … unasked
 rlmcp set reward.action_rate_l2.weight -0.25 --why "ankles chattering at 15 Hz"
 rlmcp run set_terrain terrains='["flat","random_rough"]' max_level=4
 rlmcp curriculum advance --why "flat is solved"

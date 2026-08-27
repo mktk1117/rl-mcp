@@ -62,6 +62,20 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                            "the first screenshot. Costs GPU memory for the whole "
                            "run; only needed if something outside rlmcp calls "
                            "env.render() before rlmcp does.")
+  parser.add_argument(
+      "--video-every", default=None, metavar="CADENCE",
+      help="How often the run films itself, starting at iteration 0, with "
+           "every clip attached to the run record. Default 'double': clips at "
+           "0, 50, 100, 200, 400 ... each gap twice the last, never more than "
+           "2000 apart. Also takes 'double:<first>:<cap>', a flat interval "
+           "('200'), or '0' to turn progress clips off.",
+  )
+  parser.add_argument("--video-seconds", type=float, default=4.0,
+                      help="Length of each progress clip")
+  parser.add_argument("--video-budget-mb", type=float, default=None,
+                      metavar="MB",
+                      help="Stop taking progress clips once they have used "
+                           "this much disk (default 200; 0 for no limit)")
   parser.add_argument("--save-interval", type=int, default=None)
   parser.add_argument("--resume", default="", help="Checkpoint path to resume from")
   parser.add_argument(
@@ -86,6 +100,16 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
   args = _parse_args(argv)
+
+  # Checked before anything expensive starts: a mistyped cadence should cost a
+  # line, not a traceback out of the middle of environment construction.
+  from rlmcp.core.progress_video import Cadence, CadenceError
+
+  try:
+    Cadence.parse(args.video_every)
+  except CadenceError as exc:
+    print(f"[rlmcp-train] --video-every: {exc}")
+    return 2
 
   # Must precede the first mujoco import so the GL backend is picked correctly.
   os.environ.setdefault("MUJOCO_GL", "egl")
@@ -178,6 +202,9 @@ def main(argv: Optional[List[str]] = None) -> int:
       records_root=args.records_root or None,
       record_slot=args.record_slot,
       record_strict=args.record_strict,
+      video_every=args.video_every,
+      video_seconds=args.video_seconds,
+      video_budget_mb=args.video_budget_mb,
       curriculum_kwargs={
           "min_iterations": args.stage_min_iterations,
           "hold_iterations": args.stage_hold_iterations,

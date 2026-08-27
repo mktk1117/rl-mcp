@@ -728,6 +728,9 @@ def _build_env(
       curriculum=None,  # A replay is not a ladder; nothing here promotes.
       task_id=task,
       session_kind=PLAY_SESSION_KIND,
+      # A replay is already the clip. Progress clips exist so a *training* run
+      # films itself; taking them here would film a rendering of a rendering.
+      video_every=0,
   )
   vec_env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
   return env, env.rlmcp, agent_cfg, vec_env

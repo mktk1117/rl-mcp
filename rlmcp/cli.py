@@ -903,11 +903,23 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument("--where", nargs="*", metavar="KEY=VALUE",
                  help="Pick an env by description, e.g. terrain=pyramid_stairs level=2")
 
-  p = sub.add_parser("video", help="Record a short clip of training")
+  p = sub.add_parser(
+      "video", help="Record a short clip of training, or set the clip schedule",
+      description="With no --every, records one clip now. With --every N, "
+                  "changes the automatic schedule the run is already taking "
+                  "clips on (0 turns it off) and reports it.",
+  )
   p.add_argument("--seconds", type=float, default=4.0)
   p.add_argument("--env-id", type=int)
   p.add_argument("--where", nargs="*", metavar="KEY=VALUE",
                  help="Pick an env by description, e.g. terrain=pyramid_stairs level=2")
+  p.add_argument("--every", metavar="CADENCE",
+                 help="Change the automatic cadence: 'double' (0, 50, 100, 200, "
+                      "400 ...), 'double:<first>:<cap>', a flat '200', or '0'")
+  p.add_argument("--budget-mb", type=float,
+                 help="Disk the progress clips may use before they stop")
+  p.add_argument("--schedule", action="store_true",
+                 help="Report the automatic clip schedule without recording")
 
   p = sub.add_parser(
       "play",
@@ -1344,6 +1356,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     return _call(session, "screenshot", timeout, env_id=args.env_id,
                  where=_kv_pairs(args.where) or None)
   if cmd == "video":
+    if args.every is not None or args.budget_mb is not None or args.schedule:
+      return _call(session, "progress_video", timeout, every=args.every,
+                   seconds=args.seconds if args.every is not None else None,
+                   env_id=args.env_id, budget_mb=args.budget_mb)
     return _call(session, "record_video", max(timeout, args.seconds * 20 + 60),
                  seconds=args.seconds, env_id=args.env_id,
                  where=_kv_pairs(args.where) or None)

@@ -69,6 +69,7 @@ class RecordLink:
     self._last_heartbeat = 0.0
     self._config_pending = False
     self._config_warned = False
+    self._asset_warned = False
 
     if record_id:
       self.record = store.get_record(record_id)
@@ -192,6 +193,47 @@ class RecordLink:
           self.record = refreshed
     except Exception:
       pass  # A records hiccup must never stall training.
+
+  def attach_asset(
+      self, path: str, caption: str = "", kind: str = "videos"
+  ) -> Optional[str]:
+    """Copy an artifact into the record's media store and list it.
+
+    This is how evidence produced *during* a run reaches the record without
+    anyone typing ``rlmcp record asset`` afterwards -- which is the moment it
+    was reliably not typed. The file is copied, so a clip survives the log
+    directory being cleaned up.
+
+    Returns the media key, or ``None`` when there is no record to attach to or
+    the write failed. Never raises: a records hiccup must not fail a job whose
+    output already exists on disk.
+    """
+    if self.record is None:
+      return None
+    try:
+      key = self.store.media.put(self.record.id, str(path), caption, kind)
+
+      def add_asset(record: RunRecord) -> Any:
+        entries = record.assets.setdefault(kind, [])
+        # Idempotent: re-filing the same key (a retried write, a re-run of the
+        # same iteration after a resume) must not list the clip twice.
+        if any(entry and entry[0] == key for entry in entries):
+          return False
+        entries.append([key, caption])
+
+      updated = self.store.update_record(self.record.id, add_asset)
+      if updated is not None:
+        self.record = updated
+      return key
+    except Exception as exc:
+      if not self._asset_warned:
+        self._asset_warned = True
+        self._warn(
+            f"[rlmcp] could not attach {Path(path).name} to record "
+            f"{self.record.id} ({exc}); the file is still in the session's "
+            "artifacts directory."
+        )
+      return None
 
   def finish(self, reason: str = "") -> None:
     """Release the slot. The verdict stays for an explicit close-out."""
