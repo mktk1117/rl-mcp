@@ -1038,6 +1038,9 @@ def build_parser() -> argparse.ArgumentParser:
 
   p = sub.add_parser("events", help="Show recent session events")
   p.add_argument("--last-n", type=int, default=25)
+  p.add_argument("--interventions", action="store_true",
+                 help="Only what was done to the run -- parameter edits, stage "
+                      "changes, checkpoints, notes -- each with its reason")
 
   p = sub.add_parser("stop", help="Stop a run -- or a play session -- cleanly")
   p.add_argument("--why", default="")
@@ -1327,6 +1330,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     _emit({"session": str(session.dir), **session.info()}, command="info")
     return 0
   if cmd == "events":
+    if args.interventions:
+      from rlmcp.records.interventions import from_events
+
+      chosen = from_events(session.events())
+      _emit({"count": len(chosen), "interventions": chosen[-args.last_n:]})
+      return 0
     _emit(session.events(last_n=args.last_n), command="events")
     return 0
   if cmd == "params" and not args.live:
