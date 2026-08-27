@@ -183,6 +183,7 @@ claude mcp add rlmcp -- rlmcp-server --root /path/to/logs
 ## Try it
 
 ```bash
+rlmcp tasks         # which ids exist here, before anything has run
 # train, with the terrain ladder driving itself
 rlmcp-train Mjlab-Velocity-Rough-Unitree-G1 --num-envs 4096
 ```

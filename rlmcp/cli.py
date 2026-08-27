@@ -888,6 +888,12 @@ def build_parser() -> argparse.ArgumentParser:
   sub.add_parser("serve", help="Run the MCP server over stdio", add_help=False)
 
   sub.add_parser("sessions", help="List known sessions and whether they are live")
+
+  p = sub.add_parser("tasks", help="List task ids this environment can drive")
+  p.add_argument("--task-package", action="append", default=[], metavar="MODULE",
+                 help="Import this module first, so its tasks register. Repeatable.")
+  p.add_argument("--contains", default="",
+                 help="Only ids containing this text, case-insensitively")
   sub.add_parser("status", help="Show live training status (reads status.json)")
   sub.add_parser("help", help="List the commands the running trainer accepts")
   sub.add_parser("info", help="Show static session info")
@@ -1216,6 +1222,46 @@ def main(argv: Optional[List[str]] = None) -> int:
   timeout = args.timeout
   _MODE = cli_output.resolve_mode(getattr(args, "output", None))
   _OPEN = cli_output.resolve_open(getattr(args, "open_policy", None))
+
+  if cmd == "tasks":
+    # The one command with no session: it answers what *could* run, which is
+    # the question a task being built has no session to answer. Importing a
+    # simulator costs seconds, so it happens here rather than at module load.
+    from rlmcp import tasks as task_registry
+
+    payload = task_registry.registered(args.task_package, args.contains)
+    _emit(payload, command="tasks")
+
+    # A package that would not import is the usual reason an id is missing, and
+    # it is invisible in the list itself -- the task is simply not there.
+    failed = [e for e in payload["packages"] if not e["imported"]]
+    for entry in failed:
+      print(cli_output.note(
+          f"[rlmcp] '{entry['module']}' did not import, so its tasks are "
+          f"missing from this list: {entry['error']}"), file=sys.stderr)
+
+    if payload["tasks"]:
+      return 1 if failed else 0
+
+    # Nothing to show, and three different reasons for it.
+    total = sum(b["tasks"] for b in payload["backends"])
+    live = [b for b in payload["backends"] if b["available"]]
+    if not live:
+      print(cli_output.note(
+          "[rlmcp] no backend here can list tasks: "
+          + "; ".join(f"{b['backend']} {b['reason']}" for b in payload["backends"])),
+          file=sys.stderr)
+    elif args.contains and total:
+      print(cli_output.note(
+          f"[rlmcp] no task id contains '{args.contains}'; {total} registered "
+          "here. Drop --contains to see them."), file=sys.stderr)
+    else:
+      print(cli_output.note(
+          "[rlmcp] nothing imported here registers a task. Pass "
+          f"--task-package <module>, or set ${task_registry.TASK_PACKAGES_ENV}, "
+          "naming the package whose import registers yours -- the same package "
+          "`rlmcp train --task-package` is given."), file=sys.stderr)
+    return 1
 
   if cmd == "sessions":
     from rlmcp import registry

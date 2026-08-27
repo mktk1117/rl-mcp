@@ -269,6 +269,7 @@ ENVELOPE = "envelope"  # {"ok": ..., "result": ...} / {"ok": false, "error": ...
 
 SHAPES = {
     "sessions": LIST,
+    "tasks": BARE,         # answered from the registry; there may be no session
     "events": LIST,
     "status": BARE,
     "info": BARE,
