@@ -75,6 +75,55 @@ iteration (with `rlmcp.records.poster.record_posters` for the stills). The
 iteration lives in the caption, and that module is the only thing that writes
 or reads that format.
 
+## What the code was: the other half of a recipe
+
+The records fold *config* edits from the root down to a node and call that the
+recipe. Code changes were invisible to it — which is why the run that mattered
+most in the reorient campaign was the one the graph could not explain: three
+runs re-priced rewards and failed, the fourth changed the action interface (an
+EMA filter, a code change) and went from 1.1 to 16.8 goals per minute.
+
+So a run stamps its package at launch:
+
+```bash
+rlmcp-train <task> --record-run 011 --code-root ~/Claude/rl-mcp-tasks
+```
+
+`--code-root` defaults to the directory you launched from, and `--code-root ""`
+turns the stamp off. What lands on the record is two facts:
+
+```jsonc
+"code": {
+  "head": {"commit": "9f2c1ab", "short": "9f2c1ab", "branch": "main",
+           "pushed": true, "remote": "origin/main"},
+  "tree": "a3f1c9e…", "clean": false,
+  "dirty": {"files": 2, "added": 14, "removed": 3},
+  "files": 37, "ref": "refs/rlmcp/runs/011"
+}
+```
+
+**`head` is the anchor** a reader cites — *"9f2c1ab + 14 uncommitted lines"* —
+and what somebody else can fetch. **`tree` is the truth**: a real git tree
+object written with plumbing, so HEAD never moves, no branch appears, and the
+content survives its commit being rebased, amended or dropped. A ref under
+`refs/rlmcp/runs/` keeps it through `git gc`, and nothing else in the repository
+is touched. A clean tree is the object git already stored, so the common case
+costs nothing.
+
+```bash
+rlmcp record code 011                      # what that run launched with
+rlmcp record code 011 --against 008 --patch # what changed, code-wise, since 008
+rlmcp record code 011 --restore /tmp/as-it-ran
+```
+
+Whatever the repository ignores — logs, checkpoints, `.venv` — is ignored here
+too. A run launched outside a git repository records `{"kind": "none"}` and the
+reason: provenance is worth having, and never worth a failed launch.
+
+Whitespace-only changes are *marked*, never dropped. Deciding whether an edit
+changes behaviour is undecidable in general, so the honest version records
+everything and lets a viewer grey the noise.
+
 ## Falsifiers
 
 A falsifier is the condition that would prove the run wrong, written down before

@@ -89,6 +89,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 | pause, resume, stop | [`pause`](#pause-resume-step-once) | `pause_training`, `resume_training`, `stop_training` |
 | write something down | [`note`](#note), [`feedback`](#feedback), [`events`](#events) | `add_note`, `record_feedback`, `get_events` |
 | watch a finished run | [`play`](#play) | (CLI only) |
+| what code a run used | [`record code`](records.md#what-the-code-was-the-other-half-of-a-recipe) | (CLI only) |
 | the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
 
 ---

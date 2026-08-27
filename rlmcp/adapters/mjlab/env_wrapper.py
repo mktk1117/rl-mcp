@@ -78,6 +78,7 @@ class RlMcpEnvWrapper:
       records_root: Optional[str] = None,
       record_slot: str = "",
       record_strict: bool = False,
+      code_root: Optional[str] = None,
       video_every: Any = None,
       video_seconds: float = 4.0,
       video_env_id: int = 0,
@@ -91,7 +92,8 @@ class RlMcpEnvWrapper:
 
     from rlmcp.records.link import open_link
 
-    records = open_link(record_run, root=records_root, slot=record_slot, strict=record_strict)
+    records = open_link(record_run, root=records_root, slot=record_slot,
+                        strict=record_strict, code_root=code_root)
 
     self.rlmcp = RlMcp(
         sim_adapter=sim_adapter,
