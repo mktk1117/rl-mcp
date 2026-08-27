@@ -888,6 +888,10 @@ def build_parser() -> argparse.ArgumentParser:
   sub.add_parser("serve", help="Run the MCP server over stdio", add_help=False)
 
   sub.add_parser("sessions", help="List known sessions and whether they are live")
+
+  p = sub.add_parser("check", help="Verify a task before training on it")
+  from rlmcp import check as check_module
+  check_module.add_arguments(p)
   sub.add_parser("status", help="Show live training status (reads status.json)")
   sub.add_parser("help", help="List the commands the running trainer accepts")
   sub.add_parser("info", help="Show static session info")
@@ -1216,6 +1220,24 @@ def main(argv: Optional[List[str]] = None) -> int:
   timeout = args.timeout
   _MODE = cli_output.resolve_mode(getattr(args, "output", None))
   _OPEN = cli_output.resolve_open(getattr(args, "open_policy", None))
+
+  if cmd == "check":
+    # No session: this runs before anything has trained, which is the point.
+    # The envelope is `play`'s, for the same reason -- a command that stands in
+    # for a trainer that is not there yet.
+    from rlmcp import check as check_module
+
+    try:
+      answer = check_module.run_check(check_module.config_from_args(args))
+    except check_module.CheckError as exc:
+      # 1, not 2: the same refusal envelope `play` and `analyze` return when
+      # they cannot start, and the same exit code.
+      _emit({"ok": False, "error": str(exc)}, command="check")
+      return 1
+    _emit({"ok": True, "result": answer}, command="check")
+    # The verdict is the exit code, so `rlmcp check && rlmcp train` is a
+    # sentence somebody can write.
+    return 0 if answer["passed"] else 1
 
   if cmd == "sessions":
     from rlmcp import registry

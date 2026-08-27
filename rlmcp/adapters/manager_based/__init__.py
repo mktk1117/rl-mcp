@@ -15,5 +15,7 @@ the others do not.
 from rlmcp.adapters.manager_based.access import ParameterAccess
 from rlmcp.adapters.manager_based.metrics import summary_metrics
 from rlmcp.adapters.manager_based.sampling import StateSampler
+from rlmcp.adapters.manager_based.terms import reward_terms, termination_terms
 
-__all__ = ["ParameterAccess", "StateSampler", "summary_metrics"]
+__all__ = ["ParameterAccess", "StateSampler", "reward_terms", "summary_metrics",
+           "termination_terms"]
