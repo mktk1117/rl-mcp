@@ -147,6 +147,7 @@ def build(store: Any, record_id: str, out: Path | str,
   out.mkdir(parents=True, exist_ok=True)
 
   records = {r.id: r for r in store.list_records()}
+  chain = phase_chain(record, records)
   session = Path(session_dir or record.session or "")
   interventions, ladder, entered = _history(session)
   schedule = distil(interventions, ladder, entered)
@@ -178,6 +179,10 @@ def build(store: Any, record_id: str, out: Path | str,
   return {
       "record": record.id,
       "path": str(out),
+      # The segments this recipe covers: a reader can check at a glance that a
+      # branch point and a from-scratch restart were resolved the way they
+      # expect, without opening phases.md.
+      "phases": [node.id for node in chain],
       "stages": [s.name for s in schedule.stages],
       "interventions": len(interventions),
       "package": str(package) if package else "",
@@ -233,35 +238,91 @@ def _expectations(record: RunRecord) -> Dict[str, Any]:
   }
 
 
-def _phases(record: RunRecord, records: Dict[str, RunRecord]) -> str:
-  """The warm-start chain, flattened: every segment this policy came through."""
+def phase_chain(record: RunRecord,
+                records: Dict[str, RunRecord]) -> List[RunRecord]:
+  """The training segments this policy actually came through, oldest first.
+
+  Walk the warm-start edges back and **stop at the last from-scratch run**,
+  because that is where this policy began. Given
+
+      1 -> 2 -> 3 (from scratch) -> 4 -> 5 -> 7
+
+  the chain for 7 is ``3, 4, 5, 7``. Runs 1 and 2 are ancestors of 3's
+  *config*, and their weights were thrown away when 3 restarted -- replaying
+  them would be replaying history that this policy does not contain. Sibling
+  branches (a 6 that also came off 5) are not on the path to 7 and are not
+  here either.
+
+  A warm start pointing at a record this store does not have ends the walk: an
+  honest short chain beats a chain with a hole in it. Cycles end it too.
+  """
   chain: List[RunRecord] = []
   current: Optional[RunRecord] = record
-  seen = set()
+  seen: set = set()
   while current is not None and current.id not in seen:
     seen.add(current.id)
     chain.append(current)
     weights = current.weights
     current = records.get(weights.run) if weights else None
   chain.reverse()
+  return chain
+
+
+def config_history(chain: List[RunRecord],
+                   records: Dict[str, RunRecord]) -> List[Any]:
+  """The config changes worth reading, folded down to the target.
+
+  The full fold walks the *parent* chain to the config root, which for a policy
+  that restarted from scratch reaches back past the restart -- and the changes
+  before it are already baked into the snapshot in ``config.json``. So the fold
+  is cut at the run the training actually started from. What is left is the
+  history that produced this policy, and nothing that did not.
+  """
+  if not chain:
+    return []
+  full = fold_recipe(chain[-1].id, records)
+  ids = [rid for rid, _ in full]
+  root = chain[0].id
+  return full[ids.index(root):] if root in ids else full
+
+
+def _phases(record: RunRecord, records: Dict[str, RunRecord]) -> str:
+  """The warm-start chain, flattened, and how to run each segment."""
+  chain = phase_chain(record, records)
 
   lines = [f"# Phases for {record.display()}", ""]
   if len(chain) == 1:
     lines += ["This policy was trained from scratch: one phase, no warm start.",
               ""]
   else:
-    lines += [f"This policy came through {len(chain)} training segments. Each "
-              "one starts from the weights of the one before it.", ""]
+    lines += [
+        f"This policy came through {len(chain)} training segments. Each one "
+        "starts from the weights of the one before it, so reproducing it means "
+        "running them in order -- one launch per phase, each warm-started from "
+        "the checkpoint the previous phase left.", "",
+        "Anything earlier than phase 1 is deliberately absent: the policy "
+        "restarted from scratch there, so nothing before it survives in these "
+        "weights. Its settings are already folded into `config.json`.", "",
+    ]
   for index, node in enumerate(chain, start=1):
     start = node.weights.describe() if node.weights else "random init"
-    lines += [f"## {index}. {node.display()}", "",
+    lines += [f"## Phase {index}: {node.display()}", "",
               f"- starts from: {start}",
               f"- verdict: {node.verdict}",
-              f"- what changed: {'; '.join(node.change) or 'not recorded'}", ""]
-  recipe = fold_recipe(record.id, records)
-  lines += ["## Config recipe, folded from the root", ""]
+              f"- what changed: {'; '.join(node.change) or 'not recorded'}"]
+    if index == 1:
+      lines += ["- launch: `./launch.sh <new-record-id>`", ""]
+    else:
+      previous = chain[index - 2]
+      lines += [f"- launch: `./launch.sh <new-record-id> --resume "
+                f"<checkpoint from phase {index - 1} ({previous.id})>`", ""]
+
+  history = config_history(chain, records)
+  lines += ["## Config recipe", "",
+            f"Folded from {chain[0].display() if chain else 'this run'} down to "
+            f"{record.display()} -- the runs this policy came through.", ""]
   lines += [f"- **{rid}**: {'; '.join(changes) or 'no change recorded'}"
-            for rid, changes in recipe]
+            for rid, changes in history]
   return "\n".join(lines) + "\n"
 
 

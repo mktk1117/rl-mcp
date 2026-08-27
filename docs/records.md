@@ -155,6 +155,16 @@ mid-rung edits fold into the rung that was active when they happened. A run with
 no curriculum gets one rung per change, each held for as long as the original
 ran before the next one. Refused edits are left out: they never applied.
 
+**A recipe starts where the policy did.** Warm-start edges are walked back
+until a run that trained from scratch, and that run is phase 1. Given
+`1 → 2 → 3 (from scratch) → 4 → 5 → 7`, the recipe for 7 is `3, 4, 5, 7`: runs 1
+and 2 are ancestors of 3's *config*, and their weights were thrown away when 3
+restarted, so replaying them would be replaying history this policy does not
+contain — their settings are already folded into `config.json`. A sibling branch
+off 5 is not on the path to 7 and is not in it either. Each phase after the
+first says which checkpoint it warm-starts from, because a four-phase recipe
+that only tells you how to start phase 1 is not a recipe.
+
 **It reproduces the procedure, not the policy.** RL is not bit-reproducible —
 GPU nondeterminism, a different env count, a different seed. That is why
 `expect.json` names numbers to check rather than a hash to match. Claim

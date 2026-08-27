@@ -206,3 +206,126 @@ def test_an_unknown_record_is_refused_by_name(tmp_path):
   store = FileStore(tmp_path / "records", slots=1)
   with pytest.raises(ValueError, match="No record '404'"):
     build(store, "404", tmp_path / "recipe")
+
+
+# Branches, restarts, and which runs a recipe is actually made of.
+
+
+def _tree(tmp_path):
+  """The topology from the review of this feature:
+
+      1 -> 2 -> 3 (restart from scratch) -> 4 -> 5 -> 6
+                                                 5 -> 7   (the best one)
+      8 (from scratch) -> 9                                (an unrelated line)
+
+  Config parents run the whole way down; weights restart at 3 and at 8.
+  """
+  from rlmcp.records.record import Weights
+
+  store = FileStore(tmp_path / "records", slots=1)
+  made = {}
+  def add(slug, parent=None, warm=None):
+    record = store.new_record(slug, task="T", parent=parent,
+                              change=[f"change in {slug}"])
+    if warm:
+      store.update_record(record.id, lambda r: setattr(r, "weights", Weights(run=warm)))
+    made[slug] = store.get_record(record.id).id
+    return made[slug]
+
+  one = add("one")
+  two = add("two", parent=one, warm=one)
+  three = add("three", parent=two)              # restart: no weights
+  four = add("four", parent=three, warm=three)
+  five = add("five", parent=four, warm=four)
+  add("six", parent=five, warm=five)            # a sibling branch off 5
+  seven = add("seven", parent=five, warm=five)  # the branch that mattered
+  eight = add("eight")                          # an unrelated from-scratch line
+  add("nine", parent=eight, warm=eight)
+  return store, made
+
+
+def test_a_recipe_starts_where_the_policy_did_not_where_the_config_did(tmp_path):
+  """The point of the whole rule: 3 restarted from scratch, so 1 and 2 are
+  ancestors of 3's *config* and not of these weights. Replaying them would be
+  replaying history this policy does not contain."""
+  store, made = _tree(tmp_path)
+
+  answer = build(store, made["seven"], tmp_path / "recipe")
+
+  assert answer["phases"] == [made["three"], made["four"], made["five"],
+                              made["seven"]]
+  assert made["one"] not in answer["phases"]
+  assert made["two"] not in answer["phases"]
+
+
+def test_a_sibling_branch_and_an_unrelated_line_are_not_in_it(tmp_path):
+  store, made = _tree(tmp_path)
+
+  phases = build(store, made["seven"], tmp_path / "recipe")["phases"]
+
+  assert made["six"] not in phases      # branched off 5, but not on the way to 7
+  assert made["eight"] not in phases and made["nine"] not in phases
+
+
+def test_the_config_fold_is_cut_at_the_restart_too(tmp_path):
+  """`config.json` already holds everything the restart launched with, so the
+  history worth reading starts there as well."""
+  store, made = _tree(tmp_path)
+
+  build(store, made["seven"], tmp_path / "recipe")
+  phases_md = (tmp_path / "recipe" / "phases.md").read_text()
+
+  assert "change in three" in phases_md and "change in seven" in phases_md
+  assert "change in one" not in phases_md and "change in two" not in phases_md
+
+
+def test_each_phase_says_how_to_launch_it(tmp_path):
+  """A four-phase recipe that only tells you how to start phase 1 is not a
+  recipe: every later phase warm-starts from the one before."""
+  store, made = _tree(tmp_path)
+
+  build(store, made["seven"], tmp_path / "recipe")
+  phases_md = (tmp_path / "recipe" / "phases.md").read_text()
+
+  assert "4 training segments" in phases_md
+  assert "./launch.sh <new-record-id>" in phases_md
+  assert f"checkpoint from phase 3 ({made['five']})" in phases_md
+
+
+def test_a_from_scratch_run_is_a_one_phase_recipe(tmp_path):
+  store, made = _tree(tmp_path)
+
+  answer = build(store, made["three"], tmp_path / "recipe")
+
+  assert answer["phases"] == [made["three"]]
+  assert "trained from scratch" in (tmp_path / "recipe" / "phases.md").read_text()
+
+
+def test_a_warm_start_that_points_at_nothing_ends_the_chain_honestly(tmp_path):
+  """A record whose parent store is elsewhere: a short chain beats one with a
+  hole in it."""
+  from rlmcp.records.record import Weights
+
+  store = FileStore(tmp_path / "records", slots=1)
+  orphan = store.new_record("orphan", task="T")
+  store.update_record(orphan.id, lambda r: setattr(r, "weights", Weights(run="404")))
+
+  answer = build(store, orphan.id, tmp_path / "recipe")
+
+  assert answer["phases"] == [orphan.id]
+  assert "404" in (tmp_path / "recipe" / "phases.md").read_text()
+
+
+def test_a_cycle_in_the_warm_start_chain_terminates(tmp_path):
+  """Two runs that each claim to warm-start from the other must not hang."""
+  from rlmcp.records.record import Weights
+
+  store = FileStore(tmp_path / "records", slots=1)
+  a = store.new_record("a", task="T")
+  b = store.new_record("b", task="T")
+  store.update_record(a.id, lambda r: setattr(r, "weights", Weights(run=b.id)))
+  store.update_record(b.id, lambda r: setattr(r, "weights", Weights(run=a.id)))
+
+  answer = build(store, a.id, tmp_path / "recipe")
+
+  assert set(answer["phases"]) == {a.id, b.id}
