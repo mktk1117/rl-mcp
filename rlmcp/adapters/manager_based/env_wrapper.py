@@ -64,11 +64,20 @@ class RlMcpEnvWrapper:
   startup (:meth:`startup_checks`). Everything else -- servicing, telemetry,
   curricula, records, progress clips -- is the same work whichever simulator is
   underneath, which is why it is written once.
+
+  This class is never wrapped around an environment directly -- it has no
+  simulator to talk to. The ``wrap()`` a training script calls lives in the
+  backend package, next to the subclass it builds: :func:`rlmcp.wrap` and
+  :func:`rlmcp.adapters.mjlab.wrap` for mjlab,
+  :func:`rlmcp.adapters.isaaclab.wrap` for IsaacLab.
   """
 
   def build_sim_adapter(self, env: Any, robot_name: Optional[str]) -> Any:
     raise NotImplementedError(
-        "A backend wrapper must say which SimAdapter speaks to its environment.")
+        f"{type(self).__name__} does not say which SimAdapter speaks to its "
+        "environment. A backend subclasses RlMcpEnvWrapper, overrides "
+        "build_sim_adapter(), and exports its own wrap() -- see "
+        "rlmcp/adapters/mjlab/env_wrapper.py, which is 60 lines.")
 
   def startup_checks(self) -> None:
     """Cheap diagnostics run once, at wrap time. Never fatal."""
@@ -354,10 +363,3 @@ class RlMcpEnvWrapper:
             return value[key]
     return None
 
-
-def wrap(env: Any, **kwargs: Any) -> RlMcpEnvWrapper:
-  """Wrap a task environment so rlmcp can watch and steer the run.
-
-  See :class:`RlMcpEnvWrapper` for the keyword arguments.
-  """
-  return RlMcpEnvWrapper(env, **kwargs)

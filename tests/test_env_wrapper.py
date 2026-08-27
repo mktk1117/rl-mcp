@@ -219,3 +219,26 @@ def test_the_iteration_hook_is_found_wherever_the_runner_keeps_it(
   assert wrapper._runner_hooked is True
   assert serviced == [7]
   assert runner.seen == [7]     # and the runner's own logging still happened
+
+
+# The shared base is not a backend.
+
+
+def test_the_shared_base_cannot_be_wrapped_round_an_environment(tmp_path):
+  """`manager_based` holds the half that is not any simulator's, so it has no
+  simulator to talk to. Constructing it directly has to fail where a backend
+  would have answered -- and say which file to copy -- rather than half-build a
+  wrapper whose every sim call is broken."""
+  pytest.importorskip("torch", reason="the wrapper module imports torch")
+  from rlmcp.adapters import manager_based
+  from rlmcp.adapters.manager_based import env_wrapper as shared
+
+  # No module-level `wrap()` here: the entry point belongs to the backend that
+  # can name a SimAdapter, next to the subclass it builds.
+  assert not hasattr(shared, "wrap")
+  assert not hasattr(manager_based, "wrap")
+
+  with pytest.raises(NotImplementedError) as caught:
+    shared.RlMcpEnvWrapper(wrappable_env(), session_dir=tmp_path / "session")
+  assert "build_sim_adapter" in str(caught.value)
+  assert "mjlab" in str(caught.value)
