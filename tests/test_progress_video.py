@@ -336,3 +336,39 @@ def test_raising_the_budget_starts_the_clips_again(tmp_path, fake_sim):
 
   _collect(lab, 400)
   assert [e["iteration"] for e in _events(lab, "progress_clip")] == [0, 400]
+
+
+# ── the error the trainer catches ────────────────────────────────────────
+def test_the_name_the_trainer_imports_exists():
+  """`rlmcp/train.py` does `from rlmcp.core.progress_video import Cadence,
+  CadenceError` before anything expensive starts. When that name did not
+  exist, `rlmcp-train` died with an ImportError at startup -- for every task,
+  with or without a cadence flag. The entry point was simply gone.
+  """
+  from rlmcp.core.progress_video import CadenceError
+
+  assert issubclass(CadenceError, ValueError), (
+      "it has to stay a ValueError: everything that already catches ValueError "
+      "around cadence parsing must keep working")
+
+
+@pytest.mark.parametrize("spec", ["nonsense", "double:zero", "-5", True])
+def test_a_cadence_that_cannot_be_read_raises_the_error_the_trainer_catches(spec):
+  from rlmcp.core.progress_video import Cadence, CadenceError
+
+  with pytest.raises(CadenceError):
+    Cadence.parse(spec)
+
+
+def test_the_trainer_gets_past_its_import_and_reports_an_unknown_task():
+  """The failure was at import time, so nothing downstream ever ran. This is
+  the smallest check that the entry point still has an entry."""
+  import subprocess
+  import sys
+
+  done = subprocess.run(
+      [sys.executable, "-m", "rlmcp.train", "No-Such-Task-Here"],
+      capture_output=True, text=True, timeout=180)
+
+  assert "ImportError" not in done.stderr, done.stderr[-400:]
+  assert "cannot import name" not in done.stderr, done.stderr[-400:]
