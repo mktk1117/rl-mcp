@@ -44,9 +44,18 @@ class TerminationsCfg:
 
 @dataclass
 class ViewerCfg:
-  """IsaacLab's viewer config: which env the camera is looking at."""
+  """IsaacLab's viewer config: what the camera is anchored to, and where.
+
+  ``origin_type`` defaults to ``"world"`` here because it does in IsaacLab, and
+  that default is the whole reason per-env framing needs more than the index:
+  IsaacLab documents ``env_index`` as having no effect while the anchor is the
+  world.
+  """
 
   env_index: int = 0
+  origin_type: str = "world"
+  asset_name: str = "robot"
+  body_name: str = "base"
   resolution: tuple = (128, 96)
 
 
@@ -65,6 +74,9 @@ class FakeArticulation:
         joint_vel=torch.zeros(4, len(names)),
         root_lin_vel_b=torch.zeros(4, 3),
         root_ang_vel_b=torch.zeros(4, 3),
+        # Env n starts 10 m along x of env n-1, and this one has walked 1 m.
+        root_pos_w=torch.tensor([[float(10 * i) + 1.0, 0.0, 0.5]
+                                 for i in range(4)]),
     )
 
 
@@ -93,10 +105,60 @@ class FakeManager:
     return self._terms[name]
 
 
+class FakeCapture:
+  """A video backend that can move its own camera, as the Newton one can."""
+
+  def __init__(self):
+    self.cfg = SimpleNamespace(eye=(7.5, 7.5, 7.5), lookat=(0.0, 0.0, 0.0),
+                               camera_prim_path="/OmniverseKit_Persp")
+
+  def update_camera(self, eye, lookat):
+    self.cfg.eye, self.cfg.lookat = tuple(eye), tuple(lookat)
+
+
+class FakeVideoRecorder:
+  def __init__(self):
+    self._capture = FakeCapture()
+
+
+class FakeViewportCameraController:
+  """IsaacLab's controller: the only thing that actually moves the camera.
+
+  Writing ``cfg.viewer`` does not move the viewport, which is exactly the trap
+  these tests exist to pin.
+  """
+
+  def __init__(self, cfg: "ViewerCfg", num_envs: int):
+    self.cfg = cfg
+    self._num_envs = num_envs
+
+  def update_view_to_world(self):
+    self.cfg.origin_type = "world"
+
+  def update_view_to_env(self):
+    self.cfg.origin_type = "env"
+
+  def update_view_to_asset_root(self, asset_name: str):
+    if asset_name not in ("robot", "hand"):
+      raise ValueError(f"Asset {asset_name!r} is not in the scene.")
+    self.cfg.asset_name = asset_name
+    self.cfg.origin_type = "asset_root"
+
+  @property
+  def anchor(self):
+    """Where a frame taken right now would be centred."""
+    if self.cfg.origin_type == "world":
+      return ("world", None)
+    if self.cfg.origin_type == "asset_root":
+      return ("asset_root", self.cfg.asset_name, self.cfg.env_index)
+    return (self.cfg.origin_type, self.cfg.env_index)
+
+
 class FakeIsaacLabEnv:
   """Shaped like ``ManagerBasedRLEnv`` as far as the adapter can tell."""
 
-  def __init__(self, articulations=None, render_mode=None, frame=None):
+  def __init__(self, articulations=None, render_mode=None, frame=None,
+               camera="viewport"):
     self.cfg = EnvCfg()
     # The managers hold the same cfg objects the env config does, which is what
     # makes an edit visible to the running environment in IsaacLab too.
@@ -114,12 +176,23 @@ class FakeIsaacLabEnv:
     self.common_step_counter = 7
     self.episode_length_buf = torch.arange(4)
     self.render_mode = render_mode
+    # A headless IsaacLab 6 run has a recorder and no controller at all; a run
+    # with a viewport has the controller. Neither has both doing the work.
+    self.viewport_camera_controller = (
+        FakeViewportCameraController(self.cfg.viewer, self.num_envs)
+        if camera == "viewport" else None)
+    self.video_recorder = FakeVideoRecorder() if camera == "recorder" else None
     self.render_calls: List[int] = []
+    self.render_anchors: List[Any] = []
     self.reset_calls: List[List[int]] = []
     self._frame = frame
 
   def render(self, recompute: bool = False):
     self.render_calls.append(self.cfg.viewer.env_index)
+    if self.viewport_camera_controller is not None:
+      self.render_anchors.append(self.viewport_camera_controller.anchor)
+    else:
+      self.render_anchors.append(tuple(self.video_recorder._capture.cfg.eye))
     if self.render_mode != "rgb_array":
       return None
     return self._frame
@@ -230,6 +303,62 @@ def test_a_frame_comes_back_as_rgb_and_the_camera_is_put_back():
   assert frame.shape == (6, 8, 3)                  # RGBA in, RGB out
   assert env.render_calls == [2]                   # it looked at env 2
   assert env.cfg.viewer.env_index == 0             # and looked away again
+
+
+def test_a_frame_of_one_env_is_actually_a_frame_of_that_env():
+  """The index alone is not enough.
+
+  IsaacLab's viewer starts anchored to the world, where ``env_index`` is
+  documented to do nothing. Setting only the index therefore answers every
+  ``shot --env-id`` with the same overview of the whole grid -- a picture that
+  looks like an answer and is not one.
+  """
+  env = FakeIsaacLabEnv(render_mode="rgb_array",
+                        frame=np.zeros((4, 4, 3), dtype=np.uint8))
+
+  IsaacLabSimAdapter(env).render(2)
+
+  assert env.render_anchors == [("asset_root", "robot", 2)]
+
+
+def test_the_camera_falls_back_to_the_env_origin_when_the_robot_cannot_anchor():
+  """A wrong angle beats no frame, so an anchor the controller refuses is not
+  fatal -- it just costs the robot-following."""
+  env = FakeIsaacLabEnv(
+      articulations={"arm": FakeArticulation(["shoulder", "elbow"])},
+      render_mode="rgb_array", frame=np.zeros((4, 4, 3), dtype=np.uint8))
+
+  IsaacLabSimAdapter(env).render(2)     # "arm" is not one the fake will anchor
+
+  assert env.render_anchors == [("env", 2)]
+
+
+def test_a_viewer_already_following_something_is_put_back_the_way_it_was():
+  """Somebody watching env 1 in the viewport keeps watching env 1."""
+  env = FakeIsaacLabEnv(render_mode="rgb_array",
+                        frame=np.zeros((4, 4, 3), dtype=np.uint8))
+  env.cfg.viewer.origin_type = "env"
+  env.cfg.viewer.env_index = 1
+
+  IsaacLabSimAdapter(env).render(3)
+
+  assert env.render_anchors == [("asset_root", "robot", 3)]
+  assert env.viewport_camera_controller.anchor == ("env", 1)
+
+
+def test_a_headless_run_moves_the_recording_camera_because_it_has_no_viewport():
+  """IsaacLab 6 headless has no ``viewport_camera_controller``. Its frames come
+  from ``video_recorder``, whose camera is placed once at construction and
+  never consults ``cfg.viewer`` again -- so following env 2's robot means
+  moving that camera, and putting it back."""
+  env = FakeIsaacLabEnv(render_mode="rgb_array", camera="recorder",
+                        frame=np.zeros((4, 4, 3), dtype=np.uint8))
+
+  IsaacLabSimAdapter(env).render(2)
+
+  # env 2's robot is at (21, 0, 0.5); the viewer's eye is an offset from it.
+  assert env.render_anchors == [(21.0 + 7.5, 0.0 + 7.5, 0.5 + 7.5)]
+  assert env.video_recorder._capture.cfg.eye == (7.5, 7.5, 7.5)   # put back
 
 
 def test_a_frame_request_beyond_the_last_env_is_clamped_not_crashed():

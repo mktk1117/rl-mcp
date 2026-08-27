@@ -109,7 +109,7 @@ class IsaacLabSimAdapter(SimAdapter):
   # Rendering.
 
   def render(self, env_id: int = 0) -> np.ndarray:
-    return rendering.render(self.env, env_id)
+    return rendering.render(self.env, env_id, self.robot_name)
 
   def renderer_ready(self) -> bool:
     return rendering.renderer_ready(self.env)

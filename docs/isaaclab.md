@@ -87,13 +87,34 @@ A run without them says so at wrap time rather than at the first `shot`, and
 everything else — parameters, metrics, traces, curricula, records — works
 regardless.
 
+**Which env a frame shows** takes more than `cfg.viewer.env_index`, and how
+much more depends on the version. A run with a viewport has a
+`viewport_camera_controller`, and the index does nothing there until the
+camera's anchor moves off `origin_type="world"`, which is the default. A
+headless IsaacLab 6 run has no controller at all: its frames come from
+`env.video_recorder`, whose camera is placed once at construction and never
+consults `cfg.viewer` again. rlmcp moves whichever of the two makes the frame,
+onto the robot in the env you asked for, and puts it back afterwards. Without
+that, `shot --env-id 7` and `shot --where …` answer with the same overview of
+the whole grid every time — a picture that looks like an answer and is not one.
+
+**`eye` and `lookat` are read as an offset** from the robot being followed,
+which is how IsaacLab reads them for a per-env origin. The stock
+`(7.5, 7.5, 7.5)` is framed to take in the whole grid and leaves a single robot
+a speck, so a task you intend to watch is worth a closer pair:
+
+```python
+env_cfg.viewer.eye = (2.2, 2.2, 1.2)
+env_cfg.viewer.lookat = (0.0, 0.0, 0.3)
+```
+
 ## What lands where
 
 | what you touch | where it is |
 | --- | --- |
 | a reward weight, a termination bound, an event range | `env.cfg.<manager>.<term>` — the object IsaacLab re-reads |
 | the PPO knobs, checkpoints, `stop` | the rsl_rl runner, through `attach_runner` |
-| "which env is env 7" for a frame | `cfg.viewer.env_index`, put back after each render |
+| "which env is env 7" for a frame | `cfg.viewer.env_index` **and** `origin_type`, both put back after each render |
 
 ## Known differences from mjlab
 

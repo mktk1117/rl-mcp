@@ -54,10 +54,29 @@ import rlmcp.adapters.isaaclab as rlmcp_isaaclab  # noqa: E402
 from rlmcp.adapters.isaaclab import TrainingStopped  # noqa: E402
 
 
+def _migrate_agent_cfg(agent_cfg):
+  """Bring a task's agent config in line with the installed rsl_rl.
+
+  Older IsaacLab releases have no migration to do and no function to do it
+  with, so its absence is not an error.
+  """
+  try:
+    from importlib import metadata
+
+    from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg
+  except ImportError:
+    return agent_cfg
+  return handle_deprecated_rsl_rl_cfg(agent_cfg, metadata.version("rsl-rl-lib"))
+
+
 def main() -> int:
   env_cfg = parse_env_cfg(args.task, device=args.device,
                           num_envs=args.num_envs or 1)
   agent_cfg = load_cfg_from_registry(args.task, "rsl_rl_cfg_entry_point")
+  # IsaacLab ships one agent config per task and migrates it to whichever
+  # rsl_rl is installed. Its own train script does this; skipping it is how you
+  # get `MLPModel.__init__() got an unexpected keyword argument 'stochastic'`.
+  agent_cfg = _migrate_agent_cfg(agent_cfg)
   if args.max_iterations:
     agent_cfg.max_iterations = args.max_iterations
   if args.seed is not None:
@@ -70,6 +89,13 @@ def main() -> int:
   # render_mode follows the app: asking for rgb_array without cameras is how
   # you get a crash at the first frame instead of a run with no frames.
   render_mode = "rgb_array" if getattr(args, "enable_cameras", False) else None
+  if render_mode:
+    # rlmcp reads eye and lookat the way IsaacLab reads them for a per-env
+    # origin: as an offset from the robot a frame is following. The stock
+    # (7.5, 7.5, 7.5) is set to take in the whole grid, which leaves one robot
+    # a speck; a picture of a gait wants to be closer than that.
+    env_cfg.viewer.eye = (2.2, 2.2, 1.2)
+    env_cfg.viewer.lookat = (0.0, 0.0, 0.3)
   env = gym.make(args.task, cfg=env_cfg, render_mode=render_mode)
 
   env = rlmcp_isaaclab.wrap(
