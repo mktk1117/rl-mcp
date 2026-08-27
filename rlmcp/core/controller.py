@@ -994,6 +994,12 @@ class RlMcp:
     described = self.extensions.describe()
     if described:
       payload["extensions"] = described
+    # What `--where` accepts on *this* run, so a caller can offer the criteria
+    # instead of knowing them. A client with no way to discover this can only
+    # hard-code a vocabulary, which is wrong the moment a task differs.
+    selectors = self.extensions.selectors()
+    if selectors:
+      payload["selectors"] = selectors
     if self.records is not None:
       payload["records"] = self.records.status()
       if self._falsifier_fired:

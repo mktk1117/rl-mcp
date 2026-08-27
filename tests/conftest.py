@@ -217,6 +217,13 @@ class FakeTerrainExtension(Extension):
       return None
     return self.sim.env_ids_on(terrain=terrain, level=level)
 
+  def selectors(self) -> Dict[str, Dict[str, Any]]:
+    return {
+        "terrain": {"label": "terrain", "values": list(self.sim.enabled)},
+        "level": {"label": "difficulty level",
+                  "values": list(range(self.sim.level_ceiling))},
+    }
+
   def describe(self) -> Dict[str, Any]:
     return {"active_terrains": list(self.sim.enabled),
             "level_ceiling": self.sim.level_ceiling}
