@@ -656,6 +656,108 @@ def test_update_params_hook_failure_is_not_swallowed():
     access.set(key, 0.6)
 
 
+# Command terms: what the constructor read is what it cached.
+
+
+@dataclass
+class KernelCommandCfg:
+  ranges: Ranges = field(default_factory=Ranges)
+  kernel_lambda: float = 0.8
+  kernel_size: int = 1
+
+
+class KernelCommandTerm:
+  """A command term shaped like mjlab's MotionCommand.
+
+  Its constructor folds ``kernel_lambda`` and ``kernel_size`` into a sampling
+  kernel and validates one range; ``ranges.lin_vel_x`` is read on every
+  resample. Editing the cfg fields the constructor read changes nothing --
+  the kernel is already built -- so they must be reported inert.
+  """
+
+  def __init__(self, cfg=None):
+    self.cfg = cfg or KernelCommandCfg()
+    if self.cfg.ranges.ang_vel_z[0] > self.cfg.ranges.ang_vel_z[1]:
+      raise ValueError("ang_vel_z range is inverted")
+    self.kernel = [self.cfg.kernel_lambda**i for i in range(self.cfg.kernel_size)]
+
+  def resample(self):
+    return self.cfg.ranges.lin_vel_x
+
+
+class RebuildableKernelCommandTerm(KernelCommandTerm):
+  """The same term, able to rebuild its kernel when told a field changed."""
+
+  def __init__(self, cfg=None):
+    super().__init__(cfg)
+    self.rebuilt_with: List[Dict[str, Any]] = []
+
+  def update_params(self, **fields):
+    self.rebuilt_with.append(fields)
+    self.kernel = [self.cfg.kernel_lambda**i for i in range(self.cfg.kernel_size)]
+
+
+def _access_with_command(term) -> ParameterAccess:
+  env = FakeEnv()
+  env.command_manager._terms["motion"] = term
+  return ParameterAccess(env)
+
+
+def test_constructor_cfg_reads_are_found_along_the_mro():
+  from rlmcp.adapters.manager_based.access.base import constructor_cfg_reads
+
+  reads = constructor_cfg_reads(RebuildableKernelCommandTerm)
+  assert reads == frozenset({"kernel_lambda", "kernel_size", "ranges.ang_vel_z"})
+  # The fake velocity term reads nothing from its cfg at construction.
+  assert constructor_cfg_reads(CommandTerm) == frozenset()
+
+
+def test_command_field_read_by_constructor_is_inert_and_refused():
+  term = KernelCommandTerm()
+  access = _access_with_command(term)
+  specs = {s.key: s for s in access.discover()}
+  assert specs["command.motion.kernel_lambda"].liveness == "inert"
+  assert specs["command.motion.kernel_size"].liveness == "inert"
+
+  with pytest.raises(ValueError) as excinfo:
+    access.set("command.motion.kernel_lambda", 0.5)
+  assert "inert" in str(excinfo.value)
+  assert term.cfg.kernel_lambda == 0.8
+  assert term.kernel == [1.0]
+
+
+def test_command_field_read_at_runtime_stays_live():
+  """A validation read of ``ranges.ang_vel_z`` must not spread to its siblings:
+  the term reads ``ranges.lin_vel_x`` on every resample, so that one is live."""
+  term = KernelCommandTerm()
+  access = _access_with_command(term)
+  specs = {s.key: s for s in access.discover()}
+  assert specs["command.motion.ranges.lin_vel_x"].liveness == "live"
+
+  access.set("command.motion.ranges.lin_vel_x", [-0.3, 0.3])
+  assert term.resample() == (-0.3, 0.3)
+
+
+def test_command_term_with_update_params_stays_live_and_is_rebuilt():
+  term = RebuildableKernelCommandTerm()
+  access = _access_with_command(term)
+  specs = {s.key: s for s in access.discover()}
+  assert specs["command.motion.kernel_lambda"].liveness == "live"
+  assert specs["command.motion.kernel_size"].liveness == "live"
+
+  access.set("command.motion.kernel_size", 3)
+  access.set("command.motion.kernel_lambda", 0.5)
+  assert term.kernel == [1.0, 0.5, 0.25]
+
+  # A nested write hands the hook the whole top-level field it cached from.
+  access.set("command.motion.ranges.lin_vel_x", [-2.0, 2.0])
+  assert term.rebuilt_with == [
+      {"kernel_size": 3},
+      {"kernel_lambda": 0.5},
+      {"ranges": term.cfg.ranges},
+  ]
+
+
 # The walker itself.
 
 

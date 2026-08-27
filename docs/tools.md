@@ -398,7 +398,7 @@ write:
 | --- | --- |
 | `live` | takes effect next rollout batch |
 | `at_reset` | applied now, takes effect at each environment's next reset. The response says so |
-| `at_startup`, `inert` | the write is **refused**. These are only read when the environment is built, so a write would report success and change nothing |
+| `at_startup`, `inert` | the write is **refused**. These are only read when the environment is built -- `at_startup` by a startup event, `inert` by a class-based term's constructor, which kept what it derived from them -- so a write would report success and change nothing. A term that can rebuild its cache exposes `update_params(**fields)` and stays `live` |
 
 ## `get`
 
