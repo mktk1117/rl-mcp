@@ -16,8 +16,10 @@ import json
 import pytest
 
 from rlmcp.play import (
+    POLICIES,
     PlayConfig,
     PlayError,
+    UntrainedPolicy,
     add_arguments,
     checkpoint_iteration,
     config_from_args,
@@ -721,3 +723,72 @@ def test_closing_a_stopped_play_session_records_its_end(tmp_path, fake_sim):
   ended = [e for e in Session.open(controller.session.dir).events()
            if e["kind"] == "session_end"]
   assert ended and ended[-1]["stop_reason"] == "closed from another shell"
+
+
+# A task with no policy yet.
+#
+# `play` was built around a checkpoint, and a checkpoint is what tells it the
+# session, the task and the conditions. A task being *written* has none of
+# those, and looking at it is the cheapest way to find out that it terminates
+# on the first step. These cover the half of that which needs no simulator.
+
+
+def test_zero_actions_are_zero_and_the_right_shape():
+  policy = UntrainedPolicy((4, 12), "cpu", "zero")
+
+  actions = policy()
+
+  assert tuple(actions.shape) == (4, 12)
+  assert float(actions.abs().sum()) == 0.0
+
+
+def test_random_actions_stay_in_the_normalised_span():
+  """mjlab action terms scale and offset a normalised action, so [-1, 1] is the
+  span a policy would emit -- not a guess at joint limits."""
+  policy = UntrainedPolicy((8, 6), "cpu", "random")
+
+  actions = policy()
+
+  assert tuple(actions.shape) == (8, 6)
+  assert bool((actions.abs() <= 1.0).all())
+
+
+def test_an_untrained_policy_needs_a_task():
+  """With no checkpoint there is no session to read the task from, so asking
+  for one is the only honest thing to do."""
+  with pytest.raises(PlayError, match="needs --task"):
+    run_play(PlayConfig(policy="zero"))
+
+
+def test_an_unknown_policy_is_refused_by_name():
+  with pytest.raises(PlayError, match="Unknown policy"):
+    run_play(PlayConfig(policy="borrowed", task="Some-Task"))
+
+
+def test_an_untrained_play_never_looks_for_a_checkpoint(tmp_path, monkeypatch):
+  """The regression this whole change is about: `find_checkpoint` ran first and
+  raised, so a task with no checkpoint could not be opened at all -- whatever
+  else was asked for."""
+  looked = []
+  monkeypatch.setattr("rlmcp.play.find_checkpoint",
+                      lambda target: looked.append(target) or (_ for _ in ()).throw(
+                          AssertionError("looked for a checkpoint")))
+  monkeypatch.setattr("rlmcp.play._choose_gl_backend", lambda cfg: None)
+  monkeypatch.setattr("rlmcp.play._build_env",
+                      lambda cfg, task, session_dir: (_ for _ in ()).throw(
+                          PlayError("stop here: past the checkpoint lookup")))
+
+  with pytest.raises(PlayError, match="stop here"):
+    run_play(PlayConfig(policy="zero", task="Some-Task"))
+
+  assert looked == []
+
+
+def test_the_policy_choice_round_trips_through_the_command_line():
+  import argparse
+
+  parser = add_arguments(argparse.ArgumentParser())
+  args = parser.parse_args(["--task", "Some-Task", "--policy", "random"])
+
+  assert config_from_args(args, {}).policy == "random"
+  assert "checkpoint" in POLICIES

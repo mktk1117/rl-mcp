@@ -961,9 +961,11 @@ def build_parser() -> argparse.ArgumentParser:
 
   p = sub.add_parser(
       "play",
-      help="Play a saved checkpoint: render a clip, or open a viewer",
+      help="Play a task: render a clip, or open a viewer",
       description="Replay a checkpoint under the conditions it was trained on. "
                   "Needs no live trainer -- this is how a finished run gets "
+                  "looked at. With --policy zero or random it needs no "
+                  "checkpoint either, which is how a task being written gets "
                   "looked at.",
   )
   # Cheap to import: everything in rlmcp.play that needs a simulator, torch or
