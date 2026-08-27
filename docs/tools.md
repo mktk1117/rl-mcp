@@ -87,6 +87,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 | the stage ladder | [`curriculum`](#curriculum) | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
 | undo an experiment | [`checkpoint`](#checkpoint), [`load`](#load) | `save_checkpoint`, `list_checkpoints`, `rollback_to_checkpoint` |
 | pause, resume, stop | [`pause`](#pause-resume-step-once) | `pause_training`, `resume_training`, `stop_training` |
+| what was done to this run | [`events --interventions`](#events) | `get_events` |
 | write something down | [`note`](#note), [`feedback`](#feedback), [`events`](#events) | `add_note`, `record_feedback`, `get_events` |
 | watch a finished run | [`play`](#play) | (CLI only) |
 | the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
@@ -170,7 +171,23 @@ change, checkpoint, note and falsifier event.
 
 ```bash
 rlmcp events --last-n 50
+rlmcp events --interventions     # only what somebody *did*, with the reasons
 ```
+
+`--interventions` is the log with the bookkeeping taken out. A run's events are
+mostly things that *happened* -- a clip rendered, a job finished, a telemetry
+key dropped -- and what you usually want is the handful of things somebody
+*decided*: parameter edits, stage changes, restored checkpoints, restarted
+environments, notes and feedback, each phrased in one line with the reason
+given at the time:
+
+```json
+{"iteration": 900, "kind": "set_parameter", "layer": "parameter",
+ "what": "rl.entropy_coef: 0.005 → 0.01", "why": "entropy had collapsed"}
+```
+
+That is the third layer of a run's history -- the one that is neither its code
+nor its config, and the one that most often explains a result.
 
 **MCP:** `get_events({"last_n": 25})`
 
