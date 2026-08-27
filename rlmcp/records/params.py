@@ -14,7 +14,7 @@ Three sources, in order of authority:
 
 The x-axis is the whole point and the easy thing to get wrong. Every run starts
 its own iteration counter at zero, so plotting raw iteration stacks ten runs on
-top of each other and hides the lineage. Instead each run is *offset* by where
+top of each other and hides the ancestry. Instead each run is *offset* by where
 its config parent finished, which makes a fork read as a fork: two children of
 005 both start at the x where 005 stopped, and diverge from there. ``offset``
 is carried in the payload so a viewer can label either axis honestly.
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from rlmcp.records.lineage import Graph
+from rlmcp.records.graph import Graph
 from rlmcp.records.record import RunRecord
 from rlmcp.session import Session
 
@@ -49,7 +49,7 @@ def _describe(value: Any) -> str:
 def _session_facts(session_dir: Optional[str]) -> Tuple[List[Dict[str, Any]], int, bool]:
   """Parameter edits with their iterations, how far the run got, and liveness.
 
-  Returns ``([], 0, False)`` for a session that is gone -- a lineage whose logs
+  Returns ``([], 0, False)`` for a session that is gone -- an ancestry whose logs
   were cleaned up still draws, it just draws the launch snapshots.
   """
   if not session_dir:
@@ -104,7 +104,7 @@ def _session_facts(session_dir: Optional[str]) -> Tuple[List[Dict[str, Any]], in
 
 
 def build_history(graph: Graph) -> Dict[str, Any]:
-  """Per-run parameter traces, laid out along the lineage.
+  """Per-run parameter traces, laid out along the ancestry.
 
   The payload is deliberately viewer-shaped: a list of runs in draw order, each
   with its x offset and a ``series`` of step points per key, plus the index of

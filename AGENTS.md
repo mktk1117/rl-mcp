@@ -53,7 +53,7 @@ without the variable set; it is a scratch directory, not the records.
 | look at a policy whose run has already exited | `rlmcp play` — it restores the conditions the checkpoint trained under first |
 | call `env.reset()` yourself to clear a bad state | `rlmcp reset-envs` (`--where key=value` to restart only some) |
 | restart `rlmcp play` to see a different checkpoint | `rlmcp run load_policy checkpoint=<path>` — same env, same conditions, new weights |
-| compare a metric across several runs | `rlmcp record compare`, or `rlmcp record graph` for the lineage |
+| compare a metric across several runs | `rlmcp record compare`, or `rlmcp record graph` for the ancestry |
 | keep the record of an experiment in a scratch file | `rlmcp record new` / `rlmcp record close` — it belongs **in** the records |
 
 ## Where things are
@@ -62,7 +62,7 @@ without the variable set; it is a scratch directory, not the records.
 rlmcp/core/          parameters, telemetry, traces, curriculum, controller — no backend
 rlmcp/adapters/      SimAdapter / RunnerAdapter; mjlab/ is the reference implementation
 rlmcp/extensions/    capabilities the core does not know about; terrain.py is the model
-rlmcp/records/           the records: records, lineage, verdicts, the rendered tree
+rlmcp/records/           the records: plans, outcomes, ancestry, the rendered tree
 rlmcp/server/        the MCP server (imports no simulator, by design)
 ```
 
@@ -159,7 +159,7 @@ that has not improved.
 `--falsify-when` for the machine-checked version), `rlmcp record close` after,
 with measurements. A `validated` verdict without evidence is refused, and that
 is deliberate. `rlmcp record check` validates every record; `rlmcp record graph`
-draws the lineage.
+draws the ancestry.
 
 All of it writes to `$RLMCP_RECORDS`, which points at the records repository. When
 you are working *in this repo* — fixing the harness, adding an adapter — you are

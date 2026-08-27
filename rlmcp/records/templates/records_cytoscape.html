@@ -189,7 +189,7 @@ footer{flex:none;padding:7px 20px;border-top:1px solid var(--line);
 </main>
 <div id="tip" class="tip" hidden></div>
 <footer class="legend">
-  <b>—</b> config lineage &nbsp; <b>- -</b> warm start (from the run whose weights were taken)
+  <b>—</b> config parent &nbsp; <b>- -</b> warm start (from the run whose weights were taken)
   &nbsp; <b>·····</b> prior &nbsp;·&nbsp; drag to pan, scroll to zoom, click a node
 </footer>
 <script>__CYTOSCAPE__</script>
@@ -382,7 +382,7 @@ function apply(){
   });
 }
 
-// Selection: highlight the node's own lineage, not just the node.
+// Selection: highlight the node's own ancestry, not just the node.
 cy.on("tap","node",e=>select(e.target.id()));
 cy.on("tap",e=>{ if(e.target===cy){ cy.edges().removeClass("hi"); } });
 
@@ -471,8 +471,8 @@ function select(id){
    The parameter view.
 
    The tree answers "what did we try?". This answers "what was the number?" --
-   for one knob at a time, along the whole lineage, with the branches drawn as
-   branches. x is the lineage's own clock: each run is offset by where its
+   for one knob at a time, along the whole ancestry, with the branches drawn as
+   branches. x is the ancestry's own clock: each run is offset by where its
    config parent stopped, so two children of the same run start at the same x
    and diverge. Highlighted paths are the chains that end in a leaf; while
    anything is still training, every live chain stays lit.
@@ -534,7 +534,7 @@ function svgEl(name,attrs){
 function chartFor(key,{width=760,height=340,mini=false}={}){
   const series=seriesFor(key);
   const svg=svgEl("svg",{width,height,viewBox:`0 0 ${width} ${height}`,
-                         role:"img","aria-label":`${key} over the lineage`});
+                         role:"img","aria-label":`${key} over the ancestry`});
   if(!series.length){
     const t=svgEl("text",{x:8,y:20,class:"tk"});
     t.textContent="no values recorded"; svg.appendChild(t); return svg;
@@ -579,7 +579,7 @@ function chartFor(key,{width=760,height=340,mini=false}={}){
   svg.appendChild(svgEl("line",{x1:m.l,x2:m.l+W,y1:m.t+H,y2:m.t+H,class:"axis"}));
   if(!mini){
     const t=svgEl("text",{x:m.l+W,y:m.t+H+20,class:"tk","text-anchor":"end"});
-    t.textContent="iterations along the lineage →"; svg.appendChild(t);
+    t.textContent="iterations along the ancestry →"; svg.appendChild(t);
   }
 
   // The traces themselves: a step line per run, plus the dashed jump from the
@@ -815,7 +815,7 @@ function drawStory(){
     const colour=COLORS[r.verdict]||"#8A98A6";
     tile.innerHTML=
       // No clip is not a missing image; it is a run nobody filmed. A 4:3 grey
-      // rectangle per run turns a lineage without video into a wall of holes,
+      // rectangle per run turns a tree without video into a wall of holes,
       // so the tile keeps only a hairline where the clip would be.
       (clip
         ? `<div class="shot">`
@@ -829,7 +829,7 @@ function drawStory(){
       +`<span class="who"><span class="swatch" style="background:${colour}"></span>`
       +`<b>${esc(r.id)}</b> ${esc(r.slug)}`
       // The story is told in the order the runs happened, which is not always
-      // the order of the lineage. When the previous tile is not this run's
+      // the order of the tree. When the previous tile is not this run's
       // parent, say whose child it is rather than letting the arrow imply it.
       +(r.parent&&chain[i-1]&&r.parent!==chain[i-1].id
          ? `<span class="from" title="config parent">↳${esc(r.parent)}</span>`:"")

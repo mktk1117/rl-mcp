@@ -71,7 +71,7 @@ def test_a_records_store_with_no_video_asks_for_nothing(tmp_path):
 
 def test_a_clip_that_is_not_there_yields_no_still(tmp_path):
   """A media key pointing at a file that has been cleaned up is not an error;
-  it is a lineage older than its artifacts."""
+  it is an ancestry older than its artifacts."""
   record = _r("001", [["001/videos/gone.mp4", "gone"]])
 
   assert ensure_posters([record], tmp_path) == {}

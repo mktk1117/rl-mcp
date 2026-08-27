@@ -183,7 +183,7 @@ being asked to do yet.
 settled in minutes what the training curves could not.
 
 **Attach what you rendered.** A clip left in `logs/` is not a deliverable;
-register it on the record so the lineage views can show it.
+register it on the record so the record views can show it.
 
 ## 5. Chatter and jerkiness are measured, not seen
 

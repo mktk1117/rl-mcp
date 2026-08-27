@@ -47,7 +47,7 @@ htmlcov/
 # The records live in their own repository.
 #
 # This one is the MCP tooling: harness, adapters, CLI, server. The knowledge it
-# produces -- runs, plans, reports, verdicts, the lineage between them -- and
+# produces -- runs, plans, reports, verdicts, the ancestry between them -- and
 # the task packages whose runs they are accumulate in the tasks repository
 # instead, pointed at by $RLMCP_RECORDS. Carrying them here meant every
 # experiment dirtied the tool's history, mostly with training logs and video.
@@ -55,7 +55,7 @@ htmlcov/
 #
 # Both forms on purpose: `/records/` matches a real directory, and a bare
 # `/records` also matches a symlink pointing at the tasks checkout -- which is
-# what you end up with when you want the lineage viewer to serve those records
+# what you end up with when you want the rendered records page to be served
 # from this directory. git treats that symlink as a file, so the
 # trailing-slash form alone lets it through.
 #

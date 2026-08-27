@@ -226,7 +226,7 @@ def to_payload(graph: Graph,
     try:
       recipe = [{"id": rid, "change": ch} for rid, ch in graph.recipe(node_id)]
     except ValueError as exc:
-      recipe = [{"id": node_id, "change": [f"(lineage error: {exc})"]}]
+      recipe = [{"id": node_id, "change": [f"(graph error: {exc})"]}]
     payload.append(
         {
             "id": record.id,

@@ -2,7 +2,7 @@
 
 The x-axis is the whole point and the easy thing to get wrong: every run starts
 its own iteration counter at zero, so plotting raw iteration stacks the runs on
-top of each other and hides the lineage. These pin the offsetting, the three
+top of each other and hides the ancestry. These pin the offsetting, the three
 sources a value can come from, and the two places the naive version lies.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from rlmcp.records.lineage import build
+from rlmcp.records.graph import build
 from rlmcp.records.params import build_history, leaf_paths
 from rlmcp.records.record import RunRecord
 
@@ -133,7 +133,7 @@ def test_a_stage_that_restates_a_value_is_not_drawn_as_a_change(tmp_path):
 
 
 def test_a_session_that_is_gone_still_draws_its_launch_snapshot():
-  """A lineage whose logs were cleaned up still renders; it just loses the
+  """An ancestry whose logs were cleaned up still renders; it just loses the
   edits, which is a smaller loss than losing the page."""
   record = _r("001", 1, config={"reward.a.weight": 1.0},
               session="/nowhere/at/all")

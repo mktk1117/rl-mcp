@@ -171,7 +171,7 @@ def test_children_finds_config_descendants_only():
   assert [r.id for r in children("002", records)] == ["004"]
 
 
-def test_summary_carries_the_lineage_shape():
+def test_summary_carries_the_ancestry_shape():
   record = _record("002", parent="001", weights=Weights("001", "model_5.pt"))
   summary = record.summary()
 

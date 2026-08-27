@@ -39,7 +39,7 @@ when the job completes. Everything else answers within one iteration.
 rlmcp/core/          parameters, telemetry, traces, curriculum, controller — no backend
 rlmcp/adapters/      SimAdapter / RunnerAdapter; mjlab/ is the reference implementation
 rlmcp/extensions/    capabilities the core does not know about; terrain.py is the model
-rlmcp/records/       records, lineage, verdicts, the rendered tree
+rlmcp/records/       plans, outcomes, ancestry, the rendered tree
 rlmcp/server/        the MCP server (imports no simulator, by design)
 ```
 

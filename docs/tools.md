@@ -606,5 +606,5 @@ conditions instead.
 
 # Records
 
-`rlmcp record …` is the record *across* runs: hypotheses, verdicts, lineage,
+`rlmcp record …` is the record *across* runs: hypotheses, verdicts, ancestry,
 feedback. It has its own page: [records.md](records.md).

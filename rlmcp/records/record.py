@@ -8,7 +8,7 @@ optional decoration -- it is the field that makes the rest an experiment.
 Three properties are worth stating up front, because they are what the schema
 is shaped around.
 
-**The recipe is never stored.** ``parent`` is the config lineage; the recipe at
+**The recipe is never stored.** ``parent`` is the config ancestry; the recipe at
 any node is the fold of ``change`` from the root down. Computed, never written,
 so provenance and the current recipe cannot drift apart.
 
@@ -410,7 +410,7 @@ class RunRecord:
   """Which problem the run was working on -- the environment id it trained on.
 
   A store accumulates unrelated problems, and runs from two of them share no
-  lineage and no meaning: drawing them in one tree invents a relationship that
+  ancestry and no meaning: drawing them in one tree invents a relationship that
   does not exist. This is the field a view splits on.
 
   Filled in automatically by :meth:`rlmcp.records.link.RecordLink.start` from
@@ -452,9 +452,9 @@ class RunRecord:
   lost. Position is identity -- see :class:`Feedback`.
   """
 
-  # Lineage.
+  # Ancestry.
   parent: Optional[str] = None
-  """Config lineage. The recipe is the fold of ``change`` from the root."""
+  """Config ancestry. The recipe is the fold of ``change`` from the root."""
   weights: Optional[Weights] = None
   """Warm start, or None for from scratch. A different edge from ``parent``."""
   prior: Optional[str] = None

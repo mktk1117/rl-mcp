@@ -12,7 +12,7 @@ committed rather than fetched.
 | `cytoscape-dagre.js` | 2.5.0 | MIT |
 
 Together ~660 KB, which is the cost of the interactive view. If they are absent,
-`render_lineage_html` falls back to a dependency-free renderer that draws the
+`render_records_html` falls back to a dependency-free renderer that draws the
 same graph without pan, zoom or automatic layout.
 
 To update: fetch the same paths from unpkg, drop them in, and check the viewer

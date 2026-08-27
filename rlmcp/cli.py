@@ -660,8 +660,8 @@ def _record_command(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
   if action == "graph":
-    from rlmcp.records.views import plot_lineage, render_lineage_html
-    from rlmcp.records.lineage import build, summarize
+    from rlmcp.records.views import plot_records, render_records_html
+    from rlmcp.records.graph import build, summarize
     from rlmcp.records.poster import ensure_posters
 
     records = store.list_records()
@@ -670,10 +670,10 @@ def _record_command(args: argparse.Namespace) -> int:
       return 1
     posters: Dict[str, str] = {}
     if args.png:
-      out = Path(args.out or (store.root / "lineage.png"))
-      out.write_bytes(plot_lineage(records, title=args.title))
+      out = Path(args.out or (store.root / "records.png"))
+      out.write_bytes(plot_records(records, title=args.title))
     else:
-      out = Path(args.out or (store.root / "lineage.html"))
+      out = Path(args.out or (store.root / "records.html"))
       # A still per filmed run, cached in the media store beside the clip it
       # came from, so the tree can show what each run looked like. Nothing here
       # can fail the render: a store with no video, no imageio or no room to
@@ -687,7 +687,7 @@ def _record_command(args: argparse.Namespace) -> int:
       except ValueError:
         media_base = str(store.media_root) + "/"
       out.write_text(
-          render_lineage_html(records, title=args.title, media_base=media_base,
+          render_records_html(records, title=args.title, media_base=media_base,
                               engine=args.engine, posters=posters)
       )
     _emit({"ok": True, "path": str(out), "posters": len(posters),
@@ -992,7 +992,7 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("stop", help="Stop a run -- or a play session -- cleanly")
   p.add_argument("--why", default="")
 
-  rec = sub.add_parser("record", help="Run records: plans, outcomes, lineage")
+  rec = sub.add_parser("record", help="Run records: plans, outcomes, ancestry")
   rec.add_argument("--records-root", help="Records directory (default: $RLMCP_RECORDS or ./records)")
   rec.add_argument("--slots", type=int, default=1,
                    help="How many runs may hold a lease at once (default: 1)")
@@ -1011,7 +1011,7 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Iteration before which the falsifier means nothing "
                       "(every policy is bad at iteration zero)")
   q.add_argument("--change", nargs="*", help="What differs from the parent")
-  q.add_argument("--parent", help="Config lineage: the run this one changes")
+  q.add_argument("--parent", help="Config ancestry: the run this one changes")
   q.add_argument("--weights", help="Warm start from this run id")
   q.add_argument("--checkpoint", default="", help="Checkpoint within --weights")
   q.add_argument("--stage", default="default")
@@ -1088,8 +1088,8 @@ def build_parser() -> argparse.ArgumentParser:
   q.add_argument("--caption", default="")
   q.add_argument("--kind", default="plots", choices=["plots", "videos"])
 
-  q = record_sub.add_parser("graph", help="Render the lineage tree")
-  q.add_argument("--out", help="Where to write (default: <records>/lineage.html)")
+  q = record_sub.add_parser("graph", help="Render the record graph")
+  q.add_argument("--out", help="Where to write (default: <records>/records.html)")
   q.add_argument("--png", action="store_true", help="Write a PNG instead of the viewer")
   q.add_argument("--title", default="rlmcp run tree")
   q.add_argument("--no-posters", action="store_true",
