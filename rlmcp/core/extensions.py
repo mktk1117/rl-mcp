@@ -131,6 +131,25 @@ class Extension:
     """
     return None
 
+  def selectors(self) -> Dict[str, Dict[str, Any]]:
+    """The ``where`` vocabulary this extension understands, and today's values.
+
+    :meth:`select_envs` *accepts* criteria; this says which criteria exist and
+    what is worth asking for right now, so a caller can offer them without
+    knowing the capability. That is the difference between an agent that has
+    read the docs and a person in front of a menu -- and the reason a GUI can
+    show terrain names it has never heard of::
+
+        {"terrain": {"label": "terrain", "values": ["flat", "pyramid_stairs"]},
+         "level": {"label": "difficulty level", "values": [0, 1, 2, 3]}}
+
+    ``values`` are the ones that would match something *now*: a terrain nothing
+    spawns on is not worth offering. Empty (the default) means an extension
+    advertises nothing, which is not the same as understanding nothing --
+    ``select_envs`` may still answer a criterion nobody could have guessed.
+    """
+    return {}
+
   def describe(self) -> Dict[str, Any]:
     """Short summary for the status payload."""
     return {}
@@ -280,6 +299,28 @@ class ExtensionRegistry:
       if result is not None:
         return result
     return None
+
+  def selectors(self) -> Dict[str, Dict[str, Any]]:
+    """Every advertised criterion, keyed as ``select_envs`` takes them.
+
+    First registration wins a key, which is the same rule :meth:`select_envs`
+    follows -- otherwise the menu could offer a criterion that a *different*
+    extension ends up answering. Each entry says which extension owns it, so a
+    caller can report where a criterion came from rather than treating the
+    whole vocabulary as anonymous.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for extension in self._extensions:
+      try:
+        published = extension.selectors() or {}
+      except Exception as exc:
+        self._report(extension.name, "selectors", str(exc))
+        continue
+      for key, spec in published.items():
+        if key in out or not isinstance(spec, dict):
+          continue
+        out[key] = {**spec, "extension": extension.name}
+    return out
 
   def describe(self) -> Dict[str, Any]:
     out: Dict[str, Any] = {}

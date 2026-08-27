@@ -15,6 +15,7 @@ shell verb, an MCP `run_command`, and something a curriculum stage can call.
 | `commands()` | new verbs, reachable from CLI, MCP and curriculum stages |
 | `metrics()` | scalars merged into telemetry, usable in promotion conditions |
 | `select_envs()` | answers `where={"terrain": "stairs"}`. The core never parses it |
+| `selectors()` | advertises *which* `where` keys exist and what values are live, so a UI can offer them |
 | `snapshot()` / `restore()` | state saved and restored with the policy |
 | `bind()` | receives the controller's `ExtensionContext` after registration |
 | `on_iteration()` / `close()` | a call every learning iteration, and one at shutdown |
@@ -61,6 +62,10 @@ class Goals(Extension):
     want = str(holding).lower() in ("1", "true", "yes")
     return [i for i, held in enumerate(self._holding()) if held == want]
 
+  def selectors(self):
+    """Say the criterion exists, so something with a menu can offer it."""
+    return {"holding": {"label": "holding the object", "values": [True, False]}}
+
   def cmd_set_goal_difficulty(self, tolerance: float, mode: str = "random") -> dict:
     """Set how close counts as reaching the goal, and how goals are sampled."""
     ...
@@ -83,6 +88,34 @@ Values are parsed as JSON, so quote lists:
 **Write the docstrings for a reader who cannot see the code.** A command's
 docstring is what `rlmcp commands` prints, and it is often all an agent has
 before calling it.
+
+## Advertising the vocabulary
+
+`select_envs` *accepts* criteria; `selectors()` says which ones exist. The two
+answer different questions and both are needed: an agent has read your
+docstrings and can guess `holding=true`, but a GUI in front of a task it has
+never seen can only offer what the run tells it about. `rlmcp status` carries
+the merged answer under `selectors`:
+
+```json
+"selectors": {
+  "holding": {"label": "holding the object", "values": [true, false],
+              "extension": "objects"},
+  "terrain": {"label": "terrain", "values": ["flat", "pyramid_stairs"],
+              "extension": "terrain"}
+}
+```
+
+Two rules worth keeping when you implement it:
+
+* **Offer only values that would match something now.** A terrain nothing
+  spawns on resolves to an empty selection, and a menu entry that always
+  answers "nothing" is worse than no entry.
+* **First registration wins a key**, exactly as `select_envs` resolves it.
+  Otherwise the menu offers a criterion that a different extension answers.
+
+Implementing it is optional. Saying nothing means "no menu", not "understands
+nothing" — `select_envs` still answers whatever it answers.
 
 ## The `select_envs` trap
 

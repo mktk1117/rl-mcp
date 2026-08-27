@@ -68,6 +68,30 @@ class TerrainExtension(Extension):
       return None  # Not our vocabulary.
     return self.control.env_ids_on(terrain=terrain, level=level)
 
+  def selectors(self) -> Dict[str, Dict[str, Any]]:
+    """Terrains that currently hold environments, and the levels in play.
+
+    Only *active* terrains are offered: a terrain configured out spawns nothing,
+    so asking for it returns an empty selection, and offering it as a choice is
+    offering a dead end. Levels stop at the ceiling in force, which moves when
+    the curriculum is capped.
+    """
+    try:
+      status = self.control.status()
+    except Exception:
+      return {}
+    ceiling = int(status.get("level_ceiling") or 0)
+    return {
+        "terrain": {
+            "label": "terrain",
+            "values": list(status.get("active_terrains") or []),
+        },
+        "level": {
+            "label": "difficulty level",
+            "values": list(range(max(ceiling, 1))),
+        },
+    }
+
   def describe(self) -> Dict[str, Any]:
     status = self.control.status()
     return {

@@ -564,3 +564,76 @@ def test_only_the_final_terrain_stage_has_no_exit_condition(terrain_module):
   plan = terrain_module.build_terrain_plan(ROUGH, num_levels=10)
   assert all(s.promote_when for s in plan.stages[:-1])
   assert plan.stages[-1].promote_when == []
+
+
+# ── the `where` vocabulary an extension advertises ───────────────────────
+def test_an_extension_advertises_what_select_envs_will_accept(fake_sim, fake_terrain):
+  """The point of publishing it: a caller can offer the criteria without
+  knowing the capability exists."""
+  registry = ExtensionRegistry([fake_terrain])
+  published = registry.selectors()
+
+  assert set(published) == {"terrain", "level"}
+  assert published["terrain"]["values"] == ["flat"]
+  assert published["terrain"]["extension"] == "terrain", \
+      "a criterion has to say who owns it"
+
+  # And every advertised value actually resolves, which is what makes it a
+  # menu rather than a guess.
+  for terrain in published["terrain"]["values"]:
+    assert registry.select_envs(terrain=terrain) != []
+
+
+def test_an_extension_that_advertises_nothing_is_normal(fake_sim):
+  """Publishing a vocabulary is optional; understanding one is not the same
+  thing. The default extension offers no menu and still answers."""
+
+  class Quiet(Extension):
+    name = "quiet"
+
+    def available(self) -> bool:
+      return True
+
+    def select_envs(self, **criteria):
+      return [0] if criteria.get("holding") else None
+
+  registry = ExtensionRegistry([Quiet(env=None)])
+  assert registry.selectors() == {}
+  assert registry.select_envs(holding=True) == [0]
+
+
+def test_the_first_extension_to_claim_a_criterion_keeps_it(fake_sim, fake_terrain):
+  """Same rule as select_envs, and it has to be: a menu that offers a key a
+  *different* extension answers is a menu that lies."""
+
+  class AlsoTerrain(Extension):
+    name = "other"
+
+    def available(self) -> bool:
+      return True
+
+    def selectors(self):
+      return {"terrain": {"label": "somewhere else", "values": ["mars"]}}
+
+  registry = ExtensionRegistry([fake_terrain, AlsoTerrain(env=None)])
+  assert registry.selectors()["terrain"]["extension"] == "terrain"
+
+
+def test_a_broken_selectors_hook_is_reported_and_skipped(fake_sim, fake_terrain):
+  """A capability that cannot describe itself must not empty the menu."""
+
+  class Broken(Extension):
+    name = "broken"
+
+    def available(self) -> bool:
+      return True
+
+    def selectors(self):
+      raise RuntimeError("no idea")
+
+  problems = []
+  registry = ExtensionRegistry([Broken(env=None), fake_terrain])
+  registry.set_error_sink(lambda name, hook, error: problems.append((name, hook)))
+
+  assert set(registry.selectors()) == {"terrain", "level"}
+  assert problems == [("broken", "selectors")]

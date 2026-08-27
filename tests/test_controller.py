@@ -112,6 +112,19 @@ def test_status_reports_stage_and_terrain(lab):
   assert response.result["num_envs"] == 12
 
 
+def test_status_says_what_where_will_accept_on_this_run(lab):
+  """A client cannot offer `--where terrain=...` unless the run says the
+  criterion exists and which values are live right now."""
+  selectors = _run(lab, "status").result["selectors"]
+
+  assert selectors["terrain"]["values"] == ["flat"]
+  assert selectors["terrain"]["extension"] == "terrain"
+  assert selectors["level"]["values"] == [0, 1]
+
+  # Advertised and answerable are the same list, which is the whole promise.
+  assert _run(lab, "screenshot", where={"terrain": "flat"}).ok
+
+
 def test_opening_stage_is_applied_before_the_first_iteration(lab, fake_sim):
   # Constructing the controller does not touch the sim; the first service does.
   lab.service(iteration=0)
