@@ -62,7 +62,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -616,9 +616,14 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
 
   untrained = cfg.policy != "checkpoint"
   if untrained:
-    # No weights, so nothing to find a session or a task from. Conditions are
-    # not restored either: there is no run whose conditions these would be, and
-    # the task's own play config is the right starting point.
+    # No weights, so nothing to find a session or a task from. Nothing to
+    # replay either, and that is the same request `--no-replay` makes: run at
+    # the task's own play configuration. Saying so here rather than leaving
+    # `replay` true keeps the missing-session warning for the case it was
+    # written for -- a real checkpoint whose run is nowhere to be found. There
+    # is no checkpoint here, so nothing is missing. `--set` overrides still
+    # apply; they are the only steering a policy-free preview has.
+    cfg = replace(cfg, replay=False)
     checkpoint = None
     session_dir = None
     task = cfg.task
@@ -673,7 +678,7 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
       "trained_session": str(session_dir) if session_dir else None,
       "play_session": str(lab.session.dir),
       "conditions": {
-          "replayed": cfg.replay and not untrained,
+          "replayed": cfg.replay,
           "stage": conditions.stage or None,
           **restored,
       },

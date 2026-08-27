@@ -807,6 +807,7 @@ rlmcp play --mode viser                         # a viewer in the browser
 | `--stage NAME` | restore conditions as of the end of that stage |
 | `--set KEY=VALUE` | override a parameter after the replay, so it wins. Repeatable |
 | `--no-replay` | do not restore conditions at all |
+| `--policy zero\|random` | no checkpoint at all: hold zero actions, or sample random ones |
 | `--allow-partial` | render even if some conditions could not be restored |
 | `--task-package MODULE` | import this first so your tasks register. Repeatable |
 | `--num-envs`, `--extra-envs` | how many robots, and how many composited into the frame |
@@ -833,6 +834,12 @@ arguments" send you to different places to look.
 
 The reconstruction lives in `rlmcp/core/replay.py` and imports no simulator. It
 is a plain parse-and-fold over the event log.
+
+`--policy zero|random` is the exception, and it is not really one: with no
+checkpoint there is no run whose conditions went missing, so nothing is
+restored and nothing is said about it. The environment runs at the task's own
+play configuration, which is what you want when the task, not a policy, is the
+thing being looked at. `--set` still applies on top.
 
 ### Steering a play session
 
