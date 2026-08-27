@@ -57,9 +57,14 @@ class RecordLink:
       strict: bool = False,
       heartbeat_seconds: float = 60.0,
       ttl_seconds: float = 900.0,
+      code_root: Optional[str] = None,
   ):
     self.store = store
     self.record_id = record_id
+    # Where the task package lives. None means "the directory the run was
+    # launched from", which is true of every launch this project has made;
+    # "" means do not stamp the code at all.
+    self.code_root = code_root
     self.slot = slot or os.environ.get("RLMCP_SLOT") or "local"
     self.strict = strict
     self.heartbeat_seconds = heartbeat_seconds
@@ -103,6 +108,7 @@ class RecordLink:
       self.record.task = task_from_session(session_dir)
     if config:
       self.record.config = dict(config)
+    self.record.code = self._stamp_code()
     self._config_pending = True
     if self.record.verdict == "planned":
       self.record.verdict = "running"
@@ -136,6 +142,24 @@ class RecordLink:
           f"[rlmcp] run {self.record.id} is running without a lease; it will "
           "be reaped by heartbeat staleness if the process dies."
       )
+
+  def _stamp_code(self) -> Dict[str, Any]:
+    """What the package looked like at launch. Never raises, never blocks."""
+    if self.code_root == "" or self.record is None:
+      return {}
+    from rlmcp.records.snapshot import capture
+
+    code = capture(self.code_root or Path.cwd(), record_id=self.record.id)
+    if code.get("kind") == "none":
+      self._warn(f"[rlmcp] no code snapshot for this run: {code.get('reason')}")
+    elif not code.get("clean"):
+      dirty = code.get("dirty", {})
+      self._warn(
+          f"[rlmcp] {code['head']['short'] if code.get('head') else 'no commit'}"
+          f" + {dirty.get('added', 0)} uncommitted lines in {code.get('root')}"
+          " -- recorded as the tree that actually ran."
+      )
+    return code
 
   def snapshot_config(self, config: Dict[str, Any]) -> None:
     """Record the resolved config, once everything has contributed to it.
@@ -289,8 +313,10 @@ def open_link(
     slot: str = "",
     strict: bool = False,
     slots: int = 1,
+    code_root: Optional[str] = None,
 ) -> RecordLink:
   """Open the records and bind a record, if one was named."""
   from rlmcp.records.filestore import open_store
 
-  return RecordLink(open_store(root, slots=slots), record_id, slot=slot, strict=strict)
+  return RecordLink(open_store(root, slots=slots), record_id, slot=slot,
+                    strict=strict, code_root=code_root)

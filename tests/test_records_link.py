@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +19,27 @@ from rlmcp.records.store import StoreError
 @pytest.fixture
 def store(tmp_path) -> FileStore:
   return FileStore(tmp_path / "records", slots=1)
+
+
+@pytest.fixture
+def repo_with_package(tmp_path) -> Path:
+  """A task repository, one commit deep -- what a launch stamps."""
+  import subprocess
+
+  root = tmp_path / "tasks"
+  (root / "shand").mkdir(parents=True)
+  (root / "shand" / "task.py").write_text("weight = 1.0\n")
+
+  def git(*args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True,
+                   capture_output=True)
+
+  subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+  git("config", "user.email", "test@example.com")
+  git("config", "user.name", "Test")
+  git("add", "-A")
+  git("commit", "-qm", "the task")
+  return root
 
 
 # Registration.
@@ -379,3 +401,45 @@ def test_the_report_tabulates_live_interventions(store):
   assert "feet skating" in report
   assert "the final config is not the launch config" in report
   assert "`Train/mean_reward` | 12.5" in report
+
+
+# Code provenance.
+
+
+def test_a_run_stamps_the_code_it_launched_with(store, repo_with_package):
+  """The other half of a recipe: config has always been recorded, code has not."""
+  record = store.new_record("ema-filter", hypothesis="the filter is the unlock")
+  link = RecordLink(store, record_id=record.id, code_root=str(repo_with_package))
+
+  link.start("/tmp/session", {"reward.weight": 1.0})
+
+  code = store.get_record(record.id).code
+  assert code["kind"] == "git" and code["clean"] is True
+  assert code["head"]["commit"] and code["tree"]
+  assert code["ref"].endswith(record.id)
+
+
+def test_a_dirty_launch_is_recorded_and_said_out_loud(store, repo_with_package, capsys):
+  """A run whose tree was dirty is not reproducible from its commit alone, so
+  the number that matters is said at launch rather than discovered later."""
+  (repo_with_package / "shand" / "task.py").write_text("weight = 9.0\n")
+  record = store.new_record("dirty-launch")
+  link = RecordLink(store, record_id=record.id, code_root=str(repo_with_package))
+
+  link.start("/tmp/session")
+
+  code = store.get_record(record.id).code
+  assert code["clean"] is False and code["dirty"]["files"] == 1
+  assert "uncommitted lines" in capsys.readouterr().out
+
+
+def test_stamping_can_be_declined_and_a_loose_directory_still_launches(
+    store, tmp_path, capsys):
+  off = store.new_record("no-stamp")
+  RecordLink(store, record_id=off.id, code_root="").start("/tmp/session")
+  assert store.get_record(off.id).code == {}
+
+  loose = store.new_record("outside-git")
+  RecordLink(store, record_id=loose.id, code_root=str(tmp_path)).start("/tmp/session")
+  assert store.get_record(loose.id).code["kind"] == "none"
+  assert "no code snapshot" in capsys.readouterr().out

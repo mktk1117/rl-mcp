@@ -694,6 +694,44 @@ def _record_command(args: argparse.Namespace) -> int:
            **summarize(build(records))})
     return 0
 
+  if action == "code":
+    from rlmcp.records import snapshot
+
+    record = store.get_record(args.record_id)
+    if record is None:
+      _emit({"ok": False, "error": f"No record '{args.record_id}'."})
+      return 1
+    code = record.code or {}
+    if code.get("kind") != "git":
+      _emit({"ok": False, "record": record.id, "code": code,
+             "error": code.get("reason") or
+             "This run recorded no code snapshot. Launch with --code-root, or "
+             "`rlmcp.wrap(code_root=...)`, to stamp the package."})
+      return 1
+
+    payload: Dict[str, Any] = {"ok": True, "record": record.id, "code": code}
+    if args.restore:
+      payload["restored"] = str(
+          snapshot.restore(code["repo"], code["tree"], args.restore))
+    if args.against:
+      other = store.get_record(args.against)
+      if other is None or (other.code or {}).get("kind") != "git":
+        _emit({"ok": False,
+               "error": f"'{args.against}' has no code snapshot to compare with."})
+        return 1
+      payload["against"] = other.id
+      payload["diff"] = snapshot.diff(
+          code["repo"], other.code["tree"], code["tree"])
+      if args.patch:
+        payload["patch"] = snapshot.patch(
+            code["repo"], other.code["tree"], code["tree"])
+    elif args.patch and code.get("head"):
+      payload["patch"] = snapshot.patch(
+          code["repo"], f"{code['head']['commit']}^{{tree}}", code["tree"],
+          scope=code.get("root", ""))
+    _emit(payload)
+    return 0
+
   if action == "compare":
     from rlmcp.records.views import plot_run_comparison
 
@@ -1108,6 +1146,17 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Do not derive missing clip stills (read-only media)")
   q.add_argument("--engine", default="auto", choices=["auto", "cytoscape", "simple"],
                  help="Interactive graph view, or a dependency-free fallback")
+
+  q = record_sub.add_parser(
+      "code", help="What the task package was when a run launched",
+      description="The other half of a recipe. With --against, the code diff "
+                  "between two runs -- committed or not.")
+  q.add_argument("record_id")
+  q.add_argument("--against", metavar="RECORD_ID",
+                 help="Diff this run's package against another run's")
+  q.add_argument("--patch", action="store_true", help="Print the unified diff")
+  q.add_argument("--restore", metavar="DIR",
+                 help="Write the package back out as that run had it")
 
   q = record_sub.add_parser("compare", help="Overlay runs on the same metrics")
   q.add_argument("ids", nargs="+")

@@ -467,6 +467,13 @@ class RunRecord:
   """The rlmcp session directory, so metrics and events stay recoverable."""
   config: Dict[str, Any] = field(default_factory=dict)
   """Resolved parameter snapshot at launch -- not the source file."""
+  code: Dict[str, Any] = field(default_factory=dict)
+  """What the task package was at launch -- see :mod:`rlmcp.records.snapshot`.
+
+  The config half of a recipe has always been recorded; this is the other half.
+  Empty means nobody stamped it, which is what every record written before this
+  field existed says, and what a run launched outside a repository says too.
+  """
   links: Dict[str, str] = field(default_factory=dict)
   assets: Dict[str, List[List[str]]] = field(default_factory=dict)
   """``{"videos": [[path, caption]], "plots": [[path, caption]]}``."""
@@ -591,6 +598,7 @@ class RunRecord:
         "proposed_by": self.proposed_by,
         "session": self.session,
         "config": self.config,
+        "code": self.code,
         "links": self.links,
         "assets": self.assets,
         "lease": self.lease.to_dict() if self.lease else None,
@@ -626,6 +634,7 @@ class RunRecord:
         proposed_by=d.get("proposed_by", "human"),
         session=d.get("session"),
         config=dict(d.get("config") or {}),
+        code=dict(d.get("code") or {}),
         links=dict(d.get("links") or {}),
         assets=dict(d.get("assets") or {}),
         lease=Lease.from_dict(lease) if lease else None,

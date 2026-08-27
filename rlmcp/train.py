@@ -93,6 +93,11 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
   parser.add_argument("--record-slot", default="", help="Resource slot to claim")
   parser.add_argument("--record-strict", action="store_true",
                       help="Refuse to launch without a registered record")
+  parser.add_argument(
+      "--code-root", default=None, metavar="DIR",
+      help="Task package to stamp on the record at launch (default: the "
+           "directory you launched from). Pass '' to record no code snapshot.",
+  )
   parser.add_argument("--logger", default="tensorboard",
                       choices=["tensorboard", "wandb", "neptune"])
   return parser.parse_args(argv)
@@ -202,6 +207,7 @@ def main(argv: Optional[List[str]] = None) -> int:
       records_root=args.records_root or None,
       record_slot=args.record_slot,
       record_strict=args.record_strict,
+      code_root=args.code_root,
       video_every=args.video_every,
       video_seconds=args.video_seconds,
       video_budget_mb=args.video_budget_mb,
