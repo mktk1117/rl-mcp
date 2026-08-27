@@ -40,6 +40,7 @@ rlmcp status                                   # iteration, stage, headline metr
 rlmcp diagnose --seconds 4                     # is the gait smooth? is it tracking?
 rlmcp shot --where terrain=pyramid_stairs      # look at a robot on the stairs
 rlmcp video --seconds 5                        # and one at 0, 50, 100, 200 … unasked
+rlmcp view --on                                # watch it live in a browser, mid-run
 rlmcp set reward.action_rate_l2.weight -0.25 --why "ankles chattering at 15 Hz"
 rlmcp run set_terrain terrains='["flat","random_rough"]' max_level=4
 rlmcp curriculum advance --why "flat is solved"
@@ -80,6 +81,7 @@ That is it. Details and traps: [docs/your-task.md](docs/your-task.md).
 | | |
 | --- | --- |
 | **Look at the robot** | Screenshots and clips of real training steps, not a separate eval. Pick which robot with `--where terrain=stairs`. |
+| **Watch it live** | `rlmcp view --on` attaches a browser view to a run already going — no restart, no checkpoint, no pause. It needs no renderer, so it works on a headless box, and it costs nothing while nobody has the tab open. `--realtime` buffers a window and plays it at the speed the robot actually moves, with mjlab's player in the tab. |
 | **Know why it moves badly** | `diagnose` measures jerk, chatter, effort, posture and gait, then says which lever to pull. When it cannot measure properly, it says so instead of guessing. |
 | **Tune anything, live** | 97 knobs on the G1 rough task, discovered from the environment. Reward weights, randomization ranges, PPO hyperparameters. Applied between rollout batches, never mid-step. |
 | **A ladder that drives itself** | Curriculum stages promote on earned conditions, not a schedule. Override any of it from a shell. |
@@ -187,7 +189,7 @@ of JSON files.
     torch + mujoco                  plain JSON files                  no simulator
 ┌───────────────────┐             ┌─────────────────┐             ┌──────────────────┐
 │ rlmcp-wrapped env │             │ status.json     │             │ MCP server       │
-│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (35 tools)       │
+│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (37 tools)       │
 │ records frames    │             │ events.jsonl    │             │ rlmcp CLI        │
 │ runs commands     │ ◄──reads─── │ artifacts/      │ ◄──writes── │ your own scripts │
 │ between batches   │             │ inbox/  outbox/ │             │                  │

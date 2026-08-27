@@ -960,6 +960,34 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Report the automatic clip schedule without recording")
 
   p = sub.add_parser(
+      "view",
+      help="Watch the run live in a browser, over viser",
+      description="Attach a live 3-D view to a run in progress, or detach it. "
+                  "No restart, no checkpoint, no pause: with no flags this "
+                  "reports whether a view is running and on what URL.",
+  )
+  p.add_argument("--on", dest="on", action="store_true",
+                 help="Attach the view and print its URL")
+  p.add_argument("--off", dest="off", action="store_true",
+                 help="Detach the view and give the port back")
+  p.add_argument("--port", type=int,
+                 help="First port to try (default 8740; busy ports are skipped)")
+  p.add_argument("--host", help="Interface to bind (default 0.0.0.0)")
+  p.add_argument("--fps", type=float,
+                 help="Frames per second pushed while somebody is watching")
+  p.add_argument("--realtime", dest="realtime", action="store_true", default=None,
+                 help="Play a buffered window back at the speed the robot "
+                      "actually moves, with pause and a speed control in the tab")
+  p.add_argument("--live", dest="realtime", action="store_false",
+                 help="The opposite: show the current step, at the run's pace")
+  p.add_argument("--buffer-seconds", type=float,
+                 help="Sim time one realtime window holds (default 4)")
+  p.add_argument("--env-id", type=int, help="Which environment to show")
+  p.add_argument("--where", nargs="*", metavar="KEY=VALUE",
+                 help="Pick the environment by description instead, e.g. "
+                      "terrain=pyramid_stairs level=2")
+
+  p = sub.add_parser(
       "play",
       help="Play a task: render a clip, or open a viewer",
       description="Replay a checkpoint under the conditions it was trained on. "
@@ -1422,6 +1450,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                    env_id=args.env_id, budget_mb=args.budget_mb)
     return _call(session, "record_video", max(timeout, args.seconds * 20 + 60),
                  seconds=args.seconds, env_id=args.env_id,
+                 where=_kv_pairs(args.where) or None)
+  if cmd == "view":
+    if args.off:
+      enabled = False
+    elif args.on:
+      enabled = True
+    else:
+      # Any setting on its own means "make it so": somebody asking for another
+      # environment or another rate wants to be looking at one, and refusing
+      # until they also type --on would be pedantry.
+      enabled = True if (args.port is not None or args.fps is not None
+                         or args.env_id is not None or args.where
+                         or args.host is not None or args.realtime is not None
+                         or args.buffer_seconds is not None) else None
+    return _call(session, "live_view", timeout, enabled=enabled, port=args.port,
+                 host=args.host, fps=args.fps, env_id=args.env_id,
+                 realtime=args.realtime, buffer_seconds=args.buffer_seconds,
                  where=_kv_pairs(args.where) or None)
   if cmd in ("trace", "diagnose"):
     name = "record_trace" if cmd == "trace" else "diagnose"

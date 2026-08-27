@@ -108,3 +108,7 @@ regardless.
   IsaacLab locomotion task simply reports fewer commands rather than broken
   ones. Anything IsaacLab has that mjlab does not belongs in an
   [extension](extensions.md).
+* **There is no live browser view.** `rlmcp view` mirrors a MuJoCo scene into
+  viser, which an IsaacLab run has nothing to hand over; asking for one is
+  refused by name rather than served empty. Screenshots, clips and progress
+  clips all work -- they go through IsaacLab's own renderer.

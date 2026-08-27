@@ -27,6 +27,13 @@ from rlmcp.adapters.base import NotSupported, RunnerAdapter, SimAdapter
 from rlmcp.core import diagnostics as diag
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.core.extensions import Extension, ExtensionContext, ExtensionRegistry
+from rlmcp.core.live_view import (
+    DEFAULT_BUFFER_SECONDS,
+    DEFAULT_FPS,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    LiveView,
+)
 from rlmcp.core.parameters.registry import ParameterRegistry
 from rlmcp.core.progress_video import DEFAULT_BUDGET_MB, ProgressVideoSchedule
 from rlmcp.records.clips import PROGRESS_STEM
@@ -387,6 +394,13 @@ class RlMcp:
       video_seconds: float = 4.0,
       video_env_id: int = 0,
       video_budget_mb: float = DEFAULT_BUDGET_MB,
+      viser: bool = False,
+      viser_port: int = DEFAULT_PORT,
+      viser_host: str = DEFAULT_HOST,
+      viser_fps: float = DEFAULT_FPS,
+      viser_env_id: int = 0,
+      viser_realtime: bool = False,
+      viser_buffer_seconds: float = DEFAULT_BUFFER_SECONDS,
   ):
     self.sim = sim_adapter
     self.runner = runner_adapter
@@ -422,6 +436,22 @@ class RlMcp:
     self.stop_reason = ""
     self.iteration = 0
     self.total_env_steps = 0
+
+    # The live view: a browser tab showing the environment as it trains. Off
+    # unless asked for, because it binds a port -- but attachable at any point
+    # afterwards with `rlmcp view --on`, which is the whole reason it is not a
+    # launch-time-only decision. See rlmcp.core.live_view for what it costs.
+    # Built after the run's own state, because a view enabled here starts
+    # immediately and its panel reads the iteration and the stage.
+    self._task_label = str((session_info or {}).get("task") or "")
+    self.live_view = LiveView(
+        sim=self.sim, enabled=bool(viser), port=viser_port, host=viser_host,
+        fps=viser_fps, env_id=viser_env_id,
+        realtime=viser_realtime, buffer_seconds=viser_buffer_seconds,
+        label=f"rlmcp {self._task_label}".strip(),
+        status_provider=self._live_view_status)
+    if self.live_view.running:
+      self.session.append_event("live_view_started", self.live_view.describe())
 
     self._jobs: List[DeferredJob] = []
     self._falsifier_fired: Optional[int] = None
@@ -555,8 +585,13 @@ class RlMcp:
     Each job collects into its own state, so jobs never contend; a job whose
     ``feed`` raises is failed with the error and answers truthfully at the
     next service boundary.
+
+    The live view is fed from here too, on the steps where a frame is due --
+    which is why it shows the run at the run's own pace and needs nothing from
+    the training script.
     """
     self.total_env_steps += 1
+    self.live_view.tick()
     if not self._jobs:
       return
     for job in self._jobs:
@@ -617,6 +652,10 @@ class RlMcp:
       time.sleep(0.15)
       self._finish_jobs()
       self._drain_inbox()
+      # Kept fed while paused: the robot stands still, but a view attached or
+      # re-pointed during the pause has to show something, and the pause loop
+      # is the only thing running.
+      self.live_view.tick()
       self._publish_status()
 
   def should_stop(self) -> bool:
@@ -790,6 +829,35 @@ class RlMcp:
         self._respond_job(job, ok=False, error=f"{type(exc).__name__}: {exc}")
     self._jobs = remaining
 
+  # The live view.
+
+  def _live_view_status(self) -> str:
+    """What the browser tab says above the robot: where this run has got to.
+
+    A moving robot with no iteration beside it is a screensaver -- the numbers
+    are what make it evidence of something. Kept to the headline: whoever wants
+    the rest has `rlmcp status` and the plots.
+    """
+    lines = [f"### {self._task_label or 'rlmcp'}",
+             f"**iteration {self.iteration:,}**"]
+    if self.paused:
+      lines.append("_paused_")
+    if self.curriculum is not None:
+      stage = self._safe(lambda: self.curriculum.status(self.iteration), {})
+      if stage.get("stage"):
+        lines.append(f"stage `{stage['stage']}`")
+    latest = self.telemetry.get_latest_metrics()
+    for key in self._default_metric_names(limit=3):
+      value = latest.get(key)
+      if isinstance(value, (int, float)):
+        lines.append(f"{key.split('/')[-1]}: `{value:.4g}`")
+    # getattr: the panel is written once from inside LiveView's own
+    # constructor, before the attribute holding it exists here.
+    view = getattr(self, "live_view", None)
+    lines.append(f"env {view.env_id if view is not None else 0} of "
+                 f"{self._safe(self.sim.num_envs, '?')}")
+    return "\n\n".join(lines)
+
   # Progress clips.
 
   def _maybe_start_progress_clip(self) -> None:
@@ -929,6 +997,7 @@ class RlMcp:
         "screenshot": self.cmd_screenshot,
         "record_video": self.cmd_record_video,
         "progress_video": self.cmd_progress_video,
+        "live_view": self.cmd_live_view,
         "record_trace": self.cmd_record_trace,
         "plot_trace": self.cmd_plot_trace,
         "diagnose": self.cmd_diagnose,
@@ -988,6 +1057,7 @@ class RlMcp:
             getattr(self.sim, "renderer_ready", lambda: False), False)),
         "pending_jobs": [j.describe() for j in self._jobs],
         "progress_video": self.progress_video.describe(),
+        "live_view": self.live_view.describe(),
     }
     if self.curriculum is not None:
       payload["curriculum"] = self.curriculum.status(self.iteration)
@@ -1295,6 +1365,41 @@ class RlMcp:
           {"iteration": self.iteration, **self.progress_video.describe()},
       )
     return self.progress_video.describe()
+
+  def cmd_live_view(
+      self,
+      enabled: Optional[bool] = None,
+      port: Optional[int] = None,
+      host: Optional[str] = None,
+      fps: Optional[float] = None,
+      env_id: Optional[int] = None,
+      where: Optional[Dict[str, Any]] = None,
+      realtime: Optional[bool] = None,
+      buffer_seconds: Optional[float] = None,
+  ) -> Dict[str, Any]:
+    """Attach, re-point or detach the live browser view; report where it is.
+
+    Called with nothing, this says whether a view is running and on what URL.
+    ``enabled=True`` attaches one to the run in progress -- no restart, no
+    checkpoint, no pause -- and ``enabled=False`` gives the port back. The
+    environment can be picked by index or by description, the same way a
+    screenshot picks one.
+
+    ``realtime=True`` swaps the plain live push for a buffered window played
+    back at the speed the robot actually moves, with a player in the tab.
+    """
+    if where is not None and env_id is None:
+      env_id = self._resolve_env_id(env_id, where)
+    was_running = self.live_view.running
+    result = self.live_view.configure(
+        enabled=enabled, port=port, host=host, fps=fps, env_id=env_id,
+        realtime=realtime, buffer_seconds=buffer_seconds)
+    if self.live_view.running != was_running:
+      self.session.append_event(
+          "live_view_started" if self.live_view.running else "live_view_stopped",
+          {"iteration": self.iteration, **result},
+      )
+    return result
 
   def cmd_record_trace(
       self,
@@ -1647,6 +1752,7 @@ class RlMcp:
 
   def close(self) -> None:
     """Flush final state; safe to call more than once."""
+    self.live_view.stop("the run ended")
     if self.records is not None:
       self.records.finish(self.stop_reason or "closed")
     # Extensions release what they hold; a raise is logged, never propagated.

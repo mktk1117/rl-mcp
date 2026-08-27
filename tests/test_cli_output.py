@@ -284,6 +284,7 @@ SHAPES = {
     "plot": ENVELOPE,
     "shot": ENVELOPE,
     "video": ENVELOPE,
+    "view": ENVELOPE,
     "play": ENVELOPE,
     "trace": ENVELOPE,
     "diagnose": ENVELOPE,

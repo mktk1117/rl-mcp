@@ -745,6 +745,42 @@ def create_mcp_server(
     return _call(handle, "progress_video", every=every, seconds=seconds,
                  env_id=env_id, budget_mb=budget_mb)
 
+  @mcp.tool()
+  def live_view(
+      enabled: Optional[bool] = None,
+      env_id: Optional[int] = None,
+      where: Optional[Dict[str, Any]] = None,
+      realtime: Optional[bool] = None,
+      fps: Optional[float] = None,
+      port: Optional[int] = None,
+  ) -> Dict[str, Any]:
+    """Attach a live browser view to the run, re-point it, or detach it.
+
+    The view is a 3-D scene served over viser and fed from the training loop,
+    so it shows the policy that is being trained right now -- no checkpoint, no
+    restart, and no pause. Return the URL to whoever asked to see the robot;
+    it is not an image, it is a page they open.
+
+    Call with no arguments to report whether a view is running and where. It
+    costs nothing while no browser is connected, so leaving one attached is
+    cheap; ``enabled=False`` gives the port back.
+
+    Args:
+      enabled: True attaches the view, False detaches it.
+      env_id: which environment to show.
+      where: pick that environment by description instead, e.g.
+        {"terrain": "pyramid_stairs"} -- see ``get_training_status`` for the
+        vocabulary this run supports.
+      realtime: True buffers a few seconds of the run and plays it back at the
+        speed the robot actually moves, with a player in the tab. Worth asking
+        for when somebody wants to judge a gait: training steps far faster than
+        life, so the default view is a fast-forward.
+      fps: frames per second pushed while somebody is watching (live mode).
+      port: first port to try; busy ones are skipped.
+    """
+    return _call(handle, "live_view", enabled=enabled, env_id=env_id,
+                 where=where, realtime=realtime, fps=fps, port=port)
+
   # Motion analysis.
 
   @mcp.tool()

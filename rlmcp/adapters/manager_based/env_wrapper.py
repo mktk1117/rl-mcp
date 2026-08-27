@@ -9,6 +9,7 @@ What it adds:
 
 * per-step hooks that feed traces and video capture,
 * a clip of the policy every so many iterations, filed in the run record,
+* an optional live view of the run in a browser, over viser,
 * per-iteration servicing of agent commands,
 * accumulation of mjlab's episode logs into rlmcp's telemetry,
 * an optional terrain curriculum that advances itself.
@@ -104,6 +105,13 @@ class RlMcpEnvWrapper:
       video_seconds: float = 4.0,
       video_env_id: int = 0,
       video_budget_mb: Optional[float] = None,
+      viser: bool = False,
+      viser_port: Optional[int] = None,
+      viser_host: Optional[str] = None,
+      viser_fps: Optional[float] = None,
+      viser_env_id: int = 0,
+      viser_realtime: bool = False,
+      viser_buffer_seconds: Optional[float] = None,
   ):
     self.env = env
     self.service_every_steps = max(1, int(service_every_steps))
@@ -127,6 +135,14 @@ class RlMcpEnvWrapper:
         video_seconds=video_seconds,
         video_env_id=video_env_id,
         **({} if video_budget_mb is None else {"video_budget_mb": video_budget_mb}),
+        viser=viser,
+        viser_env_id=viser_env_id,
+        viser_realtime=viser_realtime,
+        **({} if viser_buffer_seconds is None
+           else {"viser_buffer_seconds": viser_buffer_seconds}),
+        **({} if viser_port is None else {"viser_port": viser_port}),
+        **({} if viser_host is None else {"viser_host": viser_host}),
+        **({} if viser_fps is None else {"viser_fps": viser_fps}),
         session_info={
             # Empty means "a training run", which is what the controller
             # already writes; only a play session needs to say otherwise.
@@ -165,12 +181,24 @@ class RlMcpEnvWrapper:
     self.startup_checks()
 
     active = self.rlmcp.extensions.names()
+    view = self.rlmcp.live_view
     print(
         f"[rlmcp] session ready: {self.rlmcp.session.dir}\n"
         f"[rlmcp] extensions: {', '.join(active) if active else 'none'}\n"
         f"[rlmcp] inspect it with: rlmcp status --session {self.rlmcp.session.dir}",
         flush=True,
     )
+    if view.running:
+      # The URL is the whole point of having asked for it, so it is said once
+      # here rather than only in a status payload somebody has to go and read.
+      print(
+          f"[rlmcp] watch it live: {view.url}  (also {view.host_url})\n"
+          f"[rlmcp] {view.prose()}; the view costs nothing while no browser is "
+          "open. Detach it with `rlmcp view --off`",
+          flush=True,
+      )
+    elif view.last_error:
+      print(f"[rlmcp] the live view could not start: {view.last_error}", flush=True)
 
   # Construction helpers.
 

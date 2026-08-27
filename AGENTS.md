@@ -51,6 +51,8 @@ without the variable set; it is a scratch directory, not the records.
 | judge smoothness from reward curves | `rlmcp diagnose` (measures HF power share, jerk, effort) |
 | tell the user "it improved" | `rlmcp video` / `rlmcp plot`, then show them |
 | script a clip every N iterations of a run | already done — progress clips at 0, 50, 100, 200 … (`rlmcp video --schedule`) |
+| start a viewer, or `play`, to see what a run is doing *now* | `rlmcp view --on` — a browser view attached to the live run, no restart and no renderer |
+| explain that the live view "looks too fast" | `rlmcp view --realtime` — a buffered window played back at 1x, with a player in the tab |
 | look at a policy whose run has already exited | `rlmcp play` — it restores the conditions the checkpoint trained under first |
 | call `env.reset()` yourself to clear a bad state | `rlmcp reset-envs` (`--where key=value` to restart only some) |
 | restart `rlmcp play` to see a different checkpoint | `rlmcp run load_policy checkpoint=<path>` — same env, same conditions, new weights |

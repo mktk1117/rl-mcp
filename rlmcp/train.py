@@ -10,6 +10,7 @@ exercised with a single command::
 While it runs, drive it from another shell::
 
     rlmcp status
+    rlmcp view --on                       # watch it in a browser, live
     rlmcp diagnose --seconds 4 --terrain pyramid_stairs
     rlmcp set reward.action_rate_l2.weight -0.2 --why "knees buzzing"
 """
@@ -76,6 +77,31 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                       metavar="MB",
                       help="Stop taking progress clips once they have used "
                            "this much disk (default 200; 0 for no limit)")
+  parser.add_argument(
+      "--viser", action="store_true",
+      help="Serve a live 3-D view of the run in a browser, over viser. Costs "
+           "no renderer and nothing at all while no browser is open. It can "
+           "also be attached to a run already going with `rlmcp view --on`.",
+  )
+  parser.add_argument("--viser-port", type=int, default=None, metavar="PORT",
+                      help="First port to try for the live view (default 8740; "
+                           "busy ports are skipped and the one taken is "
+                           "reported in `rlmcp status`)")
+  parser.add_argument("--viser-fps", type=float, default=None, metavar="HZ",
+                      help="Frames per second the live view pushes while "
+                           "somebody is watching (default 20)")
+  parser.add_argument("--viser-env-id", type=int, default=0,
+                      help="Which environment the live view shows")
+  parser.add_argument(
+      "--viser-realtime", action="store_true",
+      help="Play the live view back at the speed the robot actually moves: "
+           "the run records a few seconds of itself and the tab plays that "
+           "window at 1x, with pause, single-step and a speed control. "
+           "Without it the view shows the current step, at the run's pace.",
+  )
+  parser.add_argument("--viser-buffer-seconds", type=float, default=None,
+                      metavar="S",
+                      help="Sim time one realtime window holds (default 4)")
   parser.add_argument("--save-interval", type=int, default=None)
   parser.add_argument("--resume", default="", help="Checkpoint path to resume from")
   parser.add_argument(
@@ -211,6 +237,12 @@ def main(argv: Optional[List[str]] = None) -> int:
       video_every=args.video_every,
       video_seconds=args.video_seconds,
       video_budget_mb=args.video_budget_mb,
+      viser=args.viser,
+      viser_port=args.viser_port,
+      viser_fps=args.viser_fps,
+      viser_env_id=args.viser_env_id,
+      viser_realtime=args.viser_realtime,
+      viser_buffer_seconds=args.viser_buffer_seconds,
       curriculum_kwargs={
           "min_iterations": args.stage_min_iterations,
           "hold_iterations": args.stage_hold_iterations,

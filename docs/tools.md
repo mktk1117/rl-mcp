@@ -78,6 +78,8 @@ output. Present and the command is not `record`, take `"result"` on success and
 | a picture of the robot | [`shot`](#shot) | `take_screenshot` |
 | a clip of the robot | [`video`](#video) | `record_video` |
 | clips taken automatically | [`video --every`](#video) | `set_progress_video` |
+| watch it live in a browser | [`view --on`](#view) | `live_view` |
+| watch it at the robot's own speed | [`view --realtime`](#--realtime-the-same-view-at-the-speed-the-robot-moves) | `live_view` |
 | why does it move badly | [`diagnose`](#diagnose) | `diagnose_motion` |
 | raw per-step signals | [`trace`](#trace), [`plot-trace`](#plot-trace), [`analyze`](#analyze) | `record_trace`, `plot_joint_trace` |
 | what can I tune | [`params`](#params), [`get`](#get) | `list_parameters` |
@@ -202,10 +204,10 @@ Everything the run has written: PNGs, MP4s, `.npz` traces.
 
 # Looking at the robot
 
-All four commands below record during normal rollout steps, so what you see is
-real training behaviour, not a separate evaluation. `video`, `trace` and
-`diagnose` are **deferred jobs**: they collect data over the coming steps and
-answer when done.
+All the commands below read the run as it steps, so what you see is real
+training behaviour, not a separate evaluation. `video`, `trace` and `diagnose`
+are **deferred jobs**: they collect data over the coming steps and answer when
+done. `view` is the odd one out -- it records nothing and returns a URL.
 
 Every one takes `--env-id N` or `--where key=value` to pick which robot. The
 `where` vocabulary comes from the run's extensions — the core does not know what
@@ -276,6 +278,100 @@ says so (`--video-budget-mb`, `0` for no limit).
 A scheduled clip never takes the last deferred-job slot from a command you are
 waiting on; if it cannot start it says so in the events
 (`progress_clip_skipped`) and waits for the next gap.
+
+## `view`
+
+The run in a browser tab, live, while it trains.
+
+```bash
+rlmcp view --on                   # attach; prints the URL
+rlmcp view                        # is one running, and where?
+rlmcp view --realtime             # play it back at the speed the robot moves
+rlmcp view --env-id 300           # show another environment
+rlmcp view --where terrain=pyramid_stairs
+rlmcp view --off                  # detach, and give the port back
+rlmcp-train <task> --viser        # or have the run start with one
+rlmcp-train <task> --viser --viser-realtime
+```
+
+**MCP:** `live_view({"enabled": true})` -- returns the URL to hand to whoever
+asked to see the robot. It is a page, not an image: the tab keeps updating on
+its own.
+
+Attaching does not restart, pause or reload anything. A run launched hours ago
+with no viewer gets one on the next iteration boundary, showing the policy
+currently being trained -- exploration noise, curriculum stage and all -- and
+`--off` gives the port back. Which environment is shown can be changed from
+either end: the slider in the tab, or `--env-id` / `--where` from a shell.
+
+```
+   the run ──▶ every step ──▶ due? ──▶ anybody watching? ──▶ push ──▶ browser
+                               │                   │
+                          20 per second       no browser: stop here
+```
+
+**What it costs.** Nothing while no browser is open -- the tick is a clock
+comparison and returns. With a tab open it is a state copy at up to 20 frames a
+second (`--fps`); a G1-sized scene measures around 1-3 ms a frame, and
+`rlmcp status` reports the measured `push_ms` so you never have to take that on
+faith. There is **no renderer**: geometry crosses to the browser once and only
+body poses follow, so unlike `shot` and `video` this needs no render context, no
+GPU memory and no GL -- it works on a headless box over ssh.
+
+**Where it is served.** Port 8740 by default, and the next free one after that
+if it is taken, so a second run on the same machine does not silently fail or
+show you the first one. Bound on all interfaces: from another machine use
+`http://<host>:<port>` (`host_url` in the status payload), or forward it with
+`ssh -L 8740:localhost:8740 <host>`.
+
+**What it is not.** A recording. Nothing here lands in the run record, because
+nothing here is evidence -- clips and traces are the run's memory and this is
+the window.
+
+### `--realtime`: the same view, at the speed the robot moves
+
+By default the view shows the *current* step, which means it runs at the run's
+pace -- training steps as fast as the GPU allows, so a policy walking at 1 m/s
+sprints across the tab and a gait is impossible to judge.
+
+`--realtime` fixes that by buffering. The run records a few seconds of itself
+into a window, hands it over, and the tab plays it back at 1x:
+
+```
+ record 3s of sim   ──▶   play it back over 3s of wall clock   ──▶   record again
+ (a fraction of a                   ▲
+  second, at 20x)                   └── pause · single step · 1/32x … 8x
+```
+
+What you get in the tab is mjlab's own player: **Pause**, **Step**, a **Speed**
+control from 1/32x to 8x, and *Skip to a fresh window* when you would rather
+see now than see it properly. The status line says where the playback is and
+how old the window is (`playing 75/150 (1.5s of 3s) · recorded 2s ago`), and
+`rlmcp status` carries the same under `live_view.playback`.
+
+```bash
+rlmcp view --realtime                    # switch a running view over
+rlmcp view --realtime --buffer-seconds 8 # a longer window
+rlmcp view --live                        # back to the current step
+```
+
+The trade is stated plainly: you are watching a stretch that finished a moment
+ago, not the current step, and the jump between windows is however much sim
+time passed while the last one played. Each window is one *contiguous* stretch
+-- if the browser closes or the run pauses mid-recording, the window starts
+over rather than splicing two moments together and calling the result motion.
+
+**What it costs.** A few hundred bytes copied per environment step while a
+window is filling, with no device synchronisation -- and nothing at all between
+windows, which is most of the time. The transfer to the CPU happens once per
+window; forward kinematics, the browser, and waiting out real time all happen
+on the player's own thread, where being slow costs the run nothing. Switching
+mode rebuilds the view (the buffer and the player exist on one side of that
+switch and not the other), so the tab reloads.
+
+A view that fails three pushes in a row detaches itself, says why in the events
+(`live_view_stopped`), and frees the port -- a broken window must not become a
+cost on every training step.
 
 ## `diagnose`
 
