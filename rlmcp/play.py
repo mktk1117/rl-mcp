@@ -338,7 +338,7 @@ class UntrainedPolicy:
     return f"UntrainedPolicy({self.mode})"
 
 
-def _untrained_policy(cfg: PlayConfig, vec_env: Any) -> UntrainedPolicy:
+def untrained_policy(cfg: PlayConfig, vec_env: Any) -> UntrainedPolicy:
   """Size an untrained actor from the env rather than from the task config."""
   num_actions = None
   for source in (
@@ -638,11 +638,11 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
       )
 
   _choose_gl_backend(cfg)
-  env, lab, agent_cfg, vec_env = _build_env(cfg, task, session_dir)
+  env, lab, agent_cfg, vec_env = build_env(cfg, task, session_dir)
 
   conditions, restored = _restore_conditions(cfg, lab, session_dir)
   policy = SwappablePolicy(
-      _untrained_policy(cfg, vec_env) if untrained
+      untrained_policy(cfg, vec_env) if untrained
       else _load_policy(cfg, task, vec_env, checkpoint, agent_cfg),
       checkpoint or Path(cfg.policy),
   )
@@ -755,9 +755,14 @@ def _choose_gl_backend(cfg: PlayConfig) -> None:
     os.environ.setdefault("MUJOCO_EGL_DEVICE_ID", index)
 
 
-def _build_env(
+def build_env(
     cfg: PlayConfig, task: str, session_dir: Optional[Path]
 ) -> Tuple[Any, Any, Any, Any]:
+  """Construct the task, wrap it as rlmcp, and return (env, lab, rl cfg, vec).
+
+  Shared with :mod:`rlmcp.check`, deliberately: a check that built the
+  environment its own way would be checking something nobody plays or trains.
+  """
   import importlib
 
   import mjlab.tasks  # noqa: F401  (populates the task registry)
@@ -1191,6 +1196,7 @@ def config_from_args(args: Any, overrides: Dict[str, Any]) -> PlayConfig:
 
 __all__ = [
     "MODES",
+    "build_env",
     "PlayConfig",
     "PlayError",
     "PolicySwap",
@@ -1200,6 +1206,7 @@ __all__ = [
     "find_checkpoint",
     "run_play",
     "session_for",
+    "untrained_policy",
     "stage_at_iteration",
     "task_for",
 ]

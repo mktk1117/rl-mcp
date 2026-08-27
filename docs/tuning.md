@@ -14,7 +14,7 @@ The loop, and where each step's tools are documented:
 
 | step | tools |
 | --- | --- |
-| 1. verify the task before training | zero/random rollouts, [`shot`](tools.md#shot), term-magnitude checks |
+| 1. verify the task before training | [`check`](tools.md#check), [`shot`](tools.md#shot) |
 | 2. open the record | [`record new`](records.md) |
 | 3. watch the right numbers | [`status`](tools.md#status), [`metrics`](tools.md#metrics), [`plot`](tools.md#plot), [`curriculum`](tools.md#curriculum) |
 | 4. look at the robot | [`shot`](tools.md#shot), [`video`](tools.md#video), [`play`](tools.md#play) |
@@ -28,6 +28,12 @@ The loop, and where each step's tools are documented:
 A wrong task trains fine. It produces curves, checkpoints and plausible
 metrics, and tells you nothing. Each check below is cheap and each caught a
 real defect.
+
+**`rlmcp check --task <id>` does the first three of these**, and its exit code
+is the verdict: it builds the task with no policy, rolls it, and reports
+imports / constructs / steps / rewards finite / terminations sane, followed by
+what each reward term paid. What follows is what it checks and why each one
+earned its place.
 
 **Roll zero actions first.** ~150 passive steps: the robot holds its keyframe
 pose, held objects stay put, nothing terminates. This catches reset-ordering

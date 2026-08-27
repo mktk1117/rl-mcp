@@ -224,6 +224,40 @@ class SimAdapter(ABC):
     """
     return {}
 
+  def reward_terms(self) -> Dict[str, float]:
+    """What each reward term paid on the last step, by name.
+
+    The single most useful thing a task can be asked, and the one a curve
+    cannot answer: total reward went up, *because of which term?* The failure
+    it exists to catch is in this project's own worked example -- a task where
+    standing still paid about 2600x what making progress paid. That is
+    invisible in the code, invisible in the total, and obvious the moment the
+    terms are put side by side.
+
+    Values are per-term contributions averaged over the batch, in whatever
+    units the environment adds them in -- weighted, because the question is
+    what each term is *paying*, not what its raw function returned. A backend
+    that scales rewards by ``dt`` may report the unscaled rate, since a factor
+    common to every term changes no comparison between them.
+
+    Raises :class:`NotSupported` where terms are not a thing the environment
+    has: a hand-written env with one scalar reward has nothing to break down,
+    and saying so is more useful than a dict with one entry called "reward".
+    """
+    raise NotSupported("reward_terms")
+
+  def termination_terms(self) -> Dict[str, float]:
+    """Which termination terms fired on the last step, as a fraction of envs.
+
+    The other half of "why did the episode end". An env that terminates on
+    step 1 and one that never terminates at all are both broken, both produce
+    training curves, and neither says so anywhere else.
+
+    ``0.0`` for a term that did not fire is meaningful and should be reported;
+    an empty dict means the environment has no named termination terms.
+    """
+    raise NotSupported("termination_terms")
+
   def summary_metrics(self) -> Dict[str, float]:
     """Cheap always-on scalars describing the current batch.
 

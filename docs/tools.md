@@ -71,6 +71,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 | what you want | command | MCP tool |
 | --- | --- | --- |
 | what could I run at all | [`tasks`](#tasks) | (CLI only) |
+| is this task worth training | [`check`](#check) | (CLI only) |
 | what runs exist | [`sessions`](#sessions) | `list_sessions` |
 | point at another run | (use `--session`) | `switch_session` |
 | how is it doing | [`status`](#status) | `get_training_status` |
@@ -134,6 +135,70 @@ apart will send somebody to fix the wrong thing.
 Nothing is discovered. Only packages you name are imported, because a listing
 that goes looking for packages on disk is a listing that runs code nobody asked
 it to.
+## `check`
+
+Build the task, roll it with no policy, and answer the five questions that
+decide whether training it is worth a GPU. Everything else here talks to a run;
+this runs before one exists.
+
+```bash
+rlmcp check --task Mjlab-Velocity-Rough-Unitree-G1
+rlmcp check --task My-Task --task-package my_project.tasks --policy random
+rlmcp check --task My-Task --steps 300 --num-envs 8 --device cuda:0
+```
+
+```
+gate            ok    detail
+imports         true
+constructs      true  8 env(s) on cuda:0          5.97 s
+steps           true  40 of 40 steps
+rewards_finite  true  6 terms, all finite
+terminations    true  0.6 episodes per env
+
+term              mean      share
+alive             2.98      0.83
+track_direction   0.31      0.09
+joint_acc_l2     -0.18      0.05
+```
+
+| gate | the failure it catches |
+| --- | --- |
+| `imports` | a syntax error, a package that does not import, a task nothing registers |
+| `constructs` | a term naming a body the robot does not have |
+| `steps` | an env that dies on step 1 |
+| `rewards_finite` | a NaN, a divide by zero, an exploding scale |
+| `terminations` | everything ending at once, or nothing ever ending |
+
+A gate that fails **stops the ones after it**, and they report `not run` rather
+than passing — a "reward is NaN" line under "the env would not construct" sends
+you to fix a reward that was never the problem. Exit code is the verdict, so
+`rlmcp check --task X && rlmcp train X` is a sentence you can write.
+
+| flag | meaning |
+| --- | --- |
+| `--task` | required: there is no checkpoint here to infer one from |
+| `--policy zero\|random` | zero: the task must survive doing nothing. random: it must survive being shaken |
+| `--steps`, `--num-envs` | how long and how wide. Defaults 150 and 4 |
+| `--device` | `cpu` by default, so a check never queues behind a run |
+| `--task-package MODULE` | import this first, so your tasks register. Repeatable |
+| `--session-dir` | keep the throwaway session instead of using a temp dir |
+
+### What the terms table is for
+
+The gates are the cheap half. The table under them is the one that changes what
+you build: **what each reward term actually paid**, largest first, against a
+policy that is by construction doing nothing.
+
+The failure it exists to make obvious is
+[docs/tuning.md](tuning.md#1-verify-the-task-before-training-on-it)'s worked
+example — a task where standing still paid about 2600× what making progress
+paid. Nobody writes that on purpose. It is invisible in the code, invisible in
+the total reward, and unmissable the moment the terms are side by side. When
+one term dominates, `dominance` names it and the ratio.
+
+The same numbers come from the environment's own managers, so a task whose
+backend cannot break its reward down says so rather than reporting a total as
+though it were a term.
 
 ---
 
