@@ -23,12 +23,15 @@ def _stage(iteration: int, name: str) -> dict:
           "layer": "curriculum", "what": f"stage → {name}", "why": "", "at": 0.0}
 
 
-LADDER = {"stages": [
-    {"name": "0_held", "parameters": {"assist": 1.0},
-     "promote_when": [{"metric": "rlmcp/catch_rate", "op": ">=", "value": 8.0}],
-     "min_iterations": 400},
-    {"name": "1_table", "parameters": {"assist": 0.0}},
-]}
+# What `rlmcp.core.replay.read_ladder` hands back: the planned stages by name.
+LADDER = {
+    "0_held": {"name": "0_held", "parameters": {"assist": 1.0},
+               "promote_when": [{"metric": "rlmcp/catch_rate", "op": ">=",
+                                 "value": 8.0}],
+               "min_iterations": 400},
+    "1_table": {"name": "1_table", "parameters": {"assist": 0.0}},
+}
+ENTERED = ["0_held", "1_table"]
 
 
 # Distillation.
@@ -39,7 +42,7 @@ def test_an_edit_becomes_the_value_its_rung_starts_with():
   replay starts the rung with the value the original run needed."""
   schedule = distil([_stage(0, "0_held"),
                      _edit(400, "reward.goal.weight: 18.0 → 24.0", "too weak")],
-                    LADDER)
+                    LADDER, ENTERED)
 
   held = schedule.stages[0]
   assert held.parameters == {"assist": 1.0, "reward.goal.weight": 24.0}
@@ -48,7 +51,7 @@ def test_an_edit_becomes_the_value_its_rung_starts_with():
 
 def test_the_rungs_promotion_conditions_survive_distillation():
   """Those were written before the run and are real; nothing here invents one."""
-  schedule = distil([_stage(0, "0_held")], LADDER)
+  schedule = distil([_stage(0, "0_held")], LADDER, ENTERED)
 
   condition = schedule.stages[0].promote_when[0]
   assert (condition.metric, condition.op, condition.value) == (
@@ -58,7 +61,7 @@ def test_the_rungs_promotion_conditions_survive_distillation():
 def test_an_edit_lands_in_the_rung_that_was_active_when_it_happened():
   schedule = distil([_stage(0, "0_held"), _stage(1500, "1_table"),
                      _edit(1600, "rl.entropy_coef: 0.005 → 0.01", "collapsed")],
-                    LADDER)
+                    LADDER, ENTERED)
 
   assert "rl.entropy_coef" not in schedule.stages[0].parameters
   assert schedule.stages[1].parameters["rl.entropy_coef"] == 0.01
@@ -70,6 +73,13 @@ def test_a_refused_edit_is_not_in_the_ladder():
                            "outside the registered bounds")])
 
   assert schedule.stages[0].parameters == {}
+
+
+def test_only_the_rungs_the_run_actually_climbed_are_in_the_recipe():
+  """A rung it never reached is a plan, not a result."""
+  schedule = distil([_stage(0, "0_held")], LADDER, ["0_held"])
+
+  assert [s.name for s in schedule.stages] == ["0_held"]
 
 
 def test_a_run_with_no_curriculum_gets_one_rung_per_change(): 

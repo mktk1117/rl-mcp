@@ -36,33 +36,42 @@ DEFAULT_MIN_ITERATIONS = 100
 
 
 def distil(interventions: List[Dict[str, Any]],
-           curriculum: Optional[Dict[str, Any]] = None) -> StageSchedule:
+           ladder: Optional[Dict[str, Dict[str, Any]]] = None,
+           entered: Optional[List[str]] = None) -> StageSchedule:
   """The ladder that would have produced this run's history.
 
   Two shapes, because runs come in two kinds. A run that *had* a curriculum
   keeps its rungs and its promotion conditions -- those are real, they were
-  written before the run -- and the edits made while a rung was active are
-  folded into that rung's entry parameters, last value winning. A run with no
-  curriculum gets one rung per group of edits, held for as long as the original
-  ran before the next change.
+  written before the run -- in the order it actually climbed them, and the
+  edits made while a rung was active fold into that rung's entry parameters,
+  last value winning. A run with no curriculum gets one rung per group of
+  edits, held for as long as the original ran before the next change.
+
+  ``ladder`` and ``entered`` are what :mod:`rlmcp.core.replay` reads off a
+  session: the stages as planned, and the names in the order they were entered.
+  Only the rungs the run actually reached are in the recipe -- a rung it never
+  climbed is a plan, not a result.
   """
   edits = [i for i in interventions
            if i["kind"] == "set_parameter" and "(refused)" not in i["what"]]
   stage_changes = [i for i in interventions if i["kind"] == "curriculum_stage"]
 
-  if curriculum and curriculum.get("stages"):
-    schedule = StageSchedule.from_dict(curriculum)
-    entered = _entry_iterations(schedule, stage_changes)
-    for stage in schedule.stages:
-      start = entered.get(stage.name, 0)
-      end = _next_entry(entered, schedule, stage.name)
-      for edit in edits:
-        if start <= edit["iteration"] < end:
-          key, value = _parsed(edit)
-          if key is not None:
-            stage.parameters[key] = value
-            stage.notes = _append_note(stage.notes, edit)
-    return schedule
+  if ladder:
+    names = [n for n in (entered or list(ladder)) if n in ladder]
+    stages = [CurriculumStage.from_dict(ladder[name]) for name in names]
+    if stages:
+      schedule = StageSchedule(stages)
+      entry = _entry_iterations(schedule, stage_changes)
+      for stage in schedule.stages:
+        start = entry.get(stage.name, 0)
+        end = _next_entry(entry, schedule, stage.name)
+        for edit in edits:
+          if start <= edit["iteration"] < end:
+            key, value = _parsed(edit)
+            if key is not None:
+              stage.parameters[key] = value
+              stage.notes = _append_note(stage.notes, edit)
+      return schedule
 
   stages: List[CurriculumStage] = []
   for index, edit in enumerate(edits):
@@ -139,9 +148,17 @@ def build(store: Any, record_id: str, out: Path | str,
 
   records = {r.id: r for r in store.list_records()}
   session = Path(session_dir or record.session or "")
-  interventions, curriculum = _history(session)
-  schedule = distil(interventions, curriculum)
+  interventions, ladder, entered = _history(session)
+  schedule = distil(interventions, ladder, entered)
   missing: List[str] = []
+  if not ladder and entered:
+    # The rungs are named in the log but the ladder itself was never written
+    # down, so the promotion conditions are gone. Say so: a recipe that quietly
+    # replaced a five-rung curriculum with a list of ad-hoc edits would look
+    # exactly like a correct one.
+    missing.append(
+        f"the promotion conditions for {len(entered)} curriculum rung(s) "
+        f"({', '.join(entered)}) -- this run did not save its ladder")
 
   _write_json(out / "curriculum.json", schedule.to_dict())
   _write_json(out / "config.json", record.config or {})
@@ -169,23 +186,26 @@ def build(store: Any, record_id: str, out: Path | str,
 
 
 def _history(session: Path) -> tuple:
-  """The run's interventions and the ladder it actually climbed."""
+  """The run's interventions, the ladder it planned, and the rungs it climbed.
+
+  The ladder is read through :mod:`rlmcp.core.replay`, which already knows the
+  two places a run writes it and that only the event log knows which rungs were
+  actually entered. Re-deriving that here is how a recipe ends up describing a
+  different run than ``rlmcp play`` does.
+  """
+  from rlmcp.core import replay
   from rlmcp.records.interventions import from_session
 
   if not session or not session.exists():
-    return [], None
+    return [], {}, []
   try:
     interventions = from_session(session)
   except Exception:  # noqa: BLE001 -- an unreadable log costs the notes, not the recipe.
     interventions = []
-  for name in ("params/curriculum.json", "curriculum.json"):
-    path = session / name
-    if path.exists():
-      try:
-        return interventions, json.loads(path.read_text())
-      except (OSError, ValueError):
-        break
-  return interventions, None
+  try:
+    return interventions, replay.read_ladder(session), replay.stage_names(session)
+  except Exception:  # noqa: BLE001 -- same rule: the recipe still gets written.
+    return interventions, {}, []
 
 
 def _restore_package(record: RunRecord, destination: Path) -> Optional[Path]:
