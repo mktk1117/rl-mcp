@@ -57,7 +57,7 @@ _ALG_PARAMS: Dict[str, Dict[str, Any]] = {
 }
 
 
-class MjlabRunnerAdapter(RunnerAdapter):
+class RslRlRunnerAdapter(RunnerAdapter):
   """Live control over an rsl_rl runner's algorithm and checkpoints."""
 
   def __init__(self, runner: Any):

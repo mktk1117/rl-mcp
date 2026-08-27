@@ -16,18 +16,18 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from rlmcp.adapters.mjlab.access import paths
-from rlmcp.adapters.mjlab.access.actions import ActionAccess
-from rlmcp.adapters.mjlab.access.base import (
+from rlmcp.adapters.manager_based.access import paths
+from rlmcp.adapters.manager_based.access.actions import ActionAccess
+from rlmcp.adapters.manager_based.access.base import (
     AccessProvider,
     ProviderRegistry,
     Synthetic,
     Term,
 )
-from rlmcp.adapters.mjlab.access.commands import CommandAccess
-from rlmcp.adapters.mjlab.access.events import EventAccess
-from rlmcp.adapters.mjlab.access.rewards import RewardAccess
-from rlmcp.adapters.mjlab.access.terminations import TerminationAccess
+from rlmcp.adapters.manager_based.access.commands import CommandAccess
+from rlmcp.adapters.manager_based.access.events import EventAccess
+from rlmcp.adapters.manager_based.access.rewards import RewardAccess
+from rlmcp.adapters.manager_based.access.terminations import TerminationAccess
 from rlmcp.core.parameters.spec import Liveness, ParameterSpec
 
 PROVIDER_TYPES: List[type] = [

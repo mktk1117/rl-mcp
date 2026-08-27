@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 import pytest
 
-from rlmcp.adapters.mjlab.access import ParameterAccess
+from rlmcp.adapters.manager_based.access import ParameterAccess
 from rlmcp.core.parameters.registry import ParameterRegistry
 
 

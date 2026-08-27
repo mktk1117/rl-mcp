@@ -10,7 +10,7 @@ Attach it to a running job and you can ask the live process what the robot is
 doing, look at it, measure how jerky it is, change a reward weight, unlock harder
 terrain, and roll back if that made things worse. No restart.
 
-Built for [mjlab](https://github.com/mujocolab/mjlab) today. The simulator sits
+Built for [mjlab](https://github.com/mujocolab/mjlab) and [IsaacLab](https://github.com/isaac-sim/IsaacLab). The simulator sits
 behind a small adapter, so other backends can plug in.
 
 > ⚠️ Experimental. The surface is real and tested, but it is still moving.
@@ -172,6 +172,7 @@ The explicit-curriculum version of the same run is in
 | [docs/your-task.md](docs/your-task.md) | Putting rlmcp on your own task, in five steps. |
 | [docs/curriculum.md](docs/curriculum.md) | Writing the stage ladder. |
 | [docs/extensions.md](docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
+| [docs/isaaclab.md](docs/isaaclab.md) | Driving an IsaacLab run: the one line, cameras, what differs from mjlab. |
 | [docs/records.md](docs/records.md) | Hypotheses, verdicts, feedback, the record graph. |
 | [docs/design.md](docs/design.md) | How it fits together, how parameters are found, other simulators. |
 | [AGENTS.md](AGENTS.md) | Contributing to this repository. |

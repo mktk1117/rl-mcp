@@ -3,7 +3,7 @@
 This file is deliberately thin. It implements the :class:`SimAdapter` contract
 by delegating to the pieces that do the work:
 
-* :mod:`rlmcp.adapters.mjlab.access` -- parameter discovery, reads and writes,
+* :mod:`rlmcp.adapters.manager_based.access` -- parameter discovery, reads and writes,
   found by reflection over the environment's manager term configs rather than
   by a hand-written list. Add a family by adding a provider there.
 * :mod:`rlmcp.adapters.mjlab.state` -- reading live state: per-step sampling,
@@ -24,10 +24,10 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 
 from rlmcp.adapters.base import NotSupported, SimAdapter
-from rlmcp.adapters.mjlab.access import ParameterAccess
-from rlmcp.adapters.mjlab.state import metrics as state_metrics
+from rlmcp.adapters.manager_based.access import ParameterAccess
+from rlmcp.adapters.manager_based import metrics as state_metrics
 from rlmcp.adapters.mjlab.state import rendering
-from rlmcp.adapters.mjlab.state.sampling import StateSampler
+from rlmcp.adapters.manager_based.sampling import StateSampler
 from rlmcp.core.parameters.spec import ParameterSpec
 
 

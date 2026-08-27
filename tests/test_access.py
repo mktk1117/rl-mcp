@@ -20,13 +20,13 @@ import torch
 
 from rlmcp.adapters import base
 from rlmcp.adapters.base import NotSupported, RunnerAdapter, SimAdapter
-from rlmcp.adapters.mjlab.access import ParameterAccess
-from rlmcp.adapters.mjlab.access import paths
-from rlmcp.adapters.mjlab import runner_adapter
-from rlmcp.adapters.mjlab.runner_adapter import MjlabRunnerAdapter
-from rlmcp.adapters.mjlab.state import metrics as state_metrics
+from rlmcp.adapters.manager_based.access import ParameterAccess
+from rlmcp.adapters.manager_based.access import paths
+from rlmcp.adapters import rsl_rl_runner as runner_adapter
+from rlmcp.adapters.rsl_rl_runner import RslRlRunnerAdapter
+from rlmcp.adapters.manager_based import metrics as state_metrics
 from rlmcp.adapters.mjlab.state import rendering
-from rlmcp.adapters.mjlab.state.sampling import StateSampler
+from rlmcp.adapters.manager_based.sampling import StateSampler
 from rlmcp.core import diagnostics as diag
 from rlmcp.core.parameters.spec import ParameterCategory
 
@@ -1006,7 +1006,7 @@ def test_request_stop_is_advisory():
     _MinimalRunner().request_stop()
   # mjlab: a documented no-op -- rsl_rl has no stop hook to arm, and stopping
   # is delivered by the loop polling should_stop().
-  adapter = MjlabRunnerAdapter(SimpleNamespace(alg=None))
+  adapter = RslRlRunnerAdapter(SimpleNamespace(alg=None))
   assert adapter.request_stop() is False
 
 
@@ -1028,7 +1028,7 @@ def test_rl_bounds_are_only_the_definitional_ones():
 
 
 def test_unknown_hyperparameter_raises_naming_what_exists():
-  adapter = MjlabRunnerAdapter(
+  adapter = RslRlRunnerAdapter(
       SimpleNamespace(alg=SimpleNamespace(learning_rate=1e-3, entropy_coef=0.01))
   )
   with pytest.raises(KeyError) as excinfo:
@@ -1107,7 +1107,7 @@ def test_rollback_survives_buffers_reassigned_in_inference_mode(tmp_path):
   with pytest.raises(RuntimeError, match="inference tensor"):
     runner.load(str(checkpoint))
 
-  infos = MjlabRunnerAdapter(runner).load_checkpoint(str(checkpoint))
+  infos = RslRlRunnerAdapter(runner).load_checkpoint(str(checkpoint))
 
   assert infos == {"tag": "before-experiment"}
   restored = runner.alg._raw_actor.obs_normalizer._std
@@ -1118,7 +1118,7 @@ def test_rollback_survives_buffers_reassigned_in_inference_mode(tmp_path):
 def test_thaw_leaves_ordinary_buffers_alone(tmp_path):
   """It is a no-op on a run that has not entered inference mode yet."""
   runner = _FakeRunner()
-  adapter = MjlabRunnerAdapter(runner)
+  adapter = RslRlRunnerAdapter(runner)
   before = runner.alg._raw_actor.obs_normalizer._std
 
   assert adapter._thaw_inference_buffers() == 0
@@ -1131,7 +1131,7 @@ def test_thaw_does_not_replace_parameters(tmp_path):
   runner.collect_a_rollout()
   weight = runner.alg._raw_actor.linear.weight
 
-  MjlabRunnerAdapter(runner)._thaw_inference_buffers()
+  RslRlRunnerAdapter(runner)._thaw_inference_buffers()
 
   assert runner.alg._raw_actor.linear.weight is weight
 
@@ -1148,13 +1148,13 @@ def test_thaw_finds_modules_without_evaluating_properties():
   runner.alg = SimpleNamespace(_raw_actor=runner.alg._raw_actor, extra=_Exploding())
   runner.collect_a_rollout()
 
-  assert MjlabRunnerAdapter(runner)._thaw_inference_buffers() == 1
+  assert RslRlRunnerAdapter(runner)._thaw_inference_buffers() == 1
 
 
 def test_load_checkpoint_still_reports_a_missing_file(tmp_path):
   """Thawing runs before the load, but must not mask the file check."""
   with pytest.raises(FileNotFoundError):
-    MjlabRunnerAdapter(_FakeRunner()).load_checkpoint(str(tmp_path / "nope.pt"))
+    RslRlRunnerAdapter(_FakeRunner()).load_checkpoint(str(tmp_path / "nope.pt"))
 
 # Restarting episodes.
 

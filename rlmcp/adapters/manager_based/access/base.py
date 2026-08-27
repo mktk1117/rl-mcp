@@ -15,7 +15,7 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from rlmcp.adapters.mjlab.access import paths
+from rlmcp.adapters.manager_based.access import paths
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
 
 
