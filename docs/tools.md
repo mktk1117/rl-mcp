@@ -259,15 +259,17 @@ The gap stops doubling at 2 000 so a long run still shows what it is doing
 rlmcp video --schedule            # cadence, next iteration, clips taken, MB spent
 rlmcp video --every 50            # flat: every 50 iterations from here
 rlmcp video --every double:200    # doubling, starting at 200
-rlmcp video --every 0             # off
+rlmcp video --every off           # no more clips
 rlmcp video --budget-mb 500       # let the clips use more disk
 rlmcp-train <task> --video-every double --video-seconds 4      # at launch
 ```
 
 `--video-every` / `--every` / `wrap(video_every=…)` / `set_progress_video` all
 take the same value: `double`, `double:<first>:<cap>`, a flat interval like
-`200`, or `0`. Anything else is refused with the reason rather than rounded
-into a different schedule.
+`200`, or `off` for no clips. `none`, `never`, `0` and an empty string are
+accepted for that last one too, but `off` is the one to write — "every 0"
+reads as *constantly*, which is the opposite of what it does. Anything else is
+refused with the reason rather than rounded into a different schedule.
 
 **What it costs.** Frames are rendered during the training rollout, one per
 environment step, so a clip shows the actual training environment --

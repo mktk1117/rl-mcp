@@ -18,7 +18,10 @@ worse outcome than a trajectory that stops and says why.
 
 Configured with one value everywhere (``video_every=``, ``--video-every``,
 ``rlmcp video --every``): ``"double"``, ``"double:100:5000"`` to move the first
-gap and the cap, a plain ``200`` for a flat interval, or ``0`` for no clips.
+gap and the cap, a plain ``200`` for a flat interval, or ``"off"`` for no clips
+at all. ``"none"``, ``"never"``, ``0`` and the empty string are all accepted
+for that last one -- ``"off"`` is the one worth writing, because "every 0"
+reads as "constantly", which is the opposite of what it does.
 """
 
 from __future__ import annotations
@@ -78,10 +81,11 @@ class Cadence:
   def parse(spec: Any) -> Optional["Cadence"]:
     """Read a cadence from ``"double[:first[:cap]]"``, a number, or None.
 
-    ``None`` in means the default; ``None`` out means "no clips" (``0``,
-    ``"off"``), which is an answer rather than an error. Anything else that
-    does not parse raises, because a mistyped schedule quietly becoming a
-    different one is worse than a failed launch.
+    ``None`` in means the default; ``None`` out means "no clips"
+    (``"off"``, and the ``"none"`` / ``"never"`` / ``0`` / ``""`` spellings of
+    it), which is an answer rather than an error. Anything else that does not
+    parse raises, because a mistyped schedule quietly becoming a different one
+    is worse than a failed launch.
     """
     if spec is None:
       return Cadence()
@@ -104,7 +108,8 @@ class Cadence:
     except ValueError:
       raise CadenceError(
           f"Could not read '{spec}' as a cadence. Write 'double', "
-          "'double:<first>:<cap>', a flat interval like '200', or '0'."
+          "'double:<first>:<cap>', a flat interval like '200', or 'off' for "
+          "no clips."
       ) from None
     return _flat(flat)
 

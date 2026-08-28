@@ -945,7 +945,7 @@ def build_parser() -> argparse.ArgumentParser:
       "video", help="Record a short clip of training, or set the clip schedule",
       description="With no --every, records one clip now. With --every N, "
                   "changes the automatic schedule the run is already taking "
-                  "clips on (0 turns it off) and reports it.",
+                  "clips on ('--every off' stops it) and reports it.",
   )
   p.add_argument("--seconds", type=float, default=4.0)
   p.add_argument("--env-id", type=int)
@@ -953,7 +953,9 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Pick an env by description, e.g. terrain=pyramid_stairs level=2")
   p.add_argument("--every", metavar="CADENCE",
                  help="Change the automatic cadence: 'double' (0, 50, 100, 200, "
-                      "400 ...), 'double:<first>:<cap>', a flat '200', or '0'")
+                      "400 ...), 'double:<first>:<cap>', a flat interval like "
+                      "'200', or 'off' for no clips ('none', 'never' and '0' "
+                      "mean the same)")
   p.add_argument("--budget-mb", type=float,
                  help="Disk the progress clips may use before they stop")
   p.add_argument("--schedule", action="store_true",

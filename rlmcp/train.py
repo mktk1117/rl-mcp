@@ -68,8 +68,9 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
       help="How often the run films itself, starting at iteration 0, with "
            "every clip attached to the run record. Default 'double': clips at "
            "0, 50, 100, 200, 400 ... each gap twice the last, never more than "
-           "2000 apart. Also takes 'double:<first>:<cap>', a flat interval "
-           "('200'), or '0' to turn progress clips off.",
+           "2000 apart. Also takes 'double:<first>:<cap>' to move the first "
+           "gap and the cap, or a flat interval like '200'. Pass 'off' for no "
+           "clips at all ('none', 'never' and '0' mean the same).",
   )
   parser.add_argument("--video-seconds", type=float, default=4.0,
                       help="Length of each progress clip")

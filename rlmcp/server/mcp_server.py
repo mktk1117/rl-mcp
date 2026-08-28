@@ -736,8 +736,9 @@ def create_mcp_server(
 
     Args:
       every: the cadence. "double" (the default), "double:<first>:<cap>", a
-        flat interval like "200", or "0" to stop taking clips. A change takes
-        effect at the next iteration.
+        flat interval like "200", or "off" to stop taking clips ("none",
+        "never" and 0 mean the same). A change takes effect at the next
+        iteration.
       seconds: length of each clip.
       env_id: which environment to film.
       budget_mb: disk the clips may use before the schedule stops itself.
