@@ -12,6 +12,8 @@ Nothing here imports a simulator, and every fixture is built in ``tmp_path``.
 from __future__ import annotations
 
 import json
+import sys
+import types
 from types import SimpleNamespace
 from typing import Any, Dict
 
@@ -814,11 +816,26 @@ def _stub_viewers(monkeypatch) -> None:
 
   Patched on `mjlab.viewer`, not on `rlmcp.play`: `_view` imports them inside
   the function, so the name this test has to replace is the one it reads.
-  """
-  import mjlab.viewer as mjlab_viewer
 
-  monkeypatch.setattr(mjlab_viewer, "NativeMujocoViewer", _RecordingViewer)
-  monkeypatch.setattr(mjlab_viewer, "ViserPlayViewer", _RecordingViewer)
+  mjlab is not a test dependency -- CI installs neither it nor viser -- so when
+  it is absent the module gets stood up rather than the test skipped. What
+  these three check is which server rlmcp hands the viewer, and that is rlmcp's
+  wiring: it can be wrong on a machine with no simulator on it, so it has to be
+  checkable on one.
+  """
+  try:
+    import mjlab.viewer as mjlab_viewer
+  except ImportError:
+    mjlab = types.ModuleType("mjlab")
+    mjlab_viewer = types.ModuleType("mjlab.viewer")
+    mjlab.viewer = mjlab_viewer
+    monkeypatch.setitem(sys.modules, "mjlab", mjlab)
+    monkeypatch.setitem(sys.modules, "mjlab.viewer", mjlab_viewer)
+
+  monkeypatch.setattr(
+      mjlab_viewer, "NativeMujocoViewer", _RecordingViewer, raising=False)
+  monkeypatch.setattr(
+      mjlab_viewer, "ViserPlayViewer", _RecordingViewer, raising=False)
   _RecordingViewer.seen = {}
 
 

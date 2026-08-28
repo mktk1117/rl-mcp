@@ -691,6 +691,8 @@ def test_pause_is_reported_and_said_plainly(servers):
   assert view.describe()["paused"] is True
   assert "paused" in view.prose()
   assert view.url in view.prose()
+
+
 # ── hosting somebody else's scene ─────────────────────────────────────────
 def test_a_hosted_view_serves_without_a_scene_of_its_own(servers):
   """`host_for_viewer()` is for a play session, where mjlab's viewer owns the simulation
