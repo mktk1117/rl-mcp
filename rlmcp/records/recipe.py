@@ -132,13 +132,17 @@ def _next_entry(entered: Dict[str, int], schedule: StageSchedule,
 
 
 def build(store: Any, record_id: str, out: Path | str,
-          session_dir: Optional[str] = None) -> Dict[str, Any]:
+          session_dir: Optional[str] = None,
+          policy: bool = True) -> Dict[str, Any]:
   """Write a runnable recipe directory for ``record_id``.
 
   Every part is best-effort and says so: a run with no code snapshot still gets
   its config, its ladder and its warm-start chain, and the README names what is
   missing. A recipe that refused to exist because one input was absent would be
   a worse answer than a recipe that tells you what it could not find.
+
+  ``policy=False`` leaves the trained weights out. They are the largest thing
+  here by far, and a recipe meant only to be *read* does not need them.
   """
   record = store.get_record(record_id)
   if record is None:
@@ -170,12 +174,25 @@ def build(store: Any, record_id: str, out: Path | str,
   if package is None:
     missing.append("the task package (this run recorded no code snapshot)")
 
-  _write_json(out / "expect.json", _expectations(record))
+  # The environment, materialised. `package/` is the repository at the tree the
+  # run launched with, which is the right answer when you have that repository
+  # and want to develop in it. `env/` is the complementary one: the terms as
+  # they were actually running, weights included, inlined so it needs nothing
+  # installed. A run that added a reward term mid-run has it only here.
+  env = _write_env(session, out / "env")
+  if not env.get("ok"):
+    missing.append(f"the materialised environment ({env.get('error', 'not captured')})")
+
+  weights = _copy_policy(session, out / "policy") if policy else None
+  if policy and weights is None:
+    missing.append("the trained policy (no checkpoint found for this run)")
+
+  _write_json(out / "expect.json", _expectations(record, session, weights))
   (out / "phases.md").write_text(_phases(record, records))
   (out / "launch.sh").write_text(_launch(record, session, package is not None))
   (out / "launch.sh").chmod(0o755)
   (out / "README.md").write_text(
-      _readme(record, schedule, interventions, missing))
+      _readme(record, schedule, interventions, missing, env, weights))
   return {
       "record": record.id,
       "path": str(out),
@@ -186,7 +203,149 @@ def build(store: Any, record_id: str, out: Path | str,
       "stages": [s.name for s in schedule.stages],
       "interventions": len(interventions),
       "package": str(package) if package else "",
+      "env": {k: env.get(k) for k in ("ok", "counts", "missing_source")},
+      "policy": str(weights["path"]) if weights else "",
       "missing": missing,
+  }
+
+
+def _write_env(session: Path, destination: Path) -> Dict[str, Any]:
+  """The env config and its inlined implementations, from the run's capture."""
+  if not session or not (session / "session.json").exists():
+    return {"ok": False, "error": "this run has no session directory to read"}
+  from rlmcp import env_export
+  from rlmcp.session import Session
+
+  try:
+    return env_export.export_env(Session(session), destination)
+  except Exception as exc:  # noqa: BLE001 -- never fail the whole recipe.
+    return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _copy_policy(session: Path, destination: Path) -> Optional[Dict[str, Any]]:
+  """Copy the run's final checkpoint into the recipe.
+
+  ``play.find_checkpoint`` resolves it, so a recipe and ``rlmcp play`` agree on
+  which checkpoint a run "ended on" -- it picks by iteration rather than mtime,
+  which matters for a run that had an older checkpoint copied back in for
+  comparison.
+  """
+  import shutil
+
+  from rlmcp.play import PlayError, checkpoint_iteration, find_checkpoint
+
+  if not session:
+    return None
+  try:
+    checkpoint = find_checkpoint(session)
+  except (PlayError, OSError):
+    return None
+  destination.mkdir(parents=True, exist_ok=True)
+  target = destination / checkpoint.name
+  try:
+    shutil.copy2(checkpoint, target)
+  except OSError:
+    return None
+  return {
+      "path": target,
+      "name": checkpoint.name,
+      "source": str(checkpoint),
+      "iteration": checkpoint_iteration(checkpoint),
+      "size_mb": round(target.stat().st_size / 1e6, 2),
+  }
+
+
+DEFAULT_TOLERANCE = 0.2
+"""How far a retrain may sit from the original and still count as reproduced.
+
+20% of the original value. Loose on purpose: this is the band inside which two
+RL runs of the same recipe differ from seed and GPU nondeterminism alone, and a
+tighter default would fail honest reproductions and teach everyone to ignore
+it. Tighten it per check when the metric deserves it."""
+
+
+def verify(recipe_dir: Path | str, session_dir: Path | str,
+           tolerance: float = DEFAULT_TOLERANCE) -> Dict[str, Any]:
+  """Did running this recipe get back to where the original run got?
+
+  Compares the metrics the original run *claimed* -- ``expect.json``'s
+  ``metrics``, the ones a human wrote into the record -- against the same
+  metrics in a candidate run's telemetry.
+
+  This answers "is it statistically equivalent", and cannot answer more than
+  that. A pass is evidence the recipe reproduces the procedure; it is not proof
+  the weights match, and nothing here compares weights.
+
+  A metric the candidate never published is ``missing``, not a failure: it is
+  usually a run that has not got far enough yet, and calling that a regression
+  would be wrong.
+  """
+  recipe_dir = Path(recipe_dir).expanduser()
+  try:
+    expectations = json.loads((recipe_dir / "expect.json").read_text())
+  except (OSError, ValueError) as exc:
+    raise ValueError(
+        f"No readable expect.json in {recipe_dir} ({exc}). Point this at a "
+        "directory written by `rlmcp recipe build`.") from exc
+
+  candidate, iteration = _final_metrics(Path(session_dir).expanduser())
+  if not candidate:
+    raise ValueError(
+        f"No metrics in {session_dir}. Point this at the session of the run "
+        "you launched from this recipe.")
+
+  expected = dict(expectations.get("metrics") or {})
+  if not expected:
+    # Nothing was claimed, so nothing can be checked. The full telemetry is
+    # still worth diffing by eye, and saying so beats inventing a verdict.
+    expected = {}
+
+  checks: List[Dict[str, Any]] = []
+  for name, raw in expected.items():
+    # A record's metrics are typed by whoever wrote them, and `record close`
+    # takes them as text -- "16.8" is the normal shape, not the exception.
+    # Skipping non-floats without parsing would compare nothing and report a
+    # confident "no claimed metrics to check".
+    want = _as_number(raw)
+    if want is None:
+      checks.append({"metric": name, "expected": raw, "got": None,
+                     "status": "not a number"})
+      continue
+    got = candidate.get(name)
+    if got is None:
+      checks.append({"metric": name, "expected": want, "got": None,
+                     "status": "missing"})
+      continue
+    band = abs(want) * tolerance
+    within = abs(got - want) <= band if band else got == want
+    checks.append({
+        "metric": name,
+        "expected": want,
+        "got": got,
+        "delta": got - want,
+        "relative": (got - want) / want if want else None,
+        "status": "within" if within else "outside",
+    })
+
+  compared = [c for c in checks
+              if c["status"] in ("within", "outside")]
+  outside = [c for c in compared if c["status"] == "outside"]
+  return {
+      "recipe": str(recipe_dir),
+      "session": str(session_dir),
+      "from_run": expectations.get("from_run"),
+      "tolerance": tolerance,
+      "iteration": iteration,
+      "checks": checks,
+      "compared": len(compared),
+      "outside": len(outside),
+      "missing": len([c for c in checks if c["status"] == "missing"]),
+      # No claimed metrics means no verdict, which is not the same as a pass.
+      "reproduced": bool(compared) and not outside,
+      "verdict": (
+          "no claimed metrics to check" if not compared
+          else "statistically equivalent within the band" if not outside
+          else f"{len(outside)} metric(s) outside the band"),
   }
 
 
@@ -225,9 +384,18 @@ def _restore_package(record: RunRecord, destination: Path) -> Optional[Path]:
     return None
 
 
-def _expectations(record: RunRecord) -> Dict[str, Any]:
-  """What a replay is checked against. Numbers, never a hash."""
-  return {
+def _expectations(record: RunRecord, session: Optional[Path] = None,
+                  weights: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+  """What a replay is checked against. Numbers, never a hash.
+
+  Two sets, and the difference matters. ``metrics`` are the ones a human wrote
+  into the record: the claim the run was making, few and chosen. ``final`` are
+  the telemetry this run actually ended on, every scalar it published. A
+  retrain is judged against the first and can be *inspected* against the
+  second, which is what makes "similar performance" a check rather than an
+  impression.
+  """
+  expectations: Dict[str, Any] = {
       "from_run": record.id,
       "verdict": record.verdict,
       "metrics": {name: value for name, value in (record.metrics or [])},
@@ -236,6 +404,58 @@ def _expectations(record: RunRecord) -> Dict[str, Any]:
                "env count or seed all move the weights. Check these numbers as "
                "a band; claim 'statistically equivalent', never 'identical'."),
   }
+  final, iteration = _final_metrics(session)
+  if final:
+    expectations["final"] = final
+    expectations["final_iteration"] = iteration
+  if weights:
+    expectations["policy"] = {
+        "file": weights["name"],
+        "iteration": weights["iteration"],
+        "size_mb": weights["size_mb"],
+    }
+  return expectations
+
+
+def _size(size_mb: float) -> str:
+  """A file size a reader can act on. A policy under 50 KB rounds to 0.0 MB."""
+  if size_mb >= 0.1:
+    return f"{size_mb} MB"
+  return f"{round(size_mb * 1000):d} KB"
+
+
+def _as_number(value: Any) -> Optional[float]:
+  """A metric's value as a float, whether it was written as one or as text."""
+  if isinstance(value, bool):
+    return None
+  if isinstance(value, (int, float)):
+    return float(value)
+  if isinstance(value, str):
+    try:
+      return float(value.strip())
+    except ValueError:
+      return None
+  return None
+
+
+def _final_metrics(session: Optional[Path]) -> tuple:
+  """The last telemetry row this run published, and the iteration it was at."""
+  if not session or not (session / "session.json").exists():
+    return {}, None
+  from rlmcp.session import Session
+
+  try:
+    rows = Session(session).metrics(last_n=1)
+  except Exception:  # noqa: BLE001 -- an unreadable log costs the band, not the recipe.
+    return {}, None
+  if not rows:
+    return {}, None
+  row = dict(rows[-1])
+  iteration = row.pop("iteration", None)
+  row.pop("t", None)
+  numeric = {k: v for k, v in row.items()
+             if isinstance(v, (int, float)) and not isinstance(v, bool)}
+  return numeric, iteration
 
 
 def phase_chain(record: RunRecord,
@@ -361,7 +581,10 @@ def _launch(record: RunRecord, session: Path, has_package: bool) -> str:
 
 
 def _readme(record: RunRecord, schedule: StageSchedule,
-            interventions: List[Dict[str, Any]], missing: List[str]) -> str:
+            interventions: List[Dict[str, Any]], missing: List[str],
+            env: Optional[Dict[str, Any]] = None,
+            weights: Optional[Dict[str, Any]] = None) -> str:
+  env = env or {}
   lines = [
       f"# Recipe for {record.display()}", "",
       record.headline or record.one_line(), "",
@@ -369,11 +592,49 @@ def _readme(record: RunRecord, schedule: StageSchedule,
       "| file | what it is |",
       "| --- | --- |",
       "| `package/` | the task package at the tree this run launched with |",
+      "| `env/` | the environment as it actually ran: config plus every term's "
+      "implementation, inlined |",
+      "| `policy/` | the weights this run ended on |",
       "| `config.json` | the resolved parameters it started from |",
       "| `curriculum.json` | the ladder, loadable by `StageSchedule.from_dict` |",
       "| `launch.sh` | the command, as close as the record can say |",
       "| `phases.md` | the warm-start chain, flattened |",
       "| `expect.json` | the numbers a replay is checked against |",
+      "",
+      "`package/` and `env/` are not duplicates. The package is the repository "
+      "at the commit this run launched with — the thing to develop in. `env/` "
+      "is the environment as it was *running*: final weights, and every term "
+      "inlined as source, so it needs nothing installed. A reward term added "
+      "by an agent mid-run exists only there.",
+      "",
+  ]
+  if weights:
+    lines += [
+        f"The policy is `policy/{weights['name']}` "
+        f"({_size(weights['size_mb'])}"
+        + (f", iteration {weights['iteration']}"
+           if weights["iteration"] >= 0 else "") + ").",
+        "",
+    ]
+  counts = env.get("counts") or {}
+  if counts:
+    lines += [
+        f"The environment is {counts.get('rewards', 0)} reward, "
+        f"{counts.get('observations', 0)} observation and "
+        f"{counts.get('actions', 0)} action term(s) — see `env/README.md`.",
+        "",
+    ]
+  lines += [
+      "## Checking it worked", "",
+      "```bash",
+      "./launch.sh <new-record-id>          # train it again",
+      "rlmcp recipe verify . --session <the new run's session>",
+      "```",
+      "",
+      "`verify` compares the new run against the metrics this one claimed, "
+      "inside a band, because two RL runs of the same recipe differ by seed "
+      "and GPU nondeterminism alone. It answers *statistically equivalent*, "
+      "and nothing stronger — it does not compare weights.",
       "", "## The ladder", "",
   ]
   for stage in schedule.stages:

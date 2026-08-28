@@ -99,6 +99,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 | write something down | [`note`](#note), [`feedback`](#feedback), [`events`](#events) | `add_note`, `record_feedback`, `get_events` |
 | watch a finished run | [`play`](#play) | (CLI only) |
 | run it again | [`recipe build`](records.md#making-a-run-runnable-again-rlmcp-recipe-build) | (CLI only) |
+| check a rerun matched the original | [`recipe verify`](records.md#checking-a-recipe-actually-reproduces) | (CLI only) |
 | what code a run used | [`record code`](records.md#what-the-code-was-the-other-half-of-a-recipe) | (CLI only) |
 | the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
 

@@ -1150,8 +1150,22 @@ def build_parser() -> argparse.ArgumentParser:
   q.add_argument("--out", help="Where to write it (default: recipe-<id>/ beside the records)")
   q.add_argument("--session", dest="from_session",
                  help="Read the intervention history from this session instead")
+  q.add_argument("--no-policy", dest="policy", action="store_false",
+                 help="Leave the trained weights out (they are the large part)")
   q.add_argument("--records-root",
                  help="Records directory (default: $RLMCP_RECORDS or ./records)")
+
+  q = recipe_sub.add_parser(
+      "verify",
+      help="Check a run launched from a recipe against what it claimed",
+      description="Compares the new run's metrics against expect.json inside "
+                  "a band. Answers 'statistically equivalent', never "
+                  "'identical' -- it does not compare weights.")
+  q.add_argument("recipe_dir", help="A directory written by `recipe build`")
+  q.add_argument("--session", dest="candidate", required=True,
+                 help="The session of the run launched from this recipe")
+  q.add_argument("--tolerance", type=float, default=None,
+                 help="Relative band per metric (default 0.2, i.e. 20%%)")
 
   rec = sub.add_parser("record", help="Run records: plans, outcomes, ancestry")
   rec.add_argument("--records-root", help="Records directory (default: $RLMCP_RECORDS or ./records)")
@@ -1465,14 +1479,28 @@ def main(argv: Optional[List[str]] = None) -> int:
 
   if cmd == "recipe":
     from rlmcp.records import open_store
-    from rlmcp.records.recipe import build
+    from rlmcp.records.recipe import DEFAULT_TOLERANCE, build, verify
+
+    if args.action == "verify":
+      try:
+        report = verify(args.recipe_dir, args.candidate,
+                        tolerance=args.tolerance
+                        if args.tolerance is not None else DEFAULT_TOLERANCE)
+      except ValueError as exc:
+        _emit({"ok": False, "error": str(exc)})
+        return 1
+      _emit({"ok": True, **report})
+      # A recipe that did not reproduce is a finding, and a non-zero exit is
+      # what makes it one in a script.
+      return 0 if report["reproduced"] else 1
 
     store = open_store(getattr(args, "records_root", None),
                        slots=getattr(args, "slots", 1))
     out = args.out or (Path(store.root) / f"recipe-{args.record_id}")
     try:
       _emit({"ok": True, **build(store, args.record_id, out,
-                                 session_dir=args.from_session)})
+                                 session_dir=args.from_session,
+                                 policy=args.policy)})
     except ValueError as exc:
       _emit({"ok": False, "error": str(exc)})
       return 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 
@@ -10,7 +11,7 @@ import pytest
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.records import snapshot
 from rlmcp.records.filestore import FileStore
-from rlmcp.records.recipe import build, distil
+from rlmcp.records.recipe import build, distil, verify
 
 
 def _edit(iteration: int, what: str, why: str = "") -> dict:
@@ -140,8 +141,12 @@ def test_a_recipe_is_a_directory_you_can_launch(bundle):
   written = {p.name for p in (tmp_path / "recipe").iterdir()}
   assert written == {"package", "config.json", "curriculum.json", "launch.sh",
                      "phases.md", "expect.json", "README.md"}
-  assert answer["missing"] == []          # this run recorded everything
   assert (tmp_path / "recipe" / "launch.sh").stat().st_mode & 0o111
+  # This record has a code snapshot and a config, but no session -- so the
+  # environment and the weights are honestly absent rather than empty files.
+  assert answer["package"]
+  assert [m.split(" (")[0] for m in answer["missing"]] == [
+      "the materialised environment", "the trained policy"]
 
 
 def test_the_package_is_the_code_that_run_actually_used(bundle):
@@ -329,3 +334,188 @@ def test_a_cycle_in_the_warm_start_chain_terminates(tmp_path):
   answer = build(store, a.id, tmp_path / "recipe")
 
   assert set(answer["phases"]) == {a.id, b.id}
+
+
+# The whole pair: the environment, the ladder and the policy in one directory.
+
+
+@pytest.fixture
+def run_with_a_session(bundle):
+  """A record whose run left a real session: captured env, metrics, weights.
+
+  This is the shape the feature exists for -- a finished run you want to hand
+  to somebody as the pair of environment and policy.
+  """
+  store, repo, tmp_path = bundle
+  session = tmp_path / "logs" / "run002" / "rlmcp"
+  session.mkdir(parents=True)
+  (session / "session.json").write_text(json.dumps(
+      {"kind": "rlmcp-training-session", "task": "Shand", "num_envs": 4096,
+       "device": "cuda:0", "started_at": 0.0}))
+  (session / "env_terms.json").write_text(json.dumps({
+      "task": "Shand",
+      "rewards": [{
+          "name": "goal",
+          "_cfg_type": {"module": "test_recipe", "name": "RewTermCfg"},
+          "weight": 2.0,
+          "params": {"__map__": {}},
+          "func": {"module": "shand.mdp", "qualname": "goal_bonus",
+                   "name": "goal_bonus", "kind": "function", "available": True,
+                   "source": "def goal_bonus(env):\n  return env.goals\n"},
+      }],
+      "observations": {},
+      "actions": [],
+      "problems": [],
+      "term_cfg_types": {"reward": {"module": "test_recipe",
+                                    "name": "RewTermCfg"}},
+  }))
+  (session / "metrics.jsonl").write_text(
+      json.dumps({"iteration": 4300, "t": 1.0, "goals_per_min": 16.4}) + "\n")
+  # The trainer's checkpoints sit in the run directory, beside the session.
+  (session.parent / "model_4300.pt").write_bytes(b"weights")
+  store.update_record("002", lambda r: setattr(r, "session", str(session)))
+  return store, tmp_path, session
+
+
+@dataclasses.dataclass
+class RewTermCfg:
+  """Stands in for the backend's reward term config, for the env export."""
+
+  func: object
+  weight: float
+  params: dict = dataclasses.field(default_factory=dict)
+
+
+def test_the_recipe_carries_the_env_the_ladder_and_the_policy(run_with_a_session):
+  store, tmp_path, _ = run_with_a_session
+
+  answer = build(store, "002", tmp_path / "recipe")
+  recipe = tmp_path / "recipe"
+
+  assert answer["missing"] == []
+  # The four things that make it a pair you can hand over.
+  assert (recipe / "env" / "env_cfg.py").exists()
+  assert (recipe / "env" / "mdp_terms.py").exists()
+  assert (recipe / "curriculum.json").exists()
+  assert (recipe / "policy" / "model_4300.pt").read_bytes() == b"weights"
+  assert answer["env"]["counts"]["rewards"] == 1
+
+
+def test_the_env_in_the_recipe_is_inlined_not_imported(run_with_a_session):
+  """It has to work without the task package, which is the point of env/."""
+  store, tmp_path, _ = run_with_a_session
+
+  build(store, "002", tmp_path / "recipe")
+
+  terms = (tmp_path / "recipe" / "env" / "mdp_terms.py").read_text()
+  assert "def goal_bonus(env):" in terms
+  assert "import shand" not in terms
+
+
+def test_the_policy_can_be_left_out(run_with_a_session):
+  """The weights are the large part; a recipe meant to be read skips them."""
+  store, tmp_path, _ = run_with_a_session
+
+  answer = build(store, "002", tmp_path / "recipe", policy=False)
+
+  assert not (tmp_path / "recipe" / "policy").exists()
+  assert answer["policy"] == ""
+  assert answer["missing"] == []       # not missing: not asked for
+
+
+def test_expectations_carry_the_policy_and_the_numbers_it_ended_on(
+    run_with_a_session):
+  store, tmp_path, _ = run_with_a_session
+
+  build(store, "002", tmp_path / "recipe")
+
+  expect = json.loads((tmp_path / "recipe" / "expect.json").read_text())
+  assert expect["metrics"] == {"goals_per_min": "16.8"}   # what was claimed
+  assert expect["final"] == {"goals_per_min": 16.4}       # what it ended on
+  assert expect["final_iteration"] == 4300
+  assert expect["policy"]["file"] == "model_4300.pt"
+
+
+# Verifying a retrain against it.
+
+
+def _candidate(tmp_path, name: str, value: float):
+  """A session standing in for a run launched from the recipe."""
+  session = tmp_path / name / "rlmcp"
+  session.mkdir(parents=True)
+  (session / "session.json").write_text(json.dumps({"task": "Shand"}))
+  (session / "metrics.jsonl").write_text(
+      json.dumps({"iteration": 4300, "goals_per_min": value}) + "\n")
+  return session
+
+
+def test_a_retrain_inside_the_band_counts_as_reproduced(run_with_a_session):
+  store, tmp_path, _ = run_with_a_session
+  build(store, "002", tmp_path / "recipe")
+
+  report = verify(tmp_path / "recipe", _candidate(tmp_path, "again", 15.9))
+
+  assert report["reproduced"] is True
+  assert report["outside"] == 0
+  assert "statistically equivalent" in report["verdict"]
+
+
+def test_a_retrain_outside_the_band_is_reported_not_rounded_off(
+    run_with_a_session):
+  store, tmp_path, _ = run_with_a_session
+  build(store, "002", tmp_path / "recipe")
+
+  report = verify(tmp_path / "recipe", _candidate(tmp_path, "worse", 4.0))
+
+  assert report["reproduced"] is False
+  assert report["outside"] == 1
+  check = report["checks"][0]
+  assert check["metric"] == "goals_per_min"
+  assert check["status"] == "outside"
+  assert check["got"] == 4.0
+
+
+def test_a_metric_written_as_text_is_still_compared(run_with_a_session):
+  """`record close` takes metrics as text, so "16.8" is the normal shape."""
+  store, tmp_path, _ = run_with_a_session
+  build(store, "002", tmp_path / "recipe")
+
+  report = verify(tmp_path / "recipe", _candidate(tmp_path, "again", 16.8))
+
+  assert report["compared"] == 1
+  # Reported as the number it was compared against, not as the text it was
+  # written as: the check is arithmetic, and the report should show what the
+  # arithmetic used.
+  assert report["checks"][0]["expected"] == 16.8
+  assert report["checks"][0]["status"] == "within"
+  assert report["reproduced"] is True
+
+
+def test_a_metric_the_retrain_never_published_is_missing_not_failed(
+    run_with_a_session):
+  """Usually a run that has not got far enough; calling it a regression is wrong."""
+  store, tmp_path, _ = run_with_a_session
+  build(store, "002", tmp_path / "recipe")
+  session = tmp_path / "short" / "rlmcp"
+  session.mkdir(parents=True)
+  (session / "session.json").write_text(json.dumps({"task": "Shand"}))
+  (session / "metrics.jsonl").write_text(
+      json.dumps({"iteration": 10, "reward": 0.2}) + "\n")
+
+  report = verify(tmp_path / "recipe", session)
+
+  assert report["missing"] == 1
+  assert report["compared"] == 0
+  assert report["reproduced"] is False      # no evidence is not a pass
+  assert "no claimed metrics" in report["verdict"]
+
+
+def test_verify_needs_a_recipe_and_a_run_and_says_which_is_wrong(
+    run_with_a_session, tmp_path):
+  store, bundle_path, _ = run_with_a_session
+  build(store, "002", bundle_path / "recipe")
+
+  with pytest.raises(ValueError, match="expect.json"):
+    verify(bundle_path / "not-a-recipe", _candidate(bundle_path, "x", 1.0))
+  with pytest.raises(ValueError, match="No metrics"):
+    verify(bundle_path / "recipe", bundle_path / "nowhere")

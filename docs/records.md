@@ -138,6 +138,8 @@ rlmcp recipe build 011              # writes recipe-011/ beside the records
 ```
 recipe-011/
   package/          the task package at the tree that run launched with
+  env/              the environment as it ran: cfg + every term inlined
+  policy/           the weights the run ended on
   config.json       the resolved parameters it started from
   curriculum.json   the ladder — loads into StageSchedule.from_dict unchanged
   launch.sh         the command, as close as the record can say
@@ -145,6 +147,41 @@ recipe-011/
   expect.json       the numbers a replay is checked against
   README.md         generated
 ```
+
+**`package/` and `env/` are not duplicates.** The package is the repository at
+the commit the run launched with — the thing to develop in, and only as good as
+that repository still existing. `env/` is the environment as it was *running*:
+the reward, observation and action terms with their final weights, every
+implementation inlined as source, so it needs nothing installed. A reward term
+an agent [added mid-run](tools.md#add-reward) exists only there. See
+[`rlmcp env export`](tools.md#env), which is the same machinery.
+
+**The policy travels with it**, so a recipe is a pair rather than a procedure
+you have to trust: `policy/` holds the checkpoint the run ended on, resolved the
+same way `rlmcp play` resolves one. `--no-policy` leaves it out when the recipe
+is only meant to be read — the weights are the large part.
+
+### Checking a recipe actually reproduces
+
+```bash
+./launch.sh 020                                  # train it again
+rlmcp recipe verify recipe-011/ --session <the new run's session>
+```
+
+`verify` compares the new run's final metrics against the ones the original
+*claimed* — `expect.json`'s `metrics`, the numbers a human wrote into the
+record — inside a relative band (20% by default, `--tolerance` to change it).
+It exits non-zero when a metric lands outside, so it works in a script.
+
+The band is loose on purpose: that is roughly where two runs of the same recipe
+differ from seed and GPU nondeterminism alone, and a tighter default would fail
+honest reproductions and teach everyone to ignore the check. A metric the new
+run never published is reported as `missing` rather than as a failure — usually
+it just has not got far enough yet.
+
+`expect.json` also carries `final`, every scalar the original run ended on, for
+diffing by eye. A pass means *statistically equivalent*; nothing here compares
+weights, and it cannot mean more than that.
 
 **Distillation, not transcription.** An edit made at iteration 900 because the
 entropy had collapsed does not belong in a replay as "wait 900 iterations, then
