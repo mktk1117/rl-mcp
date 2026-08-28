@@ -746,3 +746,89 @@ def test_a_hosted_view_gives_the_port_back(servers):
 
   assert servers[0].stopped
   assert not view.running
+
+
+def test_a_hosted_view_refuses_to_be_closed_out_from_under_the_viewer(servers):
+  """`rlmcp view --off` against a play session used to reach the same `stop()`
+  a training run's does -- and close the server mjlab's viewer was drawing on,
+  leaving a dark tab, a released port and no way back."""
+  from rlmcp.adapters.base import NotSupported
+
+  view = _view(ViewableSim())
+  server = view.host_for_viewer()
+
+  with pytest.raises(NotSupported, match="play viewer"):
+    view.configure(enabled=False)
+
+  assert not server.stopped and view.running
+
+
+def test_a_hosted_view_refuses_to_be_re_pointed(servers):
+  """The worse half of the same bug: a rebind stopped the shared server *and*
+  built this class's own scene on a second one -- the two-server bug back, with
+  the good panel dead."""
+  from rlmcp.adapters.base import NotSupported
+
+  sim = ViewableSim()
+  view = _view(sim)
+  server = view.host_for_viewer()
+
+  with pytest.raises(NotSupported):
+    view.configure(port=9999)
+
+  assert not server.stopped and len(servers) == 1
+  assert sim.opened == [], "no second scene of our own"
+
+
+def test_a_hosted_view_still_takes_the_steering_that_costs_nothing(servers):
+  """Only closing and re-pointing are refused. `fps`, `env_id` and `paused`
+  steer a push that a hosted view does not do, so they are already no-ops and
+  there is nothing to protect anybody from."""
+  view = _view(ViewableSim())
+  view.host_for_viewer()
+
+  view.configure(fps=5, env_id=3, paused=True)
+
+  assert view.fps == 5 and view.env_id == 3 and view.running
+
+
+def test_a_hosted_view_says_whose_window_it_is(servers):
+  """`status` on a play session would otherwise report `frames: 0`,
+  `watchers: 0` beside a tab somebody is actually watching -- numbers about a
+  scene this view does not have and cannot ever move."""
+  view = _view(ViewableSim())
+  view.host_for_viewer()
+
+  assert view.describe()["hosted"] is True
+  assert "play viewer" in view.prose()
+  assert "hosted" not in _view(ViewableSim()).describe()
+
+
+def test_a_box_with_no_free_port_does_not_take_the_play_session_with_it(
+    servers, monkeypatch):
+  """`find_free_port` raises after twenty busy ports. Outside the `try` that
+  answers None for a missing viser, that exception came out of `_view` and
+  ended the session -- for a viewer that would happily have opened its own."""
+  def no_ports(host, port, tries=20):
+    raise RuntimeError("No free port in 8740..8759")
+
+  monkeypatch.setattr("rlmcp.core.live_view.find_free_port", no_ports)
+  view = _view(ViewableSim())
+
+  assert view.host_for_viewer() is None
+  assert not view.running and "No free port" in view.last_error
+
+
+def test_a_refused_re_point_changes_nothing(servers):
+  """A `--port` that was turned down must not still be the port a later start
+  binds: the refusal is decided before anything is written."""
+  from rlmcp.adapters.base import NotSupported
+
+  view = _view(ViewableSim(), port=8740, fps=20.0)
+  view.host_for_viewer()
+
+  with pytest.raises(NotSupported):
+    view.configure(port=9999, fps=5)
+
+  assert view.requested_port == 8740
+  assert view.fps == 20.0, "nothing is written before the answer is known"

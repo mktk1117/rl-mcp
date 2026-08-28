@@ -11,6 +11,7 @@ Nothing here imports a simulator, and every fixture is built in ``tmp_path``.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 import types
@@ -874,14 +875,17 @@ def _stub_viewers(monkeypatch) -> None:
   wiring: it can be wrong on a machine with no simulator on it, so it has to be
   checkable on one.
   """
-  try:
-    import mjlab.viewer as mjlab_viewer
-  except ImportError:
+  # `find_spec`, not a failed import: an mjlab that *is* installed but whose
+  # viewer will not import is a real failure, and standing a blank module up
+  # over it would turn that into three tests quietly passing.
+  if importlib.util.find_spec("mjlab") is None:
     mjlab = types.ModuleType("mjlab")
     mjlab_viewer = types.ModuleType("mjlab.viewer")
     mjlab.viewer = mjlab_viewer
     monkeypatch.setitem(sys.modules, "mjlab", mjlab)
     monkeypatch.setitem(sys.modules, "mjlab.viewer", mjlab_viewer)
+  else:
+    import mjlab.viewer as mjlab_viewer
 
   monkeypatch.setattr(
       mjlab_viewer, "NativeMujocoViewer", _RecordingViewer, raising=False)

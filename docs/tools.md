@@ -874,6 +874,15 @@ is in. When those disagree the conditions are deliberately **not** changed, and
 the payload says so loudly. Pass `replay=true` to restore that checkpoint's own
 conditions instead.
 
+One command a play session does *not* answer the same way: with `--mode viser`,
+the port `status` publishes is the viewer's own window — rlmcp opened the server
+and the viewer draws on it, which is how there is one panel and not two. So
+`rlmcp view --off` and `rlmcp view --port N` are refused there and say why; the
+way to close that window is to close the tab, or `rlmcp stop`. `--fps`,
+`--env` and `--pause` steer a push a hosted view does not do, and are accepted
+and ignored. A training run's view is unaffected: it owns its scene and all of
+this still applies to it.
+
 ---
 
 # Records

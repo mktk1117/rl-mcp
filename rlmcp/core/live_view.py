@@ -194,6 +194,10 @@ class LiveView:
 
     self._server: Any = None
     self._scene: Any = None
+    # Whether the scene on this server belongs to somebody else -- see
+    # :meth:`host_for_viewer`. It changes who may close the server, not what
+    # this class does with it, which is why it is a flag and not a subclass.
+    self._hosted = False
     self.port = 0
     self.frames = 0
     self.failures = 0
@@ -360,8 +364,11 @@ class LiveView:
     if self._server is not None:
       return self._server
     started = time.perf_counter()
-    self.port = find_free_port(self.host, self.requested_port)
     try:
+      # The port search is inside the try with the server: a box with twenty
+      # busy ports is the same answer as a box with no viser -- this view
+      # cannot be served -- and neither is a reason to lose the play session.
+      self.port = find_free_port(self.host, self.requested_port)
       server = self._server_factory(self.host, self.port, self.label)
     except Exception as exc:
       # A play session without viser is not a broken session -- `--mode video`
@@ -372,6 +379,7 @@ class LiveView:
       return None
     self._open_status_panel(server)
     self._server = server
+    self._hosted = True
     self.startup_ms = round((time.perf_counter() - started) * 1000.0, 1)
     self.failures = 0
     self.frames = 0
@@ -402,6 +410,7 @@ class LiveView:
     self._scene, self._server, self._status_handle = None, None, None
     self._pause_button = None
     self._scene_can_pause = False
+    self._hosted = False
     if scene is not None:
       try:
         scene.close()
@@ -440,19 +449,45 @@ class LiveView:
     was built. Changing the rate or the environment does not, because the scene
     in the browser is still the right scene.
     """
-    rebind = False
-    if host is not None and str(host) != self.host:
-      self.host, rebind = str(host), True
-    if port is not None and int(port) != self.requested_port:
-      self.requested_port, rebind = int(port), True
+    # What each argument *would* make it, worked out before anything is
+    # changed: the refusal below has to leave the view exactly as it found it,
+    # or a `--port` that was turned down would still be the port the next
+    # start binds.
+    new_host = str(host) if host is not None else self.host
+    new_port = int(port) if port is not None else self.requested_port
     # The mode decides what the backend built, so switching it is a rebuild
     # rather than a setting -- there is a player and a buffer on one side of it
-    # and neither on the other.
-    if realtime is not None and bool(realtime) != self.realtime:
-      self.realtime, rebind = bool(realtime), True
-    if buffer_seconds is not None and float(buffer_seconds) != self.buffer_seconds:
-      self.buffer_seconds = float(buffer_seconds)
-      rebind = rebind or self.realtime
+    # and neither on the other. The buffer is a rebuild only in the mode that
+    # has one.
+    new_realtime = bool(realtime) if realtime is not None else self.realtime
+    new_buffer = (float(buffer_seconds) if buffer_seconds is not None
+                  else self.buffer_seconds)
+    rebind = (new_host != self.host
+              or new_port != self.requested_port
+              or new_realtime != self.realtime
+              or (new_buffer != self.buffer_seconds and new_realtime))
+
+    if self._hosted and (enabled is False or rebind):
+      # Imported here rather than at the top for the same reason
+      # `_refuse_a_backend_with_no_view` does it: `rlmcp.adapters.base` pulls
+      # in numpy, and this module is meant to cost nothing to import.
+      from rlmcp.adapters.base import NotSupported
+
+      # A hosted server is the play viewer's window. Closing it or rebinding it
+      # would take that window with it -- and a rebind would then build this
+      # class's own small scene on a new port, which is the two-server bug
+      # `host_for_viewer` exists to remove, with the good panel dead as well.
+      # The knobs that only steer a push (`fps`, `env_id`, `paused`) are left
+      # alone: with no scene of our own they are already no-ops.
+      raise NotSupported(
+          "This live view is the play viewer's own window, so it is not "
+          "rlmcp's to close or re-point. Close the browser tab, or end the "
+          "session with `rlmcp stop`.")
+
+    self.host = new_host
+    self.requested_port = new_port
+    self.realtime = new_realtime
+    self.buffer_seconds = new_buffer
     if fps is not None:
       self.fps = self._clamp_fps(fps)
     if env_id is not None:
@@ -663,6 +698,12 @@ class LiveView:
         "stopped_because": self.stopped_because,
         "at": time.time(),
     }
+    if self._hosted:
+      # Everything above about pushing -- frames, watchers, the rate, the env
+      # -- describes a scene this view does not have, and would read as zero
+      # forever beside a tab somebody is watching. Say whose window it is
+      # instead of publishing numbers that cannot move.
+      payload["hosted"] = True
     if self.realtime:
       payload["buffer_seconds"] = self.buffer_seconds
     # Whatever the backend can say about its own playback -- how full the
@@ -686,6 +727,9 @@ class LiveView:
     """One line for a launch banner or a status header."""
     if not self.running:
       return "live view off"
+    if self._hosted:
+      return (f"live view on {self.url} (the play viewer's own panel, served "
+              "on the port this session publishes)")
     if self.paused:
       return (f"live view paused on {self.url} (attached, costing the run "
               "nothing; resume it in the tab or with `rlmcp view --resume`)")
