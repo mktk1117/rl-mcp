@@ -704,7 +704,7 @@ def _access_with_command(term) -> ParameterAccess:
 
 
 def test_constructor_cfg_reads_are_found_along_the_mro():
-  from rlmcp.adapters.manager_based.access.base import constructor_cfg_reads
+  from rlmcp.adapters.access.base import constructor_cfg_reads
 
   reads = constructor_cfg_reads(RebuildableKernelCommandTerm)
   assert reads == frozenset({"kernel_lambda", "kernel_size", "ranges.ang_vel_z"})

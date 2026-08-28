@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from rlmcp.adapters.manager_based.access.base import AccessProvider, Synthetic, Term
+from rlmcp.adapters.access.base import AccessProvider, Synthetic, Term
 from rlmcp.core.parameters.spec import ParameterCategory
 
 

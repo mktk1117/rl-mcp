@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, List, Sequence
 
-from rlmcp.adapters.manager_based.access.base import AccessProvider, Term
+from rlmcp.adapters.access.base import AccessProvider, Term
 from rlmcp.core.parameters.spec import ParameterCategory
 
 

@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
-from rlmcp.adapters.manager_based.access import paths
+from rlmcp.adapters.access import paths
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
 
 
