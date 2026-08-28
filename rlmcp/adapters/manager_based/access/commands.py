@@ -11,8 +11,12 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
 
 from rlmcp.adapters.manager_based.access import paths
-from rlmcp.adapters.manager_based.access.base import AccessProvider, Term
-from rlmcp.core.parameters.spec import ParameterCategory
+from rlmcp.adapters.manager_based.access.base import (
+    AccessProvider,
+    Term,
+    constructor_cfg_reads,
+)
+from rlmcp.core.parameters.spec import Liveness, ParameterCategory
 
 
 class CommandAccess(AccessProvider):
@@ -32,14 +36,45 @@ class CommandAccess(AccessProvider):
     out: List[Term] = []
     for name in getattr(manager, "active_terms", []) or []:
       try:
-        cfg = manager.get_term(name).cfg
+        instance = manager.get_term(name)
+        cfg = instance.cfg
       except Exception:
         continue
-      out.append(Term(key=name, root=cfg, label=f"command '{name}'"))
+      out.append(
+          Term(key=name, root=cfg, label=f"command '{name}'", instance=instance)
+      )
     return out
 
   def describe(self, term: Term, parts: Sequence[str], value: Any) -> str:
     return f"Command '{term.key}' sampling range for {'.'.join(parts)}"
+
+  def liveness(self, term: Term, parts: Sequence[str], value: Any) -> Liveness:
+    """Live unless the term's constructor read this field.
+
+    A command term is a class instance handed its cfg once. Fields it reads
+    while running -- ``ranges`` at every resample, ``resampling_time_range``
+    from the base class -- are live. Fields its ``__init__`` read were folded
+    into whatever it built there and are never consulted again: mjlab's
+    ``MotionCommand`` bakes ``adaptive_lambda`` and ``adaptive_kernel_size``
+    into a sampling kernel at construction, so an edit to either reports
+    success and leaves the kernel as it was (and, for the size, desynchronises
+    the padding it *does* read from the kernel it does not rebuild). Those are
+    inert, and the write is refused rather than faked.
+
+    A term that can rebuild its cache says so by exposing ``update_params``,
+    which keeps every field live; the write hook calls it with the updated
+    top-level field.
+    """
+    instance = term.instance
+    if instance is None:
+      return Liveness.LIVE
+    if callable(getattr(instance, "update_params", None)):
+      return Liveness.LIVE
+    reads = constructor_cfg_reads(type(instance))
+    for depth in range(1, len(parts) + 1):
+      if ".".join(parts[:depth]) in reads:
+        return Liveness.INERT
+    return Liveness.LIVE
 
   # Curriculum ownership.
 
