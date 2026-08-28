@@ -15,7 +15,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from rlmcp.adapters.env_wrapper import RlMcpEnvWrapper as _BaseWrapper
 from rlmcp.adapters.env_wrapper import TrainingStopped
@@ -27,11 +27,11 @@ from rlmcp.adapters.legged_gym_style.spec import FlatEnvSpec
 class RlMcpEnvWrapper(_BaseWrapper):
   """Transparent wrapper over a Genesis environment."""
 
-  def __init__(self, env: Any, spec: Optional[FlatEnvSpec] = None, **kwargs: Any):
+  def __init__(self, env: Any, spec: FlatEnvSpec | None = None, **kwargs: Any):
     self._spec = spec
     super().__init__(env, **kwargs)
 
-  def build_sim_adapter(self, env: Any, robot_name: Optional[str]) -> Any:
+  def build_sim_adapter(self, env: Any, robot_name: str | None) -> Any:
     # robot_name is part of the contract for scenes that hold several named
     # articulations. A Genesis environment holds its robot in one attribute, so
     # the name is carried by the spec instead and this argument is unused.

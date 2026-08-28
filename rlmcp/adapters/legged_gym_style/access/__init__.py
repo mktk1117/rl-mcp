@@ -15,7 +15,7 @@ absorbed here so nothing downstream has to care.
 from __future__ import annotations
 
 from functools import partial
-from typing import Any, List, Optional
+from typing import Any
 
 from rlmcp.adapters.access.registry import ParameterAccess as _ParameterAccess
 from rlmcp.adapters.legged_gym_style.access.commands import CommandAccess
@@ -27,7 +27,7 @@ from rlmcp.adapters.legged_gym_style.access.env_cfg import (
 from rlmcp.adapters.legged_gym_style.access.rewards import RewardAccess
 from rlmcp.adapters.legged_gym_style.spec import FlatEnvSpec
 
-PROVIDER_TYPES: List[type] = [
+PROVIDER_TYPES: list[type] = [
     RewardAccess,
     TerminationAccess,
     CommandAccess,
@@ -36,13 +36,13 @@ PROVIDER_TYPES: List[type] = [
 ]
 
 __all__ = [
-    "ActionAccess",
-    "CommandAccess",
-    "EnvAccess",
-    "ParameterAccess",
-    "PROVIDER_TYPES",
-    "RewardAccess",
-    "TerminationAccess",
+  "PROVIDER_TYPES",
+  "ActionAccess",
+  "CommandAccess",
+  "EnvAccess",
+  "ParameterAccess",
+  "RewardAccess",
+  "TerminationAccess",
 ]
 
 
@@ -54,8 +54,8 @@ class ParameterAccess(_ParameterAccess):
   def __init__(
       self,
       env: Any,
-      spec: Optional[FlatEnvSpec] = None,
-      provider_types: Optional[List[type]] = None,
+      spec: FlatEnvSpec | None = None,
+      provider_types: list[type] | None = None,
   ):
     self.spec = spec or FlatEnvSpec()
     bound = [

@@ -16,7 +16,7 @@ of ``diagnose`` are skipped for it rather than computed from something else.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -57,13 +57,13 @@ it is one."""
 class StateSampler:
   """Reads one environment's signals, one device sync per step."""
 
-  def __init__(self, env: Any, command_names: Optional[List[str]] = None):
+  def __init__(self, env: Any, command_names: list[str] | None = None):
     self.env = env
     self.command_names = list(command_names or [])
 
   # Which channels this environment can actually serve.
 
-  def _buffer(self, attr: str) -> Optional[torch.Tensor]:
+  def _buffer(self, attr: str) -> torch.Tensor | None:
     value = getattr(self.env, attr, None)
     return value if isinstance(value, torch.Tensor) and value.ndim >= 1 else None
 
@@ -77,9 +77,9 @@ class StateSampler:
         for name in self.command_names[:width]
     )
 
-  def channels(self) -> Dict[str, torch.Tensor]:
+  def channels(self) -> dict[str, torch.Tensor]:
     """``{channel: buffer}`` for everything this environment has right now."""
-    out: Dict[str, torch.Tensor] = {}
+    out: dict[str, torch.Tensor] = {}
     for channel, attr in CHANNEL_BUFFERS.items():
       buffer = self._buffer(attr)
       if buffer is not None:
@@ -96,7 +96,7 @@ class StateSampler:
 
   # Sampling.
 
-  def sample(self, env_id: int = 0) -> Dict[str, np.ndarray]:
+  def sample(self, env_id: int = 0) -> dict[str, np.ndarray]:
     """One step of signals for ``env_id``, in one copy off the device."""
     channels = self.channels()
     if not channels:
@@ -108,7 +108,7 @@ class StateSampler:
       rows.append(row.to(torch.float32))
       widths.append((name, int(row.numel())))
     flat = torch.cat(rows).detach().cpu().numpy()
-    out: Dict[str, np.ndarray] = {}
+    out: dict[str, np.ndarray] = {}
     start = 0
     for name, width in widths:
       out[name] = flat[start:start + width]
@@ -117,9 +117,9 @@ class StateSampler:
 
   # Labels, derived from the environment rather than assumed from the task.
 
-  def labels(self) -> Dict[str, List[str]]:
+  def labels(self) -> dict[str, list[str]]:
     names = self.joint_names()
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     if names:
       out[CHANNEL_JOINT_POS] = list(names)
       out[CHANNEL_JOINT_VEL] = list(names)
@@ -137,7 +137,7 @@ class StateSampler:
         out[key] = [f"cmd_{n}" for n in self.command_names[:width]]
     return out
 
-  def joint_names(self) -> List[str]:
+  def joint_names(self) -> list[str]:
     """The names the task gave its joints, when it gave them any.
 
     ``env_cfg["joint_names"]`` is the convention. Without it the components are

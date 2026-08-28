@@ -12,7 +12,8 @@ change anywhere else. See :mod:`rlmcp.extensions` for the three-step version.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 from rlmcp.core.curriculum import Action, Condition, CurriculumStage, StageSchedule
 from rlmcp.core.extensions import Extension
@@ -28,7 +29,7 @@ class TerrainExtension(Extension):
 
   name = "terrain"
 
-  def __init__(self, env: Any, plotter: Optional[Callable[..., bytes]] = None):
+  def __init__(self, env: Any, plotter: Callable[..., bytes] | None = None):
     """``plotter`` is the deprecated constructor-probed plot sink; when absent,
     plots go through the :class:`~rlmcp.core.extensions.ExtensionContext`
     artifact writer received in :meth:`~rlmcp.core.extensions.Extension.bind`.
@@ -50,17 +51,17 @@ class TerrainExtension(Extension):
 
   # Hooks.
 
-  def commands(self) -> Dict[str, Callable[..., Any]]:
+  def commands(self) -> dict[str, Callable[..., Any]]:
     return {
         "terrain_status": self.cmd_terrain_status,
         "set_terrain": self.cmd_set_terrain,
         "plot_terrain": self.cmd_plot_terrain,
     }
 
-  def metrics(self) -> Dict[str, float]:
+  def metrics(self) -> dict[str, float]:
     return self.control.metrics()
 
-  def select_envs(self, **criteria: Any) -> Optional[List[int]]:
+  def select_envs(self, **criteria: Any) -> list[int] | None:
     """Understands ``terrain=<name>`` and ``level=<int>``."""
     terrain = criteria.pop("terrain", None)
     level = criteria.pop("level", None)
@@ -68,7 +69,7 @@ class TerrainExtension(Extension):
       return None  # Not our vocabulary.
     return self.control.env_ids_on(terrain=terrain, level=level)
 
-  def selectors(self) -> Dict[str, Dict[str, Any]]:
+  def selectors(self) -> dict[str, dict[str, Any]]:
     """Terrains that currently hold environments, and the levels in play.
 
     Only *active* terrains are offered: a terrain configured out spawns nothing,
@@ -92,7 +93,7 @@ class TerrainExtension(Extension):
         },
     }
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     status = self.control.status()
     return {
         "active_terrains": status["active_terrains"],
@@ -101,32 +102,32 @@ class TerrainExtension(Extension):
         "num_rows_levels": status["num_rows_levels"],
     }
 
-  def snapshot(self) -> Dict[str, Any]:
+  def snapshot(self) -> dict[str, Any]:
     return self.control.snapshot()
 
-  def restore(self, state: Dict[str, Any]) -> None:
+  def restore(self, state: dict[str, Any]) -> None:
     self.control.restore(state)
 
   # Commands.
 
-  def cmd_terrain_status(self) -> Dict[str, Any]:
+  def cmd_terrain_status(self) -> dict[str, Any]:
     """Per-terrain environment counts and difficulty levels reached."""
     return self.control.status()
 
   def cmd_set_terrain(
       self,
-      terrains: Optional[Sequence[str]] = None,
-      weights: Optional[Dict[str, float]] = None,
-      max_level: Optional[int] = None,
+      terrains: Sequence[str] | None = None,
+      weights: dict[str, float] | None = None,
+      max_level: int | None = None,
       rationale: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Choose which terrains spawn environments and cap how hard they get."""
     changed = self.control.configure(
         terrains=terrains, weights=weights, max_level=max_level
     )
     return {"changed": changed, "status": self.control.status(), "rationale": rationale}
 
-  def cmd_plot_terrain(self) -> Dict[str, Any]:
+  def cmd_plot_terrain(self) -> dict[str, Any]:
     """Bar chart of environments per terrain and their mean difficulty."""
     sink = self._plotter or (self.context.write_artifact if self.context else None)
     if sink is None:
@@ -138,14 +139,14 @@ class TerrainExtension(Extension):
 
   # Plan construction.
 
-  def terrain_names(self) -> List[str]:
+  def terrain_names(self) -> list[str]:
     return self.control.names()
 
   def num_levels(self) -> int:
     return self.control.status()["num_rows_levels"]
 
 
-DIFFICULTY_GROUPS: List[tuple] = [
+DIFFICULTY_GROUPS: list[tuple] = [
     ("flat", ("flat",)),
     ("rough", ("random_rough", "wave_terrain", "perlin_noise")),
     (
@@ -172,12 +173,12 @@ appended as a final group rather than silently dropped.
 
 def group_terrains(
     available: Sequence[str],
-    groups: Optional[Sequence[tuple]] = None,
-) -> List[tuple]:
+    groups: Sequence[tuple] | None = None,
+) -> list[tuple]:
   """Bucket the terrains a scene actually contains into difficulty groups."""
   groups = groups or DIFFICULTY_GROUPS
   remaining = list(available)
-  out: List[tuple] = []
+  out: list[tuple] = []
   for label, names in groups:
     present = [n for n in remaining if n in names]
     if present:
@@ -215,8 +216,8 @@ def build_terrain_plan(
     raise ValueError("No terrains available to build a plan from.")
 
   num_stages = len(grouped)
-  stages: List[CurriculumStage] = []
-  unlocked: List[str] = []
+  stages: list[CurriculumStage] = []
+  unlocked: list[str] = []
 
   for i, (label, names) in enumerate(grouped):
     unlocked = unlocked + names
@@ -225,7 +226,7 @@ def build_terrain_plan(
     # so a fresh policy is not dropped onto tall stairs.
     ceiling = num_levels if is_last else max(1, round(num_levels * (i + 1) / num_stages))
 
-    promote: List[Condition] = []
+    promote: list[Condition] = []
     if not is_last:
       promote = [
           Condition(METRIC_EPISODE_LENGTH_FRAC, ">=", episode_length_frac_to_promote),

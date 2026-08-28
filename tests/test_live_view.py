@@ -12,7 +12,7 @@ it, which is also the seam a second transport would be written against.
 from __future__ import annotations
 
 import socket
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 from conftest import FakeSimAdapter
@@ -26,8 +26,8 @@ from rlmcp.session import Session
 class FakeScene:
   """What a backend returns from ``open_live_view``: update(env_id), close()."""
 
-  def __init__(self, fail_with: Optional[Exception] = None):
-    self.updates: List[int] = []
+  def __init__(self, fail_with: Exception | None = None):
+    self.updates: list[int] = []
     self.closed = False
     self.fail_with = fail_with
 
@@ -62,8 +62,8 @@ class FakeButton:
 
 class FakeGui:
   def __init__(self):
-    self.panels: List[FakeMarkdown] = []
-    self.buttons: List[FakeButton] = []
+    self.panels: list[FakeMarkdown] = []
+    self.buttons: list[FakeButton] = []
 
   def add_markdown(self, content: str) -> FakeMarkdown:
     panel = FakeMarkdown(content)
@@ -85,7 +85,7 @@ class FakeServer:
     self.stopped = False
     self.gui = FakeGui()
 
-  def get_clients(self) -> Dict[int, Any]:
+  def get_clients(self) -> dict[int, Any]:
     return {i: object() for i in range(self.watchers)}
 
   def stop(self) -> None:
@@ -100,11 +100,11 @@ class ViewableSim(FakeSimAdapter):
   go of it in ``close``.
   """
 
-  def __init__(self, scene: Optional[FakeScene] = None, **kwargs):
+  def __init__(self, scene: FakeScene | None = None, **kwargs):
     super().__init__(**kwargs)
     self.scene = scene or FakeScene()
-    self.opened: List[Any] = []
-    self.modes: List[Dict[str, Any]] = []
+    self.opened: list[Any] = []
+    self.modes: list[dict[str, Any]] = []
 
   def open_live_view(self, server: Any, realtime: bool = False,
                      buffer_seconds: float = 4.0) -> FakeScene:
@@ -114,9 +114,9 @@ class ViewableSim(FakeSimAdapter):
 
 
 @pytest.fixture
-def servers(monkeypatch) -> List[FakeServer]:
+def servers(monkeypatch) -> list[FakeServer]:
   """Every server LiveView opens during a test, in order."""
-  made: List[FakeServer] = []
+  made: list[FakeServer] = []
 
   def factory(host: str, port: int, label: str) -> FakeServer:
     server = FakeServer(host, port, label)
@@ -554,7 +554,7 @@ class PausableScene(FakeScene):
   def __init__(self):
     super().__init__()
     self.paused = False
-    self.watchers: List[int] = []
+    self.watchers: list[int] = []
 
   def set_paused(self, paused: bool) -> None:
     self.paused = bool(paused)
@@ -691,3 +691,144 @@ def test_pause_is_reported_and_said_plainly(servers):
   assert view.describe()["paused"] is True
   assert "paused" in view.prose()
   assert view.url in view.prose()
+
+
+# ── hosting somebody else's scene ─────────────────────────────────────────
+def test_a_hosted_view_serves_without_a_scene_of_its_own(servers):
+  """`host_for_viewer()` is for a play session, where mjlab's viewer owns the simulation
+  loop and draws a far richer panel than this class should. LiveView keeps the
+  port, the url and the status panel; the scene is the viewer's."""
+  sim = ViewableSim()
+  view = _view(sim)
+
+  server = view.host_for_viewer()
+
+  assert server is servers[0]
+  assert view.running, "a hosted view is running: a browser can connect to it"
+  assert view.url.endswith(str(view.port))
+  assert not sim.opened, "the backend's own scene is exactly what is not built"
+  assert view.describe()["url"] == view.url
+
+
+def test_a_hosted_view_pushes_nothing(servers):
+  """Whoever owns the scene owns the pushing. Ticking a hosted view must not
+  touch the simulator -- in a play session another thread is stepping it."""
+  scene = FakeScene()
+  sim = ViewableSim(scene=scene)
+  view = _view(sim)
+  view.host_for_viewer()
+
+  for _ in range(10):
+    view.tick()
+
+  assert scene.updates == [], "a hosted view has no scene to update"
+
+
+def test_hosting_twice_returns_the_one_server(servers):
+  """The viewer asks once, but a session that restarts a view must not leave a
+  port bound behind it."""
+  view = _view(ViewableSim())
+
+  first = view.host_for_viewer()
+  second = view.host_for_viewer()
+
+  assert first is second
+  assert len(servers) == 1
+
+
+def test_a_hosted_view_gives_the_port_back(servers):
+  """LiveView opened the server, so LiveView closes it -- mjlab's viewer is a
+  guest on it and leaves an external server alone."""
+  view = _view(ViewableSim())
+  view.host_for_viewer()
+
+  view.stop("the run ended")
+
+  assert servers[0].stopped
+  assert not view.running
+
+
+def test_a_hosted_view_refuses_to_be_closed_out_from_under_the_viewer(servers):
+  """`rlmcp view --off` against a play session used to reach the same `stop()`
+  a training run's does -- and close the server mjlab's viewer was drawing on,
+  leaving a dark tab, a released port and no way back."""
+  from rlmcp.adapters.base import NotSupported
+
+  view = _view(ViewableSim())
+  server = view.host_for_viewer()
+
+  with pytest.raises(NotSupported, match="play viewer"):
+    view.configure(enabled=False)
+
+  assert not server.stopped and view.running
+
+
+def test_a_hosted_view_refuses_to_be_re_pointed(servers):
+  """The worse half of the same bug: a rebind stopped the shared server *and*
+  built this class's own scene on a second one -- the two-server bug back, with
+  the good panel dead."""
+  from rlmcp.adapters.base import NotSupported
+
+  sim = ViewableSim()
+  view = _view(sim)
+  server = view.host_for_viewer()
+
+  with pytest.raises(NotSupported):
+    view.configure(port=9999)
+
+  assert not server.stopped and len(servers) == 1
+  assert sim.opened == [], "no second scene of our own"
+
+
+def test_a_hosted_view_still_takes_the_steering_that_costs_nothing(servers):
+  """Only closing and re-pointing are refused. `fps`, `env_id` and `paused`
+  steer a push that a hosted view does not do, so they are already no-ops and
+  there is nothing to protect anybody from."""
+  view = _view(ViewableSim())
+  view.host_for_viewer()
+
+  view.configure(fps=5, env_id=3, paused=True)
+
+  assert view.fps == 5 and view.env_id == 3 and view.running
+
+
+def test_a_hosted_view_says_whose_window_it_is(servers):
+  """`status` on a play session would otherwise report `frames: 0`,
+  `watchers: 0` beside a tab somebody is actually watching -- numbers about a
+  scene this view does not have and cannot ever move."""
+  view = _view(ViewableSim())
+  view.host_for_viewer()
+
+  assert view.describe()["hosted"] is True
+  assert "play viewer" in view.prose()
+  assert "hosted" not in _view(ViewableSim()).describe()
+
+
+def test_a_box_with_no_free_port_does_not_take_the_play_session_with_it(
+    servers, monkeypatch):
+  """`find_free_port` raises after twenty busy ports. Outside the `try` that
+  answers None for a missing viser, that exception came out of `_view` and
+  ended the session -- for a viewer that would happily have opened its own."""
+  def no_ports(host, port, tries=20):
+    raise RuntimeError("No free port in 8740..8759")
+
+  monkeypatch.setattr("rlmcp.core.live_view.find_free_port", no_ports)
+  view = _view(ViewableSim())
+
+  assert view.host_for_viewer() is None
+  assert not view.running and "No free port" in view.last_error
+
+
+def test_a_refused_re_point_changes_nothing(servers):
+  """A `--port` that was turned down must not still be the port a later start
+  binds: the refusal is decided before anything is written."""
+  from rlmcp.adapters.base import NotSupported
+
+  view = _view(ViewableSim(), port=8740, fps=20.0)
+  view.host_for_viewer()
+
+  with pytest.raises(NotSupported):
+    view.configure(port=9999, fps=5)
+
+  assert view.requested_port == 8740
+  assert view.fps == 20.0, "nothing is written before the answer is known"

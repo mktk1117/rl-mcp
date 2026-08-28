@@ -13,7 +13,8 @@ to populate, and a check nobody registers with is a check that never fires.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from rlmcp.core.palette import DEFAULT_MIN_DISTANCE, find_collisions
 
@@ -27,9 +28,9 @@ def _looks_like_rgba(value: Any) -> bool:
   return all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in value)
 
 
-def collect_marker_colors(env: Any) -> Dict[str, Sequence[float]]:
+def collect_marker_colors(env: Any) -> dict[str, Sequence[float]]:
   """Colours the command terms' debug visualisations draw in."""
-  out: Dict[str, Sequence[float]] = {}
+  out: dict[str, Sequence[float]] = {}
   manager = getattr(env, "command_manager", None)
   terms = getattr(manager, "_terms", None) if manager is not None else None
   if not terms:
@@ -51,13 +52,13 @@ def collect_marker_colors(env: Any) -> Dict[str, Sequence[float]]:
   return out
 
 
-def collect_scene_colors(env: Any) -> Dict[str, Sequence[float]]:
+def collect_scene_colors(env: Any) -> dict[str, Sequence[float]]:
   """Colours of the visible geoms in the scene, by geom name.
 
   Fully transparent geoms are skipped -- they annotate nothing and collide with
   nothing -- as are unnamed ones, which cannot be reported usefully anyway.
   """
-  out: Dict[str, Sequence[float]] = {}
+  out: dict[str, Sequence[float]] = {}
   model = None
   for path in ("sim.mj_model", "unwrapped.sim.mj_model", "scene.model", "sim.model"):
     obj: Any = env
@@ -85,7 +86,7 @@ def collect_scene_colors(env: Any) -> Dict[str, Sequence[float]]:
 
 def check_marker_colors(
   env: Any, min_distance: float = DEFAULT_MIN_DISTANCE
-) -> List[dict]:
+) -> list[dict]:
   """Debug markers a viewer would mistake for objects in the scene."""
   markers = collect_marker_colors(env)
   if not markers:

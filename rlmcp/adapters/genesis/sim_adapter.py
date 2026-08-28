@@ -16,7 +16,8 @@ why.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -32,14 +33,14 @@ from rlmcp.core.parameters.spec import ParameterSpec
 class GenesisSimAdapter(SimAdapter):
   """Live control surface over one Genesis environment."""
 
-  def __init__(self, env: Any, spec: Optional[FlatEnvSpec] = None):
+  def __init__(self, env: Any, spec: FlatEnvSpec | None = None):
     self.env = env
     self.spec = detect(env, spec)
     self.parameters = ParameterAccess(env, self.spec)
     self.sampler = StateSampler(env, command_names=self._command_names())
-    self._last_set_notes: Dict[str, Any] = {}
+    self._last_set_notes: dict[str, Any] = {}
 
-  def _command_names(self) -> List[str]:
+  def _command_names(self) -> list[str]:
     """What each command channel is, asked of the provider that knows.
 
     The sampler needs these to decide whether the command buffer is a plane
@@ -51,7 +52,7 @@ class GenesisSimAdapter(SimAdapter):
 
   # Required.
 
-  def discover_parameters(self) -> List[ParameterSpec]:
+  def discover_parameters(self) -> list[ParameterSpec]:
     return self.parameters.discover()
 
   def get_parameter(self, key: str) -> Any:
@@ -61,7 +62,7 @@ class GenesisSimAdapter(SimAdapter):
     self._last_set_notes = self.parameters.set(key, value)
     return True
 
-  def last_set_notes(self) -> Dict[str, Any]:
+  def last_set_notes(self) -> dict[str, Any]:
     return dict(self._last_set_notes)
 
   # Introspection.
@@ -75,31 +76,31 @@ class GenesisSimAdapter(SimAdapter):
       raise NotSupported("step_dt")
     return float(dt)
 
-  def joint_names(self) -> List[str]:
+  def joint_names(self) -> list[str]:
     names = self.sampler.joint_names()
     if not names:
       raise NotSupported("joint_names")
     return names
 
-  def max_episode_length(self) -> Optional[float]:
+  def max_episode_length(self) -> float | None:
     length = self.spec.resolve(self.env, "max_episode_length", None)
     return float(length) if length else None
 
   # State.
 
-  def sample_state(self, env_id: int = 0) -> Dict[str, np.ndarray]:
+  def sample_state(self, env_id: int = 0) -> dict[str, np.ndarray]:
     sample = self.sampler.sample(env_id)
     if not sample:
       raise NotSupported("sample_state")
     return sample
 
-  def trace_labels(self) -> Dict[str, List[str]]:
+  def trace_labels(self) -> dict[str, list[str]]:
     return self.sampler.labels()
 
-  def summary_metrics(self) -> Dict[str, float]:
+  def summary_metrics(self) -> dict[str, float]:
     return flat_metrics.summary_metrics(self.env, self.sampler)
 
-  def reset_envs(self, env_ids: Optional[Sequence[int]] = None) -> Dict[str, Any]:
+  def reset_envs(self, env_ids: Sequence[int] | None = None) -> dict[str, Any]:
     """Start fresh episodes, through the path a termination already takes.
 
     Genesis's reset takes a boolean mask over environments rather than a list
@@ -147,7 +148,7 @@ class GenesisSimAdapter(SimAdapter):
     with torch.inference_mode():
       reset(mask)
 
-  def _mask(self, ids: List[int], total: int) -> Any:
+  def _mask(self, ids: list[int], total: int) -> Any:
     import torch
 
     device = getattr(self.env, "device", None)

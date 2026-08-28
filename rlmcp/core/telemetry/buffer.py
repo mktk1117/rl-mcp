@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections import deque
+import contextlib
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections import deque
+from collections.abc import Callable
+from typing import Any
 
 
 class TelemetryBuffer:
@@ -20,7 +22,7 @@ class TelemetryBuffer:
   def __init__(
       self,
       maxlen: int = 5000,
-      on_drop: Optional[Callable[[str, Any], None]] = None,
+      on_drop: Callable[[str, Any], None] | None = None,
   ):
     """Args:
       maxlen: points kept per metric, and iterations kept as rows.
@@ -30,15 +32,15 @@ class TelemetryBuffer:
     """
     self.maxlen = maxlen
     self._lock = threading.Lock()
-    self._series: Dict[str, deque[Tuple[int, float]]] = {}
+    self._series: dict[str, deque[tuple[int, float]]] = {}
     # Per-iteration rows, insertion-ordered by iteration (out-of-order pushes,
     # e.g. after a checkpoint rollback, re-sort the order list -- rare).
-    self._rows: Dict[int, Dict[str, float]] = {}
-    self._row_order: List[int] = []
+    self._rows: dict[int, dict[str, float]] = {}
+    self._row_order: list[int] = []
     self._on_drop = on_drop
     self._warned_keys: set = set()
 
-  def push(self, iteration: int, metrics: Dict[str, float]) -> None:
+  def push(self, iteration: int, metrics: dict[str, float]) -> None:
     """Pushes a dictionary of scalar metrics at a given iteration.
 
     Re-pushing the same iteration updates it in place, last value wins -- the
@@ -46,7 +48,7 @@ class TelemetryBuffer:
     answered while paused), and appending would double the x-values a plot
     draws for that iteration.
     """
-    dropped: List[Tuple[str, Any]] = []
+    dropped: list[tuple[str, Any]] = []
     with self._lock:
       row = self._rows.get(iteration)
       if row is None:
@@ -80,14 +82,13 @@ class TelemetryBuffer:
         row[key] = f_val
     if self._on_drop is not None:
       for key, val in dropped:
-        try:
+        # A broken sink must not take the push down.
+        with contextlib.suppress(Exception):
           self._on_drop(key, val)
-        except Exception:
-          pass  # A broken sink must not take the push down.
 
   def get_series(
-      self, metric_name: str, last_n: Optional[int] = None
-  ) -> List[Tuple[int, float]]:
+      self, metric_name: str, last_n: int | None = None
+  ) -> list[tuple[int, float]]:
     """Retrieves (iteration, value) pairs for a given metric.
 
     ``last_n=None`` returns everything; ``last_n=0`` returns nothing.
@@ -100,7 +101,7 @@ class TelemetryBuffer:
       data = list(self._series[metric_name])
       return data[-last_n:] if last_n else data
 
-  def get_latest_metrics(self) -> Dict[str, float]:
+  def get_latest_metrics(self) -> dict[str, float]:
     """Returns the most recent value for all tracked metrics."""
     with self._lock:
       latest = {}
@@ -109,12 +110,12 @@ class TelemetryBuffer:
           latest[key] = dq[-1][1]
       return latest
 
-  def list_metrics(self) -> List[str]:
+  def list_metrics(self) -> list[str]:
     """Returns list of all metric names tracked."""
     with self._lock:
       return list(self._series.keys())
 
-  def as_rows(self, last_n: Optional[int] = None) -> List[Dict[str, float]]:
+  def as_rows(self, last_n: int | None = None) -> list[dict[str, float]]:
     """Per-iteration rows, oldest first.
 
     Metrics are stored per name because they arrive at different rates; trend

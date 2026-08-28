@@ -19,7 +19,9 @@ mild imposition rather than a correct one.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence
+import contextlib
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -34,7 +36,7 @@ NO_CAMERA = (
 )
 
 
-def cameras(env: Any) -> List[Any]:
+def cameras(env: Any) -> list[Any]:
   """Every camera on this environment's scene, in the order they were added."""
   scene = getattr(env, "scene", None)
   visualizer = getattr(scene, "visualizer", None) or getattr(
@@ -43,7 +45,7 @@ def cameras(env: Any) -> List[Any]:
   return list(found) if found else []
 
 
-def observing_camera(env: Any) -> Optional[Any]:
+def observing_camera(env: Any) -> Any | None:
   """The camera to record through, or None when the scene has none."""
   found = cameras(env)
   if not found:
@@ -54,7 +56,7 @@ def observing_camera(env: Any) -> Optional[Any]:
   return found[0]
 
 
-def rendered_envs(env: Any) -> Optional[Sequence[int]]:
+def rendered_envs(env: Any) -> Sequence[int] | None:
   """Which environments the renderer actually draws.
 
   Asked of the visualizer's *context*, because that is what the renderer reads
@@ -83,7 +85,7 @@ def rendered_envs(env: Any) -> Optional[Sequence[int]]:
   return None
 
 
-def can_render(env: Any, env_id: int) -> Optional[str]:
+def can_render(env: Any, env_id: int) -> str | None:
   """Why a frame of ``env_id`` cannot be made, or None when it can."""
   if observing_camera(env) is None:
     return NO_CAMERA
@@ -146,7 +148,7 @@ def _aim_at(camera: Any, env: Any, env_id: int) -> None:
   camera.set_pose(pos=tuple(target + offset), lookat=tuple(target))
 
 
-def _vector(value: Any) -> Optional[np.ndarray]:
+def _vector(value: Any) -> np.ndarray | None:
   try:
     out = np.asarray([float(v) for v in value], dtype=float)
   except (TypeError, ValueError):
@@ -154,21 +156,19 @@ def _vector(value: Any) -> Optional[np.ndarray]:
   return out if out.shape == (3,) else None
 
 
-def _pose_of(camera: Any) -> Optional[tuple]:
+def _pose_of(camera: Any) -> tuple | None:
   pos, lookat = _vector(getattr(camera, "pos", None)), _vector(
       getattr(camera, "lookat", None))
   return (pos, lookat) if pos is not None and lookat is not None else None
 
 
-def _restore(camera: Any, pose: Optional[tuple]) -> None:
+def _restore(camera: Any, pose: tuple | None) -> None:
   if pose is None:
     return
-  try:
+  # A camera that cannot be put back is not a reason to lose the frame that was
+  # already taken; the next render re-aims from wherever it now is.
+  with contextlib.suppress(Exception):
     camera.set_pose(pos=tuple(pose[0]), lookat=tuple(pose[1]))
-  except Exception:
-    # A camera that cannot be put back is not a reason to lose the frame that
-    # was already taken; the next render re-aims from wherever it now is.
-    pass
 
 
 def _as_rgb(frame: Any) -> np.ndarray:

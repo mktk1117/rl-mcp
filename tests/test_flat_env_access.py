@@ -18,6 +18,7 @@ is the failure this file exists to prevent.
 from __future__ import annotations
 
 import pytest
+
 from rlmcp.adapters.legged_gym_style.access import ParameterAccess
 from rlmcp.adapters.legged_gym_style.spec import FlatEnvSpec, NotAFlatEnv, detect
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory

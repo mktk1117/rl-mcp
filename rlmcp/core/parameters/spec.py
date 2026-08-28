@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class ParameterCategory(str, Enum):
@@ -66,8 +66,8 @@ class ParameterSpec:
   data_type: str
   current_value: Any
   default_value: Any
-  min_value: Optional[float] = None
-  max_value: Optional[float] = None
+  min_value: float | None = None
+  max_value: float | None = None
   description: str = ""
   category: ParameterCategory = ParameterCategory.OTHER
   liveness: Liveness = Liveness.LIVE

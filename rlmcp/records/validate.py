@@ -12,15 +12,15 @@ no rules at all.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
 
 from rlmcp.records.record import (
-    FEEDBACK_KINDS,
-    OPEN_VERDICTS,
-    TERMINAL_VERDICTS,
-    RunRecord,
-    VERDICTS,
+  FEEDBACK_KINDS,
+  OPEN_VERDICTS,
+  TERMINAL_VERDICTS,
+  VERDICTS,
+  RunRecord,
 )
 
 REQUIRED_FOR_RESULT = ("outcome", "metrics")
@@ -35,8 +35,8 @@ RESULT_VERDICTS = ("validated", "falsified", "provisional", "best")
 
 
 def missing_result_evidence(
-    record: RunRecord, verdict: Optional[str] = None
-) -> List[str]:
+    record: RunRecord, verdict: str | None = None
+) -> list[str]:
   """The evidence fields a result claim lacks.
 
   The one implementation of "a claim without a measurement is not knowledge",
@@ -66,7 +66,7 @@ class Problem:
   """One failed check."""
 
   level: str  # "error" or "warning"
-  record_id: Optional[str]
+  record_id: str | None
   rule: str
   message: str
 
@@ -74,7 +74,7 @@ class Problem:
     where = f"{self.record_id}: " if self.record_id else ""
     return f"[{self.level}] {where}{self.message}"
 
-  def to_dict(self) -> Dict[str, str]:
+  def to_dict(self) -> dict[str, str]:
     return {
         "level": self.level,
         "record_id": self.record_id or "",
@@ -87,14 +87,14 @@ class Problem:
 class Report:
   """What validation found."""
 
-  errors: List[Problem] = field(default_factory=list)
-  warnings: List[Problem] = field(default_factory=list)
+  errors: list[Problem] = field(default_factory=list)
+  warnings: list[Problem] = field(default_factory=list)
 
   @property
   def ok(self) -> bool:
     return not self.errors
 
-  def to_dict(self) -> Dict[str, object]:
+  def to_dict(self) -> dict[str, object]:
     return {
         "ok": self.ok,
         "errors": [p.to_dict() for p in self.errors],
@@ -111,7 +111,7 @@ class Report:
 def validate(
     records: Sequence[RunRecord],
     slots: int = 1,
-    media_exists: Optional[Dict[str, bool]] = None,
+    media_exists: dict[str, bool] | None = None,
 ) -> Report:
   """Check a whole records.
 
@@ -123,12 +123,12 @@ def validate(
       this module touching a filesystem.
   """
   report = Report()
-  by_id: Dict[str, RunRecord] = {}
+  by_id: dict[str, RunRecord] = {}
 
-  def error(record_id: Optional[str], rule: str, message: str) -> None:
+  def error(record_id: str | None, rule: str, message: str) -> None:
     report.errors.append(Problem("error", record_id, rule, message))
 
-  def warn(record_id: Optional[str], rule: str, message: str) -> None:
+  def warn(record_id: str | None, rule: str, message: str) -> None:
     report.warnings.append(Problem("warning", record_id, rule, message))
 
   # Identity.
@@ -254,23 +254,23 @@ def validate(
 
 
 def _cycle_problems(
-    records: Sequence[RunRecord], by_id: Dict[str, RunRecord]
-) -> List[Problem]:
+    records: Sequence[RunRecord], by_id: dict[str, RunRecord]
+) -> list[Problem]:
   """Detect loops in the config ancestry.
 
   Absent from the method this ports, where a cycle would hang the viewer walking
   the chain. Cheap to check, so check.
   """
-  problems: List[Problem] = []
+  problems: list[Problem] = []
   for record in records:
-    seen: List[str] = []
-    current: Optional[RunRecord] = record
+    seen: list[str] = []
+    current: RunRecord | None = record
     while current is not None:
       if current.id in seen:
         problems.append(
             Problem(
                 "error", record.id, "parent-cycle",
-                f"parent chain loops: {' -> '.join(seen + [current.id])}.",
+                f"parent chain loops: {' -> '.join([*seen, current.id])}.",
             )
         )
         break
@@ -279,7 +279,7 @@ def _cycle_problems(
   return problems
 
 
-def _lease_problems(records: Sequence[RunRecord], slots: int) -> List[Problem]:
+def _lease_problems(records: Sequence[RunRecord], slots: int) -> list[Problem]:
   """More live claims than the machine has slots.
 
   With ``slots=1`` this is the original mutex: one machine, one trainer. It
@@ -287,9 +287,9 @@ def _lease_problems(records: Sequence[RunRecord], slots: int) -> List[Problem]:
   not do.
   """
   live = [r for r in records if r.lease is not None and not r.lease.dead()]
-  problems: List[Problem] = []
+  problems: list[Problem] = []
 
-  by_slot: Dict[str, List[str]] = {}
+  by_slot: dict[str, list[str]] = {}
   for record in live:
     assert record.lease is not None
     by_slot.setdefault(record.lease.slot, []).append(record.id)
@@ -315,7 +315,7 @@ def _lease_problems(records: Sequence[RunRecord], slots: int) -> List[Problem]:
 
 def check_verdict_change(
     record: RunRecord, verdict: str, records: Sequence[RunRecord]
-) -> Optional[str]:
+) -> str | None:
   """Why ``record`` may not take ``verdict``, or None if it may.
 
   Used at close-out so the rules are enforced when a verdict is *set*, not

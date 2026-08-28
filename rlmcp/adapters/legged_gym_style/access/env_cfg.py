@@ -28,7 +28,7 @@ and refused with a reason.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from rlmcp.adapters.access import paths
 from rlmcp.adapters.access.base import AccessProvider, Synthetic, Term
@@ -55,6 +55,28 @@ BAKED_AT_STARTUP = frozenset(
 """Read once, when the environment is built. A write cannot reach the run."""
 
 
+def _coerce_like(current: Any, value: Any) -> Any:
+  """``value``, in whatever shape ``current`` already is.
+
+  A write to a flat config entry has to keep its type: an int knob that
+  silently becomes a float, or a ``[min, max]`` pair that becomes a scalar,
+  breaks whatever reads it next. Raising here rather than at the call site
+  keeps the failure next to the rule it broke; the caller adds which key it
+  was.
+  """
+  if paths.is_range(current):
+    if not paths.is_range(value):
+      raise ValueError("expected a [min, max] pair")
+    return type(current)(float(v) for v in value)
+  if isinstance(current, bool):
+    if not isinstance(value, bool):
+      raise ValueError("expected a bool")
+    return value
+  if isinstance(current, int):
+    return int(value)
+  return float(value)
+
+
 class _EnvCfgProvider(AccessProvider):
   """Shared plumbing: every provider here serves scalars out of one dict."""
 
@@ -67,17 +89,17 @@ class _EnvCfgProvider(AccessProvider):
     cfg = self.spec.resolve(self.env, "env_cfg", None)
     return cfg if isinstance(cfg, dict) else {}
 
-  def claimed(self) -> Dict[str, str]:
+  def claimed(self) -> dict[str, str]:
     """``{env_cfg key: the name it is exposed under}`` for this domain."""
     raise NotImplementedError
 
   def available(self) -> bool:
     return bool(self.claimed())
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     return []
 
-  def synthetic(self) -> List[Synthetic]:
+  def synthetic(self) -> list[Synthetic]:
     return [
         Synthetic(
             key=f"{self.domain}.{name}",
@@ -108,20 +130,10 @@ class _EnvCfgProvider(AccessProvider):
     def put(value: Any) -> bool:
       current = self.cfg[cfg_key]
       try:
-        if paths.is_range(current):
-          if not paths.is_range(value):
-            raise ValueError("expected a [min, max] pair")
-          self.cfg[cfg_key] = type(current)(float(v) for v in value)
-        elif isinstance(current, bool):
-          if not isinstance(value, bool):
-            raise ValueError("expected a bool")
-          self.cfg[cfg_key] = value
-        elif isinstance(current, int):
-          self.cfg[cfg_key] = int(value)
-        else:
-          self.cfg[cfg_key] = float(value)
+        coerced = _coerce_like(current, value)
       except (TypeError, ValueError) as exc:
         raise ValueError(f"Cannot set env_cfg['{cfg_key}']: {exc}") from None
+      self.cfg[cfg_key] = coerced
       return True
     return put
 
@@ -132,7 +144,7 @@ class TerminationAccess(_EnvCfgProvider):
   domain = "termination"
   category = ParameterCategory.TERMINATION
 
-  def claimed(self) -> Dict[str, str]:
+  def claimed(self) -> dict[str, str]:
     return {
         key: key[len(TERMINATION_PREFIX):]
         for key in self.cfg
@@ -150,7 +162,7 @@ class ActionAccess(_EnvCfgProvider):
   domain = "action"
   category = ParameterCategory.ACTION
 
-  def claimed(self) -> Dict[str, str]:
+  def claimed(self) -> dict[str, str]:
     return {key: name for key, name in ACTION_KEYS.items() if key in self.cfg}
 
   def explain(self, cfg_key: str, name: str) -> str:
@@ -165,7 +177,7 @@ class EnvAccess(_EnvCfgProvider):
   domain = "env"
   category = ParameterCategory.OTHER
 
-  def claimed(self) -> Dict[str, str]:
+  def claimed(self) -> dict[str, str]:
     return {
         key: key
         for key in self.cfg

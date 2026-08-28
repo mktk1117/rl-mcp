@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from rlmcp.core.diagnostics import (
-    analyze_trace,
-    dominant_frequency,
-    high_frequency_content,
-    summarize_metric_history,
+  analyze_trace,
+  dominant_frequency,
+  high_frequency_content,
+  summarize_metric_history,
 )
 
 DT = 0.02

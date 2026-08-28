@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '(.tool_input.file_path // .tool_response.filePath) // empty' | { read -r f; case \"$f\" in *.py) out=$(uvx ruff@0.16.4 check --fix \"$f\" 2>&1) || { echo \"$out\" >&2; exit 2; } ;; *) : ;; esac; }",
+            "timeout": 60,
+            "statusMessage": "ruff"
+          }
+        ]
+      }
+    ]
+  }
+}

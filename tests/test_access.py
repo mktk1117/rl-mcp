@@ -12,24 +12,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pytest
 import torch
 
 from rlmcp.adapters import base
-from rlmcp.adapters.base import NotSupported, RunnerAdapter, SimAdapter
-from rlmcp.adapters.manager_based.access import ParameterAccess
-from rlmcp.adapters.manager_based.access import paths
 from rlmcp.adapters import rsl_rl_runner as runner_adapter
-from rlmcp.adapters.rsl_rl_runner import RslRlRunnerAdapter
+from rlmcp.adapters.base import NotSupported, RunnerAdapter, SimAdapter
 from rlmcp.adapters.manager_based import metrics as state_metrics
-from rlmcp.adapters.mjlab.state import rendering
+from rlmcp.adapters.manager_based.access import ParameterAccess, paths
 from rlmcp.adapters.manager_based.sampling import StateSampler
+from rlmcp.adapters.mjlab.state import rendering
+from rlmcp.adapters.rsl_rl_runner import RslRlRunnerAdapter
 from rlmcp.core import diagnostics as diag
 from rlmcp.core.parameters.spec import ParameterCategory
-
 
 # Fakes shaped like mjlab's managers.
 
@@ -46,7 +44,7 @@ class SceneEntityCfg:
 class TermCfg:
   func: Any = None
   weight: float = 0.0
-  params: Dict[str, Any] = field(default_factory=dict)
+  params: dict[str, Any] = field(default_factory=dict)
 
 
 def _track_linear_velocity(env, std, command_name):
@@ -64,7 +62,7 @@ class VariablePosture:
   stays live.
   """
 
-  def __init__(self, params: Dict[str, Any]):
+  def __init__(self, params: dict[str, Any]):
     self.std_standing = dict(params["std_standing"])
     self.std_walking = dict(params["std_walking"])
 
@@ -79,11 +77,11 @@ class VariablePosture:
 class ListManager:
   """A manager with a flat list of terms (rewards, terminations, curriculum)."""
 
-  def __init__(self, terms: Dict[str, TermCfg]):
+  def __init__(self, terms: dict[str, TermCfg]):
     self._terms = terms
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   def get_term_cfg(self, name: str) -> TermCfg:
@@ -93,15 +91,15 @@ class ListManager:
 class EventManager(ListManager):
   """Events are grouped by mode, and the same lookup serves every mode."""
 
-  def __init__(self, by_mode: Dict[str, Dict[str, TermCfg]]):
+  def __init__(self, by_mode: dict[str, dict[str, TermCfg]]):
     self._by_mode = by_mode
-    flat: Dict[str, TermCfg] = {}
+    flat: dict[str, TermCfg] = {}
     for terms in by_mode.values():
       flat.update(terms)
     super().__init__(flat)
 
   @property
-  def active_terms(self) -> Dict[str, List[str]]:
+  def active_terms(self) -> dict[str, list[str]]:
     return {mode: list(terms) for mode, terms in self._by_mode.items()}
 
 
@@ -126,7 +124,7 @@ class CommandManager:
     self._terms = {"twist": CommandTerm()}
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   def get_term(self, name: str) -> CommandTerm:
@@ -143,7 +141,7 @@ class ActionManager:
     self._terms = {"joint_pos": ActionTerm()}
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   def get_term(self, name: str) -> ActionTerm:
@@ -228,7 +226,7 @@ def access() -> ParameterAccess:
   return ParameterAccess(FakeEnv())
 
 
-def keys(access: ParameterAccess) -> List[str]:
+def keys(access: ParameterAccess) -> list[str]:
   return [s.key for s in access.discover()]
 
 
@@ -606,9 +604,9 @@ def test_reset_event_write_lands_and_reports_at_reset(access):
 class RebuildablePosture:
   """A class-based term that CAN rebuild its cache: it exposes update_params."""
 
-  def __init__(self, std: Dict[str, float]):
+  def __init__(self, std: dict[str, float]):
     self.std = dict(std)
-    self.rebuilt_with: List[Dict[str, Any]] = []
+    self.rebuilt_with: list[dict[str, Any]] = []
 
   def __call__(self, env, std):
     del std
@@ -690,7 +688,7 @@ class RebuildableKernelCommandTerm(KernelCommandTerm):
 
   def __init__(self, cfg=None):
     super().__init__(cfg)
-    self.rebuilt_with: List[Dict[str, Any]] = []
+    self.rebuilt_with: list[dict[str, Any]] = []
 
   def update_params(self, **fields):
     self.rebuilt_with.append(fields)
@@ -762,7 +760,7 @@ def test_command_term_with_update_params_stays_live_and_is_rebuilt():
 
 
 def test_walker_stops_at_max_depth():
-  deep: Dict[str, Any] = {"v": 1.0}
+  deep: dict[str, Any] = {"v": 1.0}
   for _ in range(paths.MAX_DEPTH + 2):
     deep = {"nest": deep}
   found = list(paths.walk_leaves(deep))
@@ -813,7 +811,7 @@ class _Scene:
 
   def __init__(self, robot):
     self._robot = robot
-    self.sensors: Dict[str, Any] = {}
+    self.sensors: dict[str, Any] = {}
 
   def __getitem__(self, name):
     return self.sensors.get(name, self._robot)
@@ -848,11 +846,11 @@ class _NoneCommand:
 
 
 class _StateCommandManager:
-  def __init__(self, terms: Dict[str, Any]):
+  def __init__(self, terms: dict[str, Any]):
     self._terms = dict(terms)
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   def get_command(self, name):
@@ -870,13 +868,13 @@ class _StateActionTerm:
 
 
 class _StateActionManager:
-  def __init__(self, terms: Dict[str, _StateActionTerm], num_envs: int):
+  def __init__(self, terms: dict[str, _StateActionTerm], num_envs: int):
     self._terms = dict(terms)
     total = sum(t.action_dim for t in self._terms.values())
     self.action = torch.zeros(num_envs, total)
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   def get_term(self, name):
@@ -1273,7 +1271,7 @@ class _ResettableEnv:
     self.num_envs = num_envs
     self.device = "cpu"
     self.episode_length_buf = torch.arange(num_envs)
-    self.reset_calls: List[Any] = []
+    self.reset_calls: list[Any] = []
     self.full_resets = 0
     if private:
       self._reset_idx = self._record

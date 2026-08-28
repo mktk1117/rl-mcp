@@ -37,8 +37,9 @@ Keep a name bound to the rlmcp wrapper: ``attach_runner`` lives on it, and
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import Any
 
 import torch
 
@@ -47,10 +48,10 @@ from rlmcp.core.controller import RlMcp, SessionStopped
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.extensions import discover as discover_extensions
 
-CurriculumArg = Union[None, str, StageSchedule, Sequence[Any]]
+CurriculumArg = None | str | StageSchedule | Sequence[Any]
 
 
-def serve_a_live_view(viser: Optional[bool], session_kind: str) -> bool:
+def serve_a_live_view(viser: bool | None, session_kind: str) -> bool:
   """Whether to serve a live view when the caller did not say either way.
 
   A training run gets one. Unwatched it is a bound port and no work at all --
@@ -101,7 +102,7 @@ class RlMcpEnvWrapper:
   :func:`rlmcp.adapters.isaaclab.wrap` for IsaacLab.
   """
 
-  def build_sim_adapter(self, env: Any, robot_name: Optional[str]) -> Any:
+  def build_sim_adapter(self, env: Any, robot_name: str | None) -> Any:
     raise NotImplementedError(
         f"{type(self).__name__} does not say which SimAdapter speaks to its "
         "environment. A backend subclasses RlMcpEnvWrapper, overrides "
@@ -114,32 +115,32 @@ class RlMcpEnvWrapper:
   def __init__(
       self,
       env: Any,
-      session_dir: Optional[Path | str] = None,
+      session_dir: Path | str | None = None,
       curriculum: CurriculumArg = None,
       service_every_steps: int = 24,
-      robot_name: Optional[str] = None,
+      robot_name: str | None = None,
       task_id: str = "",
       session_kind: str = "",
       trace_capacity: int = 6000,
-      curriculum_kwargs: Optional[Dict[str, Any]] = None,
-      extensions: Optional[Sequence[str]] = None,
-      exclude_extensions: Optional[Sequence[str]] = None,
-      record_run: Optional[str] = None,
-      records_root: Optional[str] = None,
+      curriculum_kwargs: dict[str, Any] | None = None,
+      extensions: Sequence[str] | None = None,
+      exclude_extensions: Sequence[str] | None = None,
+      record_run: str | None = None,
+      records_root: str | None = None,
       record_slot: str = "",
       record_strict: bool = False,
-      code_root: Optional[str] = None,
+      code_root: str | None = None,
       video_every: Any = None,
       video_seconds: float = 4.0,
       video_env_id: int = 0,
-      video_budget_mb: Optional[float] = None,
-      viser: Optional[bool] = None,
-      viser_port: Optional[int] = None,
-      viser_host: Optional[str] = None,
-      viser_fps: Optional[float] = None,
+      video_budget_mb: float | None = None,
+      viser: bool | None = None,
+      viser_port: int | None = None,
+      viser_host: str | None = None,
+      viser_fps: float | None = None,
       viser_env_id: int = 0,
       viser_realtime: bool = False,
-      viser_buffer_seconds: Optional[float] = None,
+      viser_buffer_seconds: float | None = None,
   ):
     self.env = env
     self.service_every_steps = max(1, int(service_every_steps))
@@ -206,8 +207,8 @@ class RlMcpEnvWrapper:
 
     self._steps = 0
     self._runner_hooked = False
-    self._log_sums: Dict[str, torch.Tensor] = {}
-    self._log_counts: Dict[str, int] = {}
+    self._log_sums: dict[str, torch.Tensor] = {}
+    self._log_counts: dict[str, int] = {}
 
     self.startup_checks()
 
@@ -240,8 +241,8 @@ class RlMcpEnvWrapper:
   def _resolve_curriculum(
       curriculum: CurriculumArg,
       lab: RlMcp,
-      kwargs: Dict[str, Any],
-  ) -> Optional[StageSchedule]:
+      kwargs: dict[str, Any],
+  ) -> StageSchedule | None:
     """Turn the ``curriculum=`` argument into a schedule, or None."""
     if curriculum is None:
       return None
@@ -308,18 +309,18 @@ class RlMcpEnvWrapper:
 
   # Telemetry accumulation.
 
-  def _accumulate_log(self, log: Optional[Dict[str, Any]]) -> None:
+  def _accumulate_log(self, log: dict[str, Any] | None) -> None:
     """Sum mjlab's episode logs on-device; convert once per iteration."""
     if not log:
       return
-    for key, value in log.items():
-      if torch.is_tensor(value):
-        value = value.detach().reshape(-1)
+    for key, raw in log.items():
+      if torch.is_tensor(raw):
+        value = raw.detach().reshape(-1)
         if value.numel() == 0:
           continue
         value = value.mean() if value.numel() > 1 else value.reshape(())
-      elif isinstance(value, (int, float)):
-        value = torch.tensor(float(value))
+      elif isinstance(raw, (int, float)):
+        value = torch.tensor(float(raw))
       else:
         continue
       if key in self._log_sums:
@@ -328,10 +329,10 @@ class RlMcpEnvWrapper:
         self._log_sums[key] = value.clone() if torch.is_tensor(value) else value
       self._log_counts[key] = self._log_counts.get(key, 0) + 1
 
-  def _flush_log(self) -> Dict[str, float]:
+  def _flush_log(self) -> dict[str, float]:
     if not self._log_sums:
       return {}
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     for key, total in self._log_sums.items():
       count = max(1, self._log_counts.get(key, 1))
       try:
@@ -344,7 +345,7 @@ class RlMcpEnvWrapper:
 
   # Servicing.
 
-  def _service(self, iteration: Optional[int] = None) -> None:
+  def _service(self, iteration: int | None = None) -> None:
     self.rlmcp.service(iteration=iteration, metrics=self._flush_log())
     if self.rlmcp.should_stop():
       raise TrainingStopped(
@@ -407,7 +408,7 @@ class RlMcpEnvWrapper:
     setattr(owner, name, logged)
     self._runner_hooked = True
 
-  def _iteration_from(self, args: Any, kwargs: Any) -> Optional[int]:
+  def _iteration_from(self, args: Any, kwargs: Any) -> int | None:
     """The iteration a log call is about, however that runner spells it.
 
     mjlab passes ``it=``; rsl_rl passes a ``locs`` dict carrying the loop

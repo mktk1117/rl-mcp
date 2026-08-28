@@ -32,7 +32,8 @@ the dict then has no function behind it and never will this run.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from rlmcp.adapters.access import paths
 from rlmcp.adapters.access.base import AccessProvider, Synthetic, Term
@@ -52,7 +53,7 @@ class RewardAccess(AccessProvider):
   # The scales dict, and the dt conversion applied to every value in it.
 
   @property
-  def scales(self) -> Dict[str, float]:
+  def scales(self) -> dict[str, float]:
     return self.spec.resolve(self.env, "reward_scales", {}) or {}
 
   @property
@@ -70,7 +71,7 @@ class RewardAccess(AccessProvider):
   def available(self) -> bool:
     return bool(self.scales)
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     cfg = self.spec.resolve(self.env, "reward_cfg", None)
     if not isinstance(cfg, dict):
       return []
@@ -82,8 +83,8 @@ class RewardAccess(AccessProvider):
     up under a second key, in the wrong units."""
     return paths.SKIP_KEYS | {self.spec.reward_scales}
 
-  def synthetic(self) -> List[Synthetic]:
-    out: List[Synthetic] = []
+  def synthetic(self) -> list[Synthetic]:
+    out: list[Synthetic] = []
     for name in sorted(self.scales):
       out.append(
           Synthetic(

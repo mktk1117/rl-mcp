@@ -58,9 +58,11 @@ and the accounting.
 
 from __future__ import annotations
 
+import contextlib
 import socket
 import time
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 DEFAULT_PORT = 8740
 """First port tried. Busy ones are skipped -- see :data:`PORT_SEARCH`."""
@@ -121,9 +123,10 @@ def find_free_port(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
       probe.bind((host, candidate))
-      return candidate
     except OSError:
       continue
+    else:
+      return candidate
     finally:
       probe.close()
   raise RuntimeError(
@@ -170,9 +173,9 @@ class LiveView:
       realtime: bool = False,
       buffer_seconds: float = DEFAULT_BUFFER_SECONDS,
       label: str = "rlmcp",
-      server_factory: Optional[Callable[[str, int, str], Any]] = None,
+      server_factory: Callable[[str, int, str], Any] | None = None,
       clock: Callable[[], float] = time.monotonic,
-      status_provider: Optional[Callable[[], str]] = None,
+      status_provider: Callable[[], str] | None = None,
   ):
     self.sim = sim
     self.host = str(host or DEFAULT_HOST)
@@ -194,6 +197,10 @@ class LiveView:
 
     self._server: Any = None
     self._scene: Any = None
+    # Whether the scene on this server belongs to somebody else -- see
+    # :meth:`host_for_viewer`. It changes who may close the server, not what
+    # this class does with it, which is why it is a flag and not a subclass.
+    self._hosted = False
     self.port = 0
     self.frames = 0
     self.failures = 0
@@ -201,9 +208,9 @@ class LiveView:
     self.push_ms = 0.0
     self.last_error = ""
     self.stopped_because = ""
-    self._last_push: Optional[float] = None  # None: no frame pushed yet.
-    self._last_watch_check: Optional[float] = None
-    self._last_status: Optional[float] = None
+    self._last_push: float | None = None  # None: no frame pushed yet.
+    self._last_watch_check: float | None = None
+    self._last_status: float | None = None
     self._status_handle: Any = None
     self._pause_button: Any = None
     self._watchers = 0
@@ -225,7 +232,10 @@ class LiveView:
 
   @property
   def running(self) -> bool:
-    return self._scene is not None
+    # The *server* is what a browser connects to. The scene is only how it
+    # gets fed, and a view whose scene belongs to somebody else -- see
+    # :meth:`host_for_viewer` -- is running in every sense a caller cares about.
+    return self._server is not None
 
   @property
   def url(self) -> str:
@@ -256,7 +266,7 @@ class LiveView:
       return True
     return bool(self._scene_can_pause and getattr(self._scene, "paused", False))
 
-  def set_paused(self, paused: bool) -> Dict[str, Any]:
+  def set_paused(self, paused: bool) -> dict[str, Any]:
     """Stop feeding the view, or start again. Returns :meth:`describe`.
 
     Deliberately not a detach: the port stays bound, the scene stays built in
@@ -270,10 +280,8 @@ class LiveView:
     # filling any more it would show motion the run has stopped producing.
     setter = getattr(self._scene, "set_paused", None)
     if setter is not None:
-      try:
+      with contextlib.suppress(Exception):
         setter(self._paused)
-      except Exception:
-        pass
     self._label_pause_button()
     return self.describe()
 
@@ -283,7 +291,7 @@ class LiveView:
 
   # Lifecycle.
 
-  def start(self) -> Dict[str, Any]:
+  def start(self) -> dict[str, Any]:
     """Open the server and build the scene. Returns :meth:`describe`.
 
     Restarting an already-running view is not an error and not a rebuild: the
@@ -333,6 +341,53 @@ class LiveView:
     self._last_watch_check = None
     return self.describe()
 
+  def host_for_viewer(self) -> Any:
+    """Open the server and let somebody else put the scene on it.
+
+    For a play session. There, mjlab's own ``ViserPlayViewer`` already owns the
+    simulation loop and builds a panel far richer than this class should ever
+    grow -- reward bars, term plots, camera feeds, the command sliders, the
+    debug visualisers -- and it takes a ``viser_server`` for exactly this.
+    Without this method a play session runs *two* viser servers: mjlab's, on
+    its own default port with the whole GUI, and this one, on the port the
+    session publishes, mirroring the same environment through a much smaller
+    panel. Whoever is watching gets whichever port they were told about, and
+    the one rlmcp tells them about is the poorer of the two.
+
+    So: this class keeps what it is good at -- picking a free port, publishing
+    the url, putting the run's own numbers at the top of the panel, closing it
+    all at the end -- and hands the server to the viewer that owns the
+    environment. It pushes nothing afterwards; ``tick`` is a no-op with no
+    scene, which is already how it is written.
+
+    Returns the viser server, or ``None`` if this install has no viser.
+    """
+    if self._server is not None:
+      return self._server
+    started = time.perf_counter()
+    try:
+      # The port search is inside the try with the server: a box with twenty
+      # busy ports is the same answer as a box with no viser -- this view
+      # cannot be served -- and neither is a reason to lose the play session.
+      self.port = find_free_port(self.host, self.requested_port)
+      server = self._server_factory(self.host, self.port, self.label)
+    except Exception as exc:
+      # A play session without viser is not a broken session -- `--mode video`
+      # and `--mode native` never needed it. The caller falls back to letting
+      # the viewer open its own.
+      self.last_error = f"{type(exc).__name__}: {exc}"
+      self.port = 0
+      return None
+    self._open_status_panel(server)
+    self._server = server
+    self._hosted = True
+    self.startup_ms = round((time.perf_counter() - started) * 1000.0, 1)
+    self.failures = 0
+    self.frames = 0
+    self.last_error = ""
+    self.stopped_because = ""
+    return server
+
   def _refuse_a_backend_with_no_view(self) -> None:
     """Answer "this backend has no live view" before spending anything on one.
 
@@ -350,17 +405,16 @@ class LiveView:
     if declared is SimAdapter.open_live_view:
       declared(self.sim, server=None)  # Raises NotSupported, in the contract's words.
 
-  def stop(self, reason: str = "") -> Dict[str, Any]:
+  def stop(self, reason: str = "") -> dict[str, Any]:
     """Close the scene and give the port back. Safe to call when not running."""
     scene, server = self._scene, self._server
     self._scene, self._server, self._status_handle = None, None, None
     self._pause_button = None
     self._scene_can_pause = False
+    self._hosted = False
     if scene is not None:
-      try:
+      with contextlib.suppress(Exception):
         scene.close()
-      except Exception:
-        pass
     self._close_server(server)
     self.port = 0
     self._watchers = 0
@@ -371,22 +425,20 @@ class LiveView:
   def _close_server(server: Any) -> None:
     if server is None:
       return
-    try:
+    with contextlib.suppress(Exception):
       server.stop()
-    except Exception:
-      pass
 
   def configure(
       self,
-      enabled: Optional[bool] = None,
-      port: Optional[int] = None,
-      host: Optional[str] = None,
-      fps: Optional[float] = None,
-      env_id: Optional[int] = None,
-      realtime: Optional[bool] = None,
-      buffer_seconds: Optional[float] = None,
-      paused: Optional[bool] = None,
-  ) -> Dict[str, Any]:
+      enabled: bool | None = None,
+      port: int | None = None,
+      host: str | None = None,
+      fps: float | None = None,
+      env_id: int | None = None,
+      realtime: bool | None = None,
+      buffer_seconds: float | None = None,
+      paused: bool | None = None,
+  ) -> dict[str, Any]:
     """Read or change the view, starting or stopping it as asked.
 
     Changing the port, the host or the mode of a *running* view restarts it:
@@ -394,19 +446,45 @@ class LiveView:
     was built. Changing the rate or the environment does not, because the scene
     in the browser is still the right scene.
     """
-    rebind = False
-    if host is not None and str(host) != self.host:
-      self.host, rebind = str(host), True
-    if port is not None and int(port) != self.requested_port:
-      self.requested_port, rebind = int(port), True
+    # What each argument *would* make it, worked out before anything is
+    # changed: the refusal below has to leave the view exactly as it found it,
+    # or a `--port` that was turned down would still be the port the next
+    # start binds.
+    new_host = str(host) if host is not None else self.host
+    new_port = int(port) if port is not None else self.requested_port
     # The mode decides what the backend built, so switching it is a rebuild
     # rather than a setting -- there is a player and a buffer on one side of it
-    # and neither on the other.
-    if realtime is not None and bool(realtime) != self.realtime:
-      self.realtime, rebind = bool(realtime), True
-    if buffer_seconds is not None and float(buffer_seconds) != self.buffer_seconds:
-      self.buffer_seconds = float(buffer_seconds)
-      rebind = rebind or self.realtime
+    # and neither on the other. The buffer is a rebuild only in the mode that
+    # has one.
+    new_realtime = bool(realtime) if realtime is not None else self.realtime
+    new_buffer = (float(buffer_seconds) if buffer_seconds is not None
+                  else self.buffer_seconds)
+    rebind = (new_host != self.host
+              or new_port != self.requested_port
+              or new_realtime != self.realtime
+              or (new_buffer != self.buffer_seconds and new_realtime))
+
+    if self._hosted and (enabled is False or rebind):
+      # Imported here rather than at the top for the same reason
+      # `_refuse_a_backend_with_no_view` does it: `rlmcp.adapters.base` pulls
+      # in numpy, and this module is meant to cost nothing to import.
+      from rlmcp.adapters.base import NotSupported
+
+      # A hosted server is the play viewer's window. Closing it or rebinding it
+      # would take that window with it -- and a rebind would then build this
+      # class's own small scene on a new port, which is the two-server bug
+      # `host_for_viewer` exists to remove, with the good panel dead as well.
+      # The knobs that only steer a push (`fps`, `env_id`, `paused`) are left
+      # alone: with no scene of our own they are already no-ops.
+      raise NotSupported(
+          "This live view is the play viewer's own window, so it is not "
+          "rlmcp's to close or re-point. Close the browser tab, or end the "
+          "session with `rlmcp stop`.")
+
+    self.host = new_host
+    self.requested_port = new_port
+    self.realtime = new_realtime
+    self.buffer_seconds = new_buffer
     if fps is not None:
       self.fps = self._clamp_fps(fps)
     if env_id is not None:
@@ -484,10 +562,8 @@ class LiveView:
     tell = getattr(self._scene, "set_watchers", None)
     if tell is None:
       return
-    try:
+    with contextlib.suppress(Exception):
       tell(int(watchers))
-    except Exception:
-      pass
 
   def _add_pause_button(self, server: Any) -> None:
     """Put a pause in the tab, for a mode with no player to put one in.
@@ -596,7 +672,7 @@ class LiveView:
 
   # Reporting.
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     """The status-payload view: where it is, who is on it, what it costs."""
     payload = {
         "running": self.running,
@@ -617,6 +693,12 @@ class LiveView:
         "stopped_because": self.stopped_because,
         "at": time.time(),
     }
+    if self._hosted:
+      # Everything above about pushing -- frames, watchers, the rate, the env
+      # -- describes a scene this view does not have, and would read as zero
+      # forever beside a tab somebody is watching. Say whose window it is
+      # instead of publishing numbers that cannot move.
+      payload["hosted"] = True
     if self.realtime:
       payload["buffer_seconds"] = self.buffer_seconds
     # Whatever the backend can say about its own playback -- how full the
@@ -627,7 +709,7 @@ class LiveView:
       payload["playback"] = described
     return payload
 
-  def _safe_describe(self) -> Dict[str, Any]:
+  def _safe_describe(self) -> dict[str, Any]:
     describe = getattr(self._scene, "describe", None)
     if describe is None:
       return {}
@@ -640,6 +722,9 @@ class LiveView:
     """One line for a launch banner or a status header."""
     if not self.running:
       return "live view off"
+    if self._hosted:
+      return (f"live view on {self.url} (the play viewer's own panel, served "
+              "on the port this session publishes)")
     if self.paused:
       return (f"live view paused on {self.url} (attached, costing the run "
               "nothing; resume it in the tab or with `rlmcp view --resume`)")

@@ -14,8 +14,9 @@ from __future__ import annotations
 import functools
 import inspect
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any
 
 from rlmcp.adapters.access import paths
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
@@ -41,8 +42,8 @@ def is_term_instance(func: Any) -> bool:
 _CFG_READ = re.compile(r"\bcfg\.((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)")
 
 
-@functools.lru_cache(maxsize=None)
-def constructor_cfg_reads(cls: type) -> FrozenSet[str]:
+@functools.cache
+def constructor_cfg_reads(cls: type) -> frozenset[str]:
   """Dotted ``cfg`` paths the constructors of ``cls`` read, from their source.
 
   A class-based term is handed its cfg once, at construction, and whatever its
@@ -105,8 +106,8 @@ class Synthetic:
   default: Any
   description: str
   data_type: str = "float"
-  min_value: Optional[float] = None
-  max_value: Optional[float] = None
+  min_value: float | None = None
+  max_value: float | None = None
   liveness: Liveness = Liveness.LIVE
   """When a write here reaches the run. A synthetic is usually live -- it is
   written to stand in front of something live -- but not always: a flat config
@@ -142,7 +143,7 @@ class AccessProvider:
 
   # The one method a provider must implement.
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     raise NotImplementedError
 
   # Optional annotation, so discovered keys arrive with useful metadata.
@@ -154,7 +155,7 @@ class AccessProvider:
 
   def bounds(
       self, term: Term, parts: Sequence[str], value: Any
-  ) -> Tuple[Optional[float], Optional[float]]:
+  ) -> tuple[float | None, float | None]:
     return None, None
 
   def miss_hint(self, key: str) -> str:
@@ -196,7 +197,7 @@ class AccessProvider:
       return Liveness.INERT
     return Liveness.LIVE
 
-  def synthetic(self) -> List[Synthetic]:
+  def synthetic(self) -> list[Synthetic]:
     """Parameters this family exposes that are not plain config fields."""
     return []
 
@@ -204,18 +205,18 @@ class AccessProvider:
 
   def after_set(
       self, term: Term, parts: Sequence[str], value: Any
-  ) -> Optional[Dict[str, Any]]:
+  ) -> dict[str, Any] | None:
     """Run after a successful write. Return notes to surface to the caller."""
     return None
 
   # Helpers shared by several providers.
 
-  def _term_cfgs(self) -> Dict[str, Any]:
+  def _term_cfgs(self) -> dict[str, Any]:
     """``{term_name: cfg}`` for managers with the usual mjlab shape."""
     manager = self.manager
     if manager is None:
       return {}
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for name in getattr(manager, "active_terms", []) or []:
       try:
         out[name] = manager.get_term_cfg(name)
@@ -228,16 +229,16 @@ class AccessProvider:
 class ProviderRegistry:
   """The providers active for one environment."""
 
-  providers: Dict[str, AccessProvider] = field(default_factory=dict)
+  providers: dict[str, AccessProvider] = field(default_factory=dict)
 
   def add(self, provider: AccessProvider) -> None:
     if provider.available():
       self.providers[provider.domain] = provider
 
-  def get(self, domain: str) -> Optional[AccessProvider]:
+  def get(self, domain: str) -> AccessProvider | None:
     return self.providers.get(domain)
 
-  def domains(self) -> List[str]:
+  def domains(self) -> list[str]:
     return sorted(self.providers)
 
   def __iter__(self):

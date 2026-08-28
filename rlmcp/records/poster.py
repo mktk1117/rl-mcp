@@ -27,8 +27,8 @@ from __future__ import annotations
 import hashlib
 import re
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, Optional, Sequence
 
 from rlmcp.records.record import RunRecord
 
@@ -57,7 +57,7 @@ def poster_key(record_id: str, video_key: str) -> str:
 
 
 def extract_poster(video: str | Path, out: str | Path,
-                   at_fraction: float = 0.34, max_width: int = 480) -> Optional[Path]:
+                   at_fraction: float = 0.34, max_width: int = 480) -> Path | None:
   """Write one frame of ``video`` to ``out``. ``None`` if it cannot be read.
 
   Returning None rather than raising is deliberate: a poster is a nicety, and a
@@ -71,13 +71,13 @@ def extract_poster(video: str | Path, out: str | Path,
 
   try:
     reader = imageio.get_reader(str(video))
-  except Exception:  # noqa: BLE001 -- any unreadable file, for any reason.
+  except Exception:
     return None
 
   try:
     try:
       count = reader.count_frames()
-    except Exception:  # noqa: BLE001 -- some formats will not say.
+    except Exception:
       count = 0
     index = int(count * at_fraction) if count else 0
     try:
@@ -98,14 +98,15 @@ def extract_poster(video: str | Path, out: str | Path,
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     imageio.imwrite(str(out), array)
-    return out
-  except Exception:  # noqa: BLE001 -- see the docstring.
+  except Exception:
     return None
+  else:
+    return out
   finally:
     reader.close()
 
 
-def _under(root: Path, key: str) -> Optional[Path]:
+def _under(root: Path, key: str) -> Path | None:
   """``root/key``, or None when the key is not a key at all.
 
   The check is on the key's *parts* rather than on the resolved path, and the
@@ -122,7 +123,7 @@ def _under(root: Path, key: str) -> Optional[Path]:
 
 
 def ensure_posters(records: Sequence[RunRecord], media_root: Path | str,
-                   derive: bool = True) -> Dict[str, str]:
+                   derive: bool = True) -> dict[str, str]:
   """Stills for the clip that stands for each run, keyed by the clip's key.
 
   One per record rather than one per video: the tree, the story and the strip
@@ -140,7 +141,7 @@ def ensure_posters(records: Sequence[RunRecord], media_root: Path | str,
   from rlmcp.records.graph import headline_video
 
   root = Path(media_root)
-  out: Dict[str, str] = {}
+  out: dict[str, str] = {}
   for record in records:
     entry = headline_video(record)
     if not entry:
@@ -152,7 +153,7 @@ def ensure_posters(records: Sequence[RunRecord], media_root: Path | str,
 
 
 def record_posters(record: RunRecord, media_root: Path | str,
-                   derive: bool = True, kind: str = "videos") -> Dict[str, str]:
+                   derive: bool = True, kind: str = "videos") -> dict[str, str]:
   """Stills for *every* clip on one record, keyed by each clip's key.
 
   The plural of :func:`ensure_posters` along the other axis, and it answers a
@@ -166,7 +167,7 @@ def record_posters(record: RunRecord, media_root: Path | str,
   absent from the map.
   """
   root = Path(media_root)
-  out: Dict[str, str] = {}
+  out: dict[str, str] = {}
   for entry in (record.assets or {}).get(kind) or []:
     if not entry:
       continue
@@ -177,7 +178,7 @@ def record_posters(record: RunRecord, media_root: Path | str,
 
 
 def _poster_for(record_id: str, entry: Sequence[str], root: Path,
-                derive: bool) -> Optional[str]:
+                derive: bool) -> str | None:
   """The cached still for one ``[key, caption]`` asset entry, or None."""
   video_key = entry[0]
   # A record that already names its own still -- a store that extracts one

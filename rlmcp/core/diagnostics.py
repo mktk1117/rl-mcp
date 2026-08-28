@@ -14,23 +14,24 @@ and units) in :mod:`rlmcp.adapters.base` -- the contract every
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
 from rlmcp.adapters.base import (
-    CHANNEL_ACTION,
-    CHANNEL_BASE_ANG_VEL,
-    CHANNEL_BASE_LIN_VEL,
-    CHANNEL_BASE_POS,
-    CHANNEL_COMMAND,
-    CHANNEL_FOOT_CONTACT,
-    CHANNEL_JOINT_POS,
-    CHANNEL_JOINT_TORQUE,
-    CHANNEL_JOINT_VEL,
-    CHANNEL_PROJECTED_GRAVITY,
-    CHANNEL_REWARD,
-    CHANNEL_TIME,
+  CHANNEL_ACTION,
+  CHANNEL_BASE_ANG_VEL,
+  CHANNEL_BASE_LIN_VEL,
+  CHANNEL_BASE_POS,
+  CHANNEL_COMMAND,
+  CHANNEL_FOOT_CONTACT,
+  CHANNEL_JOINT_POS,
+  CHANNEL_JOINT_TORQUE,
+  CHANNEL_JOINT_VEL,
+  CHANNEL_PROJECTED_GRAVITY,
+  CHANNEL_REWARD,
+  CHANNEL_TIME,
 )
 
 
@@ -53,7 +54,7 @@ def _diff(x: np.ndarray, dt: float, order: int) -> np.ndarray:
 
 def _top_offenders(
     per_component: np.ndarray, labels: Sequence[str], k: int = 5
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
   if per_component.size == 0:
     return []
   order = np.argsort(-np.abs(per_component))[:k]
@@ -114,14 +115,14 @@ def _ac_spectrum(signal: np.ndarray, dt: float) -> tuple[np.ndarray, np.ndarray]
 
 
 def analyze_trace(
-    data: Dict[str, np.ndarray],
-    labels: Optional[Dict[str, List[str]]] = None,
+    data: dict[str, np.ndarray],
+    labels: dict[str, list[str]] | None = None,
     dt: float = 0.02,
     buzz_freq_hz: float = 8.0,
     buzz_power_frac: float = 0.15,
     buzz_outlier_margin: float = 0.12,
     whole_body_hf_median: float = 0.35,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
   """Summarise a per-step trace into smoothness / tracking / effort metrics.
 
   Args:
@@ -138,7 +139,7 @@ def analyze_trace(
       whole-body smoothness problem rather than a list of bad joints.
   """
   labels = labels or {}
-  report: Dict[str, Any] = {"num_steps": 0, "dt": dt}
+  report: dict[str, Any] = {"num_steps": 0, "dt": dt}
 
   # Channels with no data (zero width or zero rows) would raise from the
   # reductions below; drop them up front and record which ones were dropped.
@@ -176,8 +177,8 @@ def analyze_trace(
   # statistic computed downstream of them is a lie: NaN fails every threshold
   # comparison, and _safe() would launder it into a plausible-looking 0.0.
   # Detect this first, report it loudly, and analyse only the finite prefix.
-  nonfinite: List[Dict[str, Any]] = []
-  coerced: Dict[str, np.ndarray] = {}
+  nonfinite: list[dict[str, Any]] = []
+  coerced: dict[str, np.ndarray] = {}
   finite_prefix = int(any_channel.shape[0])
   for name in sorted(k for k in data if k != CHANNEL_TIME):
     arr = data[name]
@@ -234,7 +235,7 @@ def analyze_trace(
   joint_labels = labels.get(CHANNEL_JOINT_POS) or labels.get(CHANNEL_JOINT_VEL) or []
 
   # Smoothness: how violently the commanded and realised motion changes.
-  smooth: Dict[str, Any] = {}
+  smooth: dict[str, Any] = {}
   if CHANNEL_ACTION in data:
     action = data[CHANNEL_ACTION]
     d1 = _diff(action, dt, 1)
@@ -296,7 +297,7 @@ def analyze_trace(
         # Naming the "worst" eight joints of a robot that shakes everywhere points
         # the reader at a joint problem that does not exist. Report the condition
         # instead, and keep the ranking under a name that does not imply a verdict.
-        buzzing: List[Dict[str, Any]] = []
+        buzzing: list[dict[str, Any]] = []
       else:
         outlier_floor = max(buzz_power_frac, median_share + buzz_outlier_margin)
         buzzing = [d for d in per_joint if d["hf_power_share"] >= outlier_floor]
@@ -322,7 +323,7 @@ def analyze_trace(
     report["smoothness"] = smooth
 
   # Tracking: is the robot doing what the command asked?
-  track: Dict[str, Any] = {}
+  track: dict[str, Any] = {}
   cmd = data.get(CHANNEL_COMMAND)
   lin = data.get(CHANNEL_BASE_LIN_VEL)
   ang = data.get(CHANNEL_BASE_ANG_VEL)
@@ -360,7 +361,7 @@ def analyze_trace(
     report["effort"] = effort
 
   # Posture and base motion.
-  posture: Dict[str, Any] = {}
+  posture: dict[str, Any] = {}
   if CHANNEL_PROJECTED_GRAVITY in data and data[CHANNEL_PROJECTED_GRAVITY].shape[1] >= 3:
     pg = data[CHANNEL_PROJECTED_GRAVITY]
     tilt = np.degrees(np.arccos(np.clip(-pg[:, 2], -1.0, 1.0)))
@@ -378,7 +379,7 @@ def analyze_trace(
   # Gait, when foot contact was captured.
   if CHANNEL_FOOT_CONTACT in data:
     contact = data[CHANNEL_FOOT_CONTACT] > 0.5
-    gait: Dict[str, Any] = {
+    gait: dict[str, Any] = {
         "contact_fraction": round(float(np.mean(contact)), 3),
         "flight_fraction": round(float(np.mean(~np.any(contact, axis=1))), 3),
     }
@@ -416,9 +417,9 @@ def analyze_trace(
   return report
 
 
-def _verdict(report: Dict[str, Any]) -> List[str]:
+def _verdict(report: dict[str, Any]) -> list[str]:
   """Short plain-language read of the numbers, for an agent or a human."""
-  lines: List[str] = []
+  lines: list[str] = []
   smooth = report.get("smoothness", {})
   track = report.get("tracking", {})
   posture = report.get("posture", {})
@@ -524,10 +525,10 @@ def _verdict(report: Dict[str, Any]) -> List[str]:
 
 
 def summarize_metric_history(
-    rows: Sequence[Dict[str, Any]], keys: Sequence[str], window: int = 20
-) -> Dict[str, Any]:
+    rows: Sequence[dict[str, Any]], keys: Sequence[str], window: int = 20
+) -> dict[str, Any]:
   """Latest value, recent mean, and trend for selected iteration metrics."""
-  out: Dict[str, Any] = {}
+  out: dict[str, Any] = {}
   for key in keys:
     series = [
         (row.get("iteration"), float(row[key]))
@@ -538,7 +539,7 @@ def summarize_metric_history(
       continue
     values = np.array([v for _, v in series], dtype=np.float64)
     recent = values[-window:]
-    entry: Dict[str, Any] = {
+    entry: dict[str, Any] = {
         "latest": round(float(values[-1]), 5),
         "mean_recent": round(float(np.mean(recent)), 5),
         "num_points": int(values.size),

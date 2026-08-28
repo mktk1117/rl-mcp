@@ -14,24 +14,24 @@ velocity, so it is skipped unless the sampler says so.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+import contextlib
+from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from rlmcp.adapters.legged_gym_style.sampling import StateSampler
 
 
-def _try(out: Dict[str, float], fn: Callable[[], None]) -> None:
+def _try(out: dict[str, float], fn: Callable[[], None]) -> None:
   """Run one metric, skipping it if this environment cannot provide it."""
-  try:
+  with contextlib.suppress(Exception):
     fn()
-  except Exception:
-    pass
 
 
-def summary_metrics(env: Any, sampler: Optional[StateSampler] = None) -> Dict[str, float]:
+def summary_metrics(env: Any, sampler: StateSampler | None = None) -> dict[str, float]:
   """Cheap scalars describing the current batch, prefixed ``rlmcp/``."""
-  out: Dict[str, float] = {}
+  out: dict[str, float] = {}
   sampler = sampler or StateSampler(env)
 
   def joint_motion() -> None:
@@ -105,7 +105,7 @@ def summary_metrics(env: Any, sampler: Optional[StateSampler] = None) -> Dict[st
   return out
 
 
-def episode_log(extras: Any) -> Dict[str, float]:
+def episode_log(extras: Any) -> dict[str, float]:
   """The per-term episode means this family reports, as flat telemetry.
 
   ``_reset_idx`` fills ``extras["episode"]`` with one entry per reward term,
@@ -119,7 +119,7 @@ def episode_log(extras: Any) -> Dict[str, float]:
   episode = extras.get("episode")
   if not isinstance(episode, dict):
     return {}
-  out: Dict[str, float] = {}
+  out: dict[str, float] = {}
   for key, value in episode.items():
     try:
       out[str(key)] = float(value.item() if hasattr(value, "item") else value)

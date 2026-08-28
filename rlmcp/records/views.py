@@ -17,9 +17,9 @@ import html
 import io
 import json
 import re
-from typing import Any, Dict, List, Optional, Sequence
-
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from rlmcp.records.graph import build, summarize, to_payload
 from rlmcp.records.params import build_history, leaf_paths
@@ -44,7 +44,7 @@ VERDICT_COLORS = {
 
 def plot_records(
     records: Sequence[RunRecord],
-    title: Optional[str] = None,
+    title: str | None = None,
     max_label: int = 30,
 ) -> bytes:
   """Draw the tree as a PNG.
@@ -78,8 +78,8 @@ def plot_records(
     x1, y1 = xy(target)
     ax.annotate(
         "", xy=(x1, y1), xytext=(x0, y0),
-        arrowprops=dict(arrowstyle="-", color="#9AA7B5", lw=1.4,
-                        connectionstyle="arc3,rad=0.08" if x0 != x1 else "arc3,rad=0"),
+        arrowprops={"arrowstyle": "-", "color": "#9AA7B5", "lw": 1.4,
+                        "connectionstyle": "arc3,rad=0.08" if x0 != x1 else "arc3,rad=0"},
         zorder=1,
     )
   for source, target in graph.warm_edges:
@@ -87,8 +87,8 @@ def plot_records(
     x1, y1 = xy(target)
     ax.annotate(
         "", xy=(x1 + 0.06, y1), xytext=(x0 + 0.06, y0),
-        arrowprops=dict(arrowstyle="-", color="#C99A3A", lw=1.4, linestyle="--",
-                        connectionstyle="arc3,rad=0.18"),
+        arrowprops={"arrowstyle": "-", "color": "#C99A3A", "lw": 1.4, "linestyle": "--",
+                        "connectionstyle": "arc3,rad=0.18"},
         zorder=1,
     )
 
@@ -160,7 +160,7 @@ def render_records_html(
     title: str = "rlmcp run tree",
     media_base: str = "media/",
     engine: str = "auto",
-    posters: Optional[Dict[str, str]] = None,
+    posters: dict[str, str] | None = None,
 ) -> str:
   """One self-contained page: the tree, a detail panel, search and filters.
 
@@ -187,7 +187,7 @@ def render_records_html(
   try:
     history = build_history(graph)
     paths = leaf_paths(graph)
-  except Exception as exc:  # noqa: BLE001 -- the tree matters more than the traces.
+  except Exception as exc:
     history, paths = {"runs": [], "index": [], "span": 0, "error": str(exc)}, {}
 
   substitutions = {
@@ -483,10 +483,10 @@ paint();
 
 
 def plot_run_comparison(
-    series_by_run: Dict[str, Dict[str, List[List[float]]]],
+    series_by_run: dict[str, dict[str, list[list[float]]]],
     metrics: Sequence[str],
-    at_iteration: Optional[int] = None,
-    title: Optional[str] = None,
+    at_iteration: int | None = None,
+    title: str | None = None,
 ) -> bytes:
   """Compare runs on the same axes, one panel per metric, one line per run.
 
@@ -512,7 +512,7 @@ def plot_run_comparison(
   flat = axes.flatten()
   palette = ["#1F77B4", "#B93E3C", "#2C7A57", "#9A6314", "#6B7FA8", "#8C6BB1"]
 
-  for ax, metric in zip(flat, metrics):
+  for ax, metric in zip(flat, metrics, strict=False):
     for i, (run_id, series) in enumerate(sorted(series_by_run.items())):
       points = series.get(metric) or []
       if at_iteration is not None:

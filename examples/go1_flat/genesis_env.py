@@ -16,11 +16,10 @@ Nothing else is altered. Any behaviour you see is Genesis's.
 
 import math
 
-import torch
-from tensordict import TensorDict
-
 import genesis as gs
-from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat
+import torch
+from genesis.utils.geom import inv_quat, quat_to_xyz, transform_by_quat, transform_quat_by_quat
+from tensordict import TensorDict
 
 
 def gs_rand(lower, upper, batch_shape):

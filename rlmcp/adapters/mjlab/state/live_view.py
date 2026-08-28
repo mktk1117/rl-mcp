@@ -38,10 +38,11 @@ and builds a player that only ever reads a buffer.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -296,7 +297,7 @@ class LivePanels:
     except Exception as exc:
       self.error = f"{type(exc).__name__}: {exc}"
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     return {
         "panels": self.terms is not None,
         "panels_error": self.error,
@@ -315,10 +316,8 @@ class LivePanels:
       cleanup = getattr(overlay, "cleanup", None)
       if cleanup is None:
         continue
-      try:
+      with contextlib.suppress(Exception):
         cleanup()
-      except Exception:
-        pass
     self.terms = self.debug = self.contacts = None
 
 
@@ -342,7 +341,7 @@ class MjlabLiveScene:
   """
 
   def __init__(self, env: Any, server: Any, scene: Any,
-               panels: Optional[Any] = None):
+               panels: Any | None = None):
     self.env = env
     self.server = server
     self.scene = scene
@@ -351,7 +350,7 @@ class MjlabLiveScene:
     # scene controls they wrap exist to be wrapped.
     self.panels = LivePanels(env, server, scene) if panels is None else panels
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     """What the panels are doing, for the ``status`` payload."""
     return self.panels.describe() if self.panels is not None else {}
 
@@ -399,7 +398,7 @@ class _Window:
   loop moving on.
   """
 
-  def __init__(self, arrays: Dict[str, np.ndarray], env_id: int,
+  def __init__(self, arrays: dict[str, np.ndarray], env_id: int,
                frames: int, recorded_at: float):
     self.arrays = arrays
     self.env_id = int(env_id)
@@ -415,7 +414,7 @@ class _Window:
   def remaining(self) -> int:
     return max(0, self.frames - self.index)
 
-  def advance(self) -> Dict[str, np.ndarray]:
+  def advance(self) -> dict[str, np.ndarray]:
     """The next frame, as a dict of rows. Repeats the last one at the end."""
     at = min(self.index, self.frames - 1)
     self.index += 1
@@ -440,7 +439,7 @@ class MjlabReplayView:
 
   def __init__(self, env: Any, server: Any, scene: Any,
                seconds: float = DEFAULT_BUFFER_SECONDS,
-               player_factory: Optional[Any] = None,
+               player_factory: Any | None = None,
                clock: Any = time.monotonic):
     self.env = env
     self.server = server
@@ -448,21 +447,21 @@ class MjlabReplayView:
 
     self.dt = float(getattr(env, "step_dt", 0.02)) or 0.02
     seconds = min(max(float(seconds), self.dt * 2), MAX_BUFFER_SECONDS)
-    self.capacity = max(2, int(round(seconds / self.dt)))
+    self.capacity = max(2, round(seconds / self.dt))
     self.seconds = round(self.capacity * self.dt, 3)
 
     self.env_id = int(getattr(scene, "env_idx", 0))
     self._requested_env = self.env_id
-    self._buffers: Dict[str, Any] = {}
+    self._buffers: dict[str, Any] = {}
     self._fill = 0
     self._recording = True
     self._windows = 0
     self._dropped = 0
     self._gaps = 0
     self._lock = threading.Lock()
-    self._pending: Optional[_Window] = None
+    self._pending: _Window | None = None
     self._clock = clock
-    self._last_capture: Optional[float] = None
+    self._last_capture: float | None = None
     self._paused = False
     # Assume somebody until told otherwise: a view whose owner never reports
     # watchers should show a robot, not sit frozen waiting to be told it may.
@@ -601,7 +600,7 @@ class MjlabReplayView:
 
   # The player's thread.
 
-  def take_window(self) -> Optional[_Window]:
+  def take_window(self) -> _Window | None:
     with self._lock:
       window, self._pending = self._pending, None
     return window
@@ -638,7 +637,7 @@ class MjlabReplayView:
 
   # The rest of rlmcp.
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     """What the buffer is doing, for the ``status`` payload."""
     window = self.viewer.window
     panels = self.panels.describe() if self.panels is not None else {}
@@ -718,10 +717,10 @@ class ReplayPlayer:
     self.server = server
     self.scene = scene
     self.source = source
-    self.window: Optional[_Window] = None
+    self.window: _Window | None = None
     self.starved = 0
     self.error = ""
-    self._frame: Optional[Dict[str, np.ndarray]] = None
+    self._frame: dict[str, np.ndarray] | None = None
     self._asked_for_next = False
     self._stop = threading.Event()
     self._status_handle: Any = None
@@ -841,7 +840,7 @@ class ReplayPlayer:
     except Exception as exc:
       self.error = f"{type(exc).__name__}: {exc}"
 
-  def _draw(self, frame: Dict[str, np.ndarray]) -> None:
+  def _draw(self, frame: dict[str, np.ndarray]) -> None:
     import mujoco
 
     data = self._mj_data
@@ -941,7 +940,7 @@ class ReplayPlayer:
         <strong>{where}</strong><br/>
         speed {self.get_status().speed_label}
         {'&middot; paused' if self.source.paused else ''}<br/>
-        {'recorded %.0fs ago' % behind if behind is not None else '&nbsp;'}<br/>
+        {f'recorded {behind:.0f}s ago' if behind is not None else '&nbsp;'}<br/>
         <span style="opacity:0.7;">env {self.source.env_id} &middot;
         {state['windows_recorded']} windows</span>
       </div>
@@ -949,12 +948,12 @@ class ReplayPlayer:
 
 
 __all__ = [
-    "DEFAULT_BUFFER_SECONDS",
-    "MAX_BUFFER_SECONDS",
-    "MjlabLiveScene",
-    "MjlabReplayView",
-    "ReplayPlayer",
-    "build_scene",
-    "player_class",
-    "open_live_view",
+  "DEFAULT_BUFFER_SECONDS",
+  "MAX_BUFFER_SECONDS",
+  "MjlabLiveScene",
+  "MjlabReplayView",
+  "ReplayPlayer",
+  "build_scene",
+  "open_live_view",
+  "player_class",
 ]

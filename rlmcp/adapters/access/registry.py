@@ -12,7 +12,7 @@ of providers; see :mod:`rlmcp.adapters.access.base` for what one looks like.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar
 
 from rlmcp.adapters.access import paths
 from rlmcp.adapters.access.base import (
@@ -35,25 +35,25 @@ class ParameterAccess:
   environment passes ``provider_types`` directly.
   """
 
-  PROVIDER_TYPES: List[type] = []
+  PROVIDER_TYPES: ClassVar[list[type]] = []
   """The providers this family offers. Subclasses set it; see
   :mod:`rlmcp.adapters.manager_based.access` for the worked example."""
 
-  def __init__(self, env: Any, provider_types: Optional[List[type]] = None):
+  def __init__(self, env: Any, provider_types: list[type] | None = None):
     self.env = env
     self.registry = ProviderRegistry()
     for provider_type in provider_types or self.PROVIDER_TYPES:
       self.registry.add(provider_type(env))
-    self._synthetic: Dict[str, Synthetic] = {}
+    self._synthetic: dict[str, Synthetic] = {}
     for provider in self.registry:
       for item in provider.synthetic():
         self._synthetic[item.key] = item
 
   # Discovery.
 
-  def discover(self) -> List[ParameterSpec]:
+  def discover(self) -> list[ParameterSpec]:
     """Every tunable leaf reachable from every provider's terms."""
-    specs: List[ParameterSpec] = []
+    specs: list[ParameterSpec] = []
     for provider in self.registry:
       for term in provider.terms():
         for parts, value in paths.walk_leaves(term.root, skip_keys=provider.skip_keys):
@@ -95,7 +95,7 @@ class ParameterAccess:
 
   # Resolution.
 
-  def _split(self, key: str) -> Tuple[AccessProvider, Term, List[str]]:
+  def _split(self, key: str) -> tuple[AccessProvider, Term, list[str]]:
     """Key -> (provider, term, remaining path).
 
     Matching happens on split segments rather than on the raw string, because a
@@ -142,7 +142,7 @@ class ParameterAccess:
     value = paths.resolve(term.root, parts).read()
     return list(value) if paths.is_range(value) else value
 
-  def set(self, key: str, value: Any) -> Dict[str, Any]:
+  def set(self, key: str, value: Any) -> dict[str, Any]:
     """Write a parameter. Returns notes from the provider's write hook, if any.
 
     Refuses writes that cannot take effect this run (liveness 'at_startup' or
@@ -179,9 +179,8 @@ class ParameterAccess:
       notes.setdefault("liveness", Liveness.AT_RESET.value)
       notes.setdefault(
           "note",
-          "Applied to the live config; the environment re-reads it on episode "
-          "reset, so the change takes effect from each environment's next "
-          "reset.",
+          "Applied to the live config; mjlab re-reads it on episode reset, so "
+          "the change takes effect from each environment's next reset.",
       )
     return notes
 
@@ -210,7 +209,7 @@ class ParameterAccess:
       )
 
   @staticmethod
-  def _notify_class_term(term: Term, parts: List[str], value: Any) -> None:
+  def _notify_class_term(term: Term, parts: list[str], value: Any) -> None:
     """Give class-based terms a chance to rebuild anything they cached.
 
     Most mjlab terms are plain functions reading ``params`` every step and need
@@ -242,8 +241,8 @@ class ParameterAccess:
 
   # Introspection helpers used by the adapter.
 
-  def domains(self) -> List[str]:
+  def domains(self) -> list[str]:
     return self.registry.domains()
 
-  def provider(self, domain: str) -> Optional[AccessProvider]:
+  def provider(self, domain: str) -> AccessProvider | None:
     return self.registry.get(domain)

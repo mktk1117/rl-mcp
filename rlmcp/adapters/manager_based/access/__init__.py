@@ -6,15 +6,12 @@ are they called* for an environment built out of manager term configs. The
 machinery that walks, reads and writes them is family-neutral and lives in
 :mod:`rlmcp.adapters.access`.
 
-To add a family here: write a provider (see
-:mod:`rlmcp.adapters.access.base`) and append it to :data:`PROVIDER_TYPES`.
-Discovery, get, set, bounds, the MCP tools and the CLI all pick it up with no
-further change.
+To add a family here: write a provider (see :mod:`rlmcp.adapters.access.base`)
+and append it to :data:`PROVIDER_TYPES`. Discovery, get, set, bounds, the MCP
+tools and the CLI all pick it up with no further change.
 """
 
 from __future__ import annotations
-
-from typing import List
 
 from rlmcp.adapters.access import paths
 from rlmcp.adapters.access.base import (
@@ -32,7 +29,7 @@ from rlmcp.adapters.manager_based.access.events import EventAccess
 from rlmcp.adapters.manager_based.access.rewards import RewardAccess
 from rlmcp.adapters.manager_based.access.terminations import TerminationAccess
 
-PROVIDER_TYPES: List[type] = [
+PROVIDER_TYPES: list[type] = [
     RewardAccess,
     TerminationAccess,
     EventAccess,
@@ -41,17 +38,17 @@ PROVIDER_TYPES: List[type] = [
 ]
 
 __all__ = [
+    "PROVIDER_TYPES",
     "AccessProvider",
     "ActionAccess",
     "CommandAccess",
     "EventAccess",
     "ParameterAccess",
-    "PROVIDER_TYPES",
     "ProviderRegistry",
     "RewardAccess",
     "Synthetic",
-    "TerminationAccess",
     "Term",
+    "TerminationAccess",
     "constructor_cfg_reads",
     "is_term_instance",
     "paths",

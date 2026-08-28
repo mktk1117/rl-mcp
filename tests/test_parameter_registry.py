@@ -1,6 +1,8 @@
 import pytest
-from rlmcp.core.parameters.spec import Liveness, ParameterCategory, ParameterSpec
+
 from rlmcp.core.parameters.registry import ParameterRegistry
+from rlmcp.core.parameters.spec import Liveness, ParameterCategory, ParameterSpec
+
 
 def test_parameter_registration_and_validation():
   reg = ParameterRegistry()
@@ -22,7 +24,7 @@ def test_parameter_registration_and_validation():
   )
 
   assert reg.get_value("reward.test_penalty.weight") == -0.01
-  
+
   # Set valid
   assert reg.set_value("reward.test_penalty.weight", -0.05) is True
   assert reg.get_value("reward.test_penalty.weight") == -0.05

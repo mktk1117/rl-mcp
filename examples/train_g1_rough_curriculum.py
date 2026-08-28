@@ -41,14 +41,14 @@ def build_curriculum():
   both survival (episodes running at least half their length) and progress
   (mjlab's own terrain-level curriculum pushing robots up the rows).
   """
-  from rlmcp.extensions.terrain import METRIC_TERRAIN_LEVEL_FRAC
   from rlmcp.core.curriculum import (
-      METRIC_EPISODE_LENGTH_FRAC,
-      Action,
-      Condition,
-      CurriculumStage,
-      StageSchedule,
+    METRIC_EPISODE_LENGTH_FRAC,
+    Action,
+    Condition,
+    CurriculumStage,
+    StageSchedule,
   )
+  from rlmcp.extensions.terrain import METRIC_TERRAIN_LEVEL_FRAC
 
   def promote(episode_frac: float = 0.5, level_frac: float = 0.6):
     return [
@@ -173,7 +173,8 @@ def main() -> int:
   configure_torch_backends()
   log_dir = (
       Path(args.log_root) / agent_cfg.experiment_name
-      / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_g1_rough")
+      # Local time deliberately: a person has to find this in a listing.
+      / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_g1_rough")  # noqa: DTZ005
   ).resolve()
   log_dir.mkdir(parents=True, exist_ok=True)
 

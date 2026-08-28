@@ -29,6 +29,13 @@ viewer:
 * ``--mode native`` opens MuJoCo's own viewer, for looking closely at a robot
   that is in front of you.
 * ``--mode viser`` serves a viewer in the browser, for a robot that is not.
+* ``--mode hold`` opens no viewer at all. It steps the environment at its own
+  clock and waits, which turns a task into something you can *drive*: attach a
+  view with ``rlmcp view --on``, take frames with ``rlmcp shot``, change a
+  weight with ``rlmcp set`` and watch what it does, and end it with
+  ``rlmcp stop``. A viewer is one way to look at an environment; this is the
+  mode for every other way, and the one that does not need a display, a GPU or
+  a checkpoint.
 
 Neither viewer is required to be installed: a build without them says so and
 points at ``--mode video``, rather than failing on import.
@@ -60,22 +67,24 @@ encoder, so ``rlmcp --help`` stays as cheap as it has always been.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from rlmcp.core.extensions import Extension
 from rlmcp.core.replay import (
-    Conditions,
-    apply_conditions,
-    read_conditions,
-    read_events,
-    with_overrides,
+  Conditions,
+  apply_conditions,
+  read_conditions,
+  read_events,
+  with_overrides,
 )
 
-MODES = ("video", "native", "viser")
+MODES = ("video", "native", "viser", "hold")
 POLICIES = ("checkpoint", "zero", "random")
 
 TASK_PACKAGES_ENV = "RLMCP_TASK_PACKAGES"
@@ -127,18 +136,18 @@ class PlayConfig:
   device: str = "cuda:0"
   out: str = ""
   """Video path. Defaults into the training session's artifacts directory."""
-  fps: Optional[int] = None
+  fps: int | None = None
   """Defaults to the environment's own control rate, so the clip runs in real time."""
   stage: str = ""
   """Curriculum stage to restore. Defaults to the last one the run entered."""
   replay: bool = True
   """Restore trained-under conditions at all. Off gives the task's play config."""
-  overrides: Dict[str, Any] = field(default_factory=dict)
+  overrides: dict[str, Any] = field(default_factory=dict)
   """Parameter edits applied after the replay, so they win."""
-  task_package: List[str] = field(default_factory=list)
+  task_package: list[str] = field(default_factory=list)
   render_width: int = 960
   render_height: int = 720
-  extra_envs: Optional[int] = 0
+  extra_envs: int | None = 0
   """Neighbouring envs composited into the frame. 0 -- an unambiguous close-up."""
   session_dir: str = ""
   """Where the play session publishes itself. Defaults under the run directory."""
@@ -167,7 +176,7 @@ def find_checkpoint(target: Path | str) -> Path:
   # something inside it -- the session (…/rlmcp), or a play session nested
   # deeper still. Walk outwards until a directory has some, so pointing at any
   # part of a run finds the run's checkpoints.
-  found: List[Path] = []
+  found: list[Path] = []
   for directory in [path, *path.parents][:_SEARCH_DEPTH]:
     found = [p for p in directory.glob(_CHECKPOINT_GLOB) if p.is_file()]
     found += list((directory / "checkpoints").glob(_CHECKPOINT_GLOB))
@@ -187,7 +196,7 @@ def checkpoint_iteration(path: Path) -> int:
   return int(digits[-1]) if digits else -1
 
 
-def session_for(checkpoint: Path) -> Optional[Path]:
+def session_for(checkpoint: Path) -> Path | None:
   """The rlmcp session a checkpoint belongs to, if it has one.
 
   A trainer's checkpoints sit in the run directory and the session is
@@ -205,7 +214,7 @@ def session_for(checkpoint: Path) -> Optional[Path]:
   return None
 
 
-def session_info(session_dir: Optional[Path]) -> Dict[str, Any]:
+def session_info(session_dir: Path | None) -> dict[str, Any]:
   """What the session recorded about itself, or {} if there is nothing to read."""
   if session_dir is None:
     return {}
@@ -218,12 +227,12 @@ def session_info(session_dir: Optional[Path]) -> Dict[str, Any]:
   return info if isinstance(info, dict) else {}
 
 
-def task_for(session_dir: Optional[Path]) -> str:
+def task_for(session_dir: Path | None) -> str:
   """The task id the session recorded, or '' if there is nothing to read."""
   return str(session_info(session_dir).get("task") or "")
 
 
-def stage_at_iteration(session_dir: Optional[Path], iteration: int) -> str:
+def stage_at_iteration(session_dir: Path | None, iteration: int) -> str:
   """The curriculum stage a run was on at ``iteration``; '' if it had none.
 
   A checkpoint's file name carries the iteration it was saved at, and the
@@ -249,7 +258,7 @@ def stage_at_iteration(session_dir: Optional[Path], iteration: int) -> str:
   return current
 
 
-def packages_to_import(cfg: PlayConfig) -> List[str]:
+def packages_to_import(cfg: PlayConfig) -> list[str]:
   """Packages that must be imported before the task registry knows the task.
 
   A project's tasks register on import, exactly as the simulator's own do --
@@ -258,8 +267,8 @@ def packages_to_import(cfg: PlayConfig) -> List[str]:
   imports what it was told to import, and says so plainly when that is nothing.
   """
   found = list(cfg.task_package)
-  for name in os.environ.get(TASK_PACKAGES_ENV, "").split(","):
-    name = name.strip()
+  for raw in os.environ.get(TASK_PACKAGES_ENV, "").split(","):
+    name = raw.strip()
     if name and name not in found:
       found.append(name)
   return found
@@ -284,7 +293,7 @@ class SwappablePolicy:
   def __init__(self, policy: Any, checkpoint: Path | str):
     self.policy = policy
     self.checkpoint = Path(checkpoint)
-    self.swaps: List[Dict[str, Any]] = []
+    self.swaps: list[dict[str, Any]] = []
 
   def __call__(self, *args: Any, **kwargs: Any) -> Any:
     return self.policy(*args, **kwargs)
@@ -319,7 +328,7 @@ class UntrainedPolicy:
   the env, the restored conditions and the camera all survive.
   """
 
-  def __init__(self, action_shape: Tuple[int, ...], device: str, mode: str = "zero"):
+  def __init__(self, action_shape: tuple[int, ...], device: str, mode: str = "zero"):
     self.action_shape = action_shape
     self.device = device
     self.mode = mode
@@ -397,10 +406,10 @@ class PolicySwap(Extension):
       self,
       holder: SwappablePolicy,
       load: Callable[[Path], Any],
-      session_dir: Optional[Path | str] = None,
+      session_dir: Path | str | None = None,
       stage: str = "",
-      restore: Optional[Callable[[Conditions], Dict[str, Any]]] = None,
-      probe: Optional[Callable[[Any], None]] = None,
+      restore: Callable[[Conditions], dict[str, Any]] | None = None,
+      probe: Callable[[Any], None] | None = None,
   ):
     super().__init__(env=None)
     self.holder = holder
@@ -413,13 +422,13 @@ class PolicySwap(Extension):
   def available(self) -> bool:
     return True
 
-  def commands(self) -> Dict[str, Callable[..., Any]]:
+  def commands(self) -> dict[str, Callable[..., Any]]:
     return {
         "load_policy": self.cmd_load_policy,
         "list_policies": self.cmd_list_policies,
     }
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     return {
         "checkpoint": str(self.holder.checkpoint),
         "iteration": checkpoint_iteration(self.holder.checkpoint),
@@ -431,7 +440,7 @@ class PolicySwap(Extension):
 
   def cmd_load_policy(
       self, checkpoint: str, replay: bool = False, stage: str = ""
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Act with a different checkpoint's weights from the next step onwards.
 
     ``checkpoint`` is a .pt file, or a run directory to take the latest from.
@@ -477,7 +486,7 @@ class PolicySwap(Extension):
       self.context.append_event("load_policy", entry)
     return {"loaded": True, **entry}
 
-  def cmd_list_policies(self) -> Dict[str, Any]:
+  def cmd_list_policies(self) -> dict[str, Any]:
     """Checkpoints that can be loaded here: the acting one and its siblings."""
     current = self.holder.checkpoint
     found = {current}
@@ -503,8 +512,8 @@ class PolicySwap(Extension):
   # The conditions question.
 
   def _conditions_report(
-      self, path: Path, origin: Optional[Path]
-  ) -> Dict[str, Any]:
+      self, path: Path, origin: Path | None
+  ) -> dict[str, Any]:
     """Where this checkpoint was trained, against where the environment is.
 
     Always present in the response, mismatch or not, and so is ``warning`` --
@@ -516,7 +525,7 @@ class PolicySwap(Extension):
         Path(origin) == self.session_dir
     )
     known = origin is not None
-    report: Dict[str, Any] = {
+    report: dict[str, Any] = {
         "replayed": False,
         "applied_stage": self.stage or None,
         "checkpoint_stage": trained or None,
@@ -546,7 +555,7 @@ class PolicySwap(Extension):
       )
     return report
 
-  def _replay_from(self, origin: Optional[Path], stage: str) -> Dict[str, Any]:
+  def _replay_from(self, origin: Path | None, stage: str) -> dict[str, Any]:
     """Restore the conditions the new checkpoint's own run was in.
 
     Failures to restore are reported, not raised: ``apply_conditions`` is
@@ -602,7 +611,7 @@ class PolicySwap(Extension):
 # Playing.
 
 
-def run_play(cfg: PlayConfig) -> Dict[str, Any]:
+def run_play(cfg: PlayConfig) -> dict[str, Any]:
   """Build the environment, restore conditions, load the policy, and show it.
 
   Returns a result payload; in video mode it carries ``video_path``, which is
@@ -616,9 +625,14 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
 
   untrained = cfg.policy != "checkpoint"
   if untrained:
-    # No weights, so nothing to find a session or a task from. Conditions are
-    # not restored either: there is no run whose conditions these would be, and
-    # the task's own play config is the right starting point.
+    # No weights, so nothing to find a session or a task from. Nothing to
+    # replay either, and that is the same request `--no-replay` makes: run at
+    # the task's own play configuration. Saying so here rather than leaving
+    # `replay` true keeps the missing-session warning for the case it was
+    # written for -- a real checkpoint whose run is nowhere to be found. There
+    # is no checkpoint here, so nothing is missing. `--set` overrides still
+    # apply; they are the only steering a policy-free preview has.
+    cfg = replace(cfg, replay=False)
     checkpoint = None
     session_dir = None
     task = cfg.task
@@ -662,7 +676,7 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
       )
   )
 
-  result: Dict[str, Any] = {
+  result: dict[str, Any] = {
       "mode": cfg.mode,
       "policy": cfg.policy,
       "checkpoint": str(checkpoint) if checkpoint else None,
@@ -673,7 +687,7 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
       "trained_session": str(session_dir) if session_dir else None,
       "play_session": str(lab.session.dir),
       "conditions": {
-          "replayed": cfg.replay and not untrained,
+          "replayed": cfg.replay,
           "stage": conditions.stage or None,
           **restored,
       },
@@ -682,13 +696,13 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
   try:
     if cfg.mode == "video":
       result.update(_record(cfg, env, vec_env, policy, checkpoint, session_dir))
+    elif cfg.mode == "hold":
+      result.update(_hold(cfg, env, vec_env, policy))
     else:
       result.update(_view(cfg, env, vec_env, policy))
   finally:
-    try:
+    with contextlib.suppress(Exception):
       vec_env.close()
-    except Exception:
-      pass
   if policy.swaps:
     # The checkpoint named at the top is the one this ran up with; say which
     # one it finished on rather than leaving that to be inferred.
@@ -697,7 +711,104 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
   return result
 
 
-def _stop_state(lab: Any, error: Optional[BaseException] = None) -> str:
+def _hold(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> dict[str, Any]:
+  """Step the environment, serve nothing, and wait to be told what to do.
+
+  The three modes above all end with somebody *looking* at the robot -- a file,
+  a window, a browser tab. This one is for everything else you might want to do
+  with an environment that is already built: a live view attached later, a
+  screenshot, a parameter changed to see what it does, a reset. All of those
+  are already commands a play session answers; what was missing was a way to
+  keep the session alive without opening a viewer to do it.
+
+  So: no renderer, no window, no port. It needs no display, no GPU and no
+  checkpoint, which is what makes ``--policy zero --mode hold`` the cheapest
+  way to have a task standing in front of you.
+
+  It steps at the environment's own control rate rather than as fast as the
+  machine allows. An unpaced hold advances simulated time about as fast as the
+  CPU can integrate it, so anything attached to it -- a live view, a clip --
+  shows a robot sprinting, and any measurement of "per second" is measuring
+  the machine rather than the task. The pacing is dropped, with a warning, only
+  if the loop cannot keep up.
+
+  Ends on ``--seconds`` if one was given, and otherwise when somebody says
+  ``rlmcp stop``: the same :class:`~rlmcp.core.controller.SessionStopped` the
+  viewers unwind on, at the same service boundary, so a held session records
+  its end exactly as a watched one does.
+  """
+  from rlmcp.core.controller import SessionStopped
+
+  lab = env.rlmcp
+  dt = 0.0
+  try:
+    dt = float(lab.sim.step_dt())
+  except Exception:
+    dt = 0.0
+
+  if not cfg.quiet:
+    session = lab.session.dir
+    print(
+        f"[rlmcp-play] holding {cfg.num_envs} env(s); nothing is being served.\n"
+        f"[rlmcp-play]   rlmcp --session {session} view --on\n"
+        f"[rlmcp-play]   rlmcp --session {session} shot\n"
+        f"[rlmcp-play]   rlmcp --session {session} set <key> <value> --why ...\n"
+        f"[rlmcp-play]   rlmcp --session {session} stop",
+        flush=True,
+    )
+
+  obs = None
+  try:
+    obs = vec_env.get_observations()
+    if isinstance(obs, tuple):
+      obs = obs[0]
+  except Exception:
+    obs = None
+
+  steps = 0
+  behind = 0
+  started = time.time()
+  deadline = started + cfg.seconds if cfg.seconds and cfg.seconds > 0 else 0.0
+  stopped = ""
+  try:
+    while True:
+      if deadline and time.time() >= deadline:
+        break
+      due = time.time() + dt
+      result = vec_env.step(policy(obs))
+      obs = result[0]
+      if isinstance(obs, tuple):
+        obs = obs[0]
+      steps += 1
+      if dt:
+        remaining = due - time.time()
+        if remaining > 0:
+          time.sleep(remaining)
+        else:
+          behind += 1
+  except SessionStopped as stop:
+    stopped = _stop_state(lab, stop)
+  else:
+    stopped = _stop_state(lab)
+
+  if behind and not cfg.quiet:
+    print(f"[rlmcp-play] fell behind real time on {behind} of {steps} steps; "
+          "the robot you are watching is slower than the task's own clock.",
+          flush=True)
+  if stopped and not cfg.quiet:
+    print(f"[rlmcp-play] stopped: {stopped}", flush=True)
+  return {
+      "held": True,
+      "steps": steps,
+      "seconds": round(time.time() - started, 2),
+      "step_dt": dt,
+      "behind_steps": behind,
+      "stopped": bool(stopped),
+      "stop_reason": stopped or None,
+  }
+
+
+def _stop_state(lab: Any, error: BaseException | None = None) -> str:
   """Why a stepping loop ended, or '' if nobody asked it to end.
 
   Two ways a requested stop reaches the loop that was running the policy, and
@@ -716,7 +827,7 @@ def _stop_state(lab: Any, error: Optional[BaseException] = None) -> str:
   return ""
 
 
-def _policy_probe(vec_env: Any) -> Optional[Callable[[Any], None]]:
+def _policy_probe(vec_env: Any) -> Callable[[Any], None] | None:
   """A callable that makes a policy act once on this environment's observations.
 
   Returns None when the environment cannot be asked for one, in which case
@@ -756,8 +867,8 @@ def _choose_gl_backend(cfg: PlayConfig) -> None:
 
 
 def build_env(
-    cfg: PlayConfig, task: str, session_dir: Optional[Path]
-) -> Tuple[Any, Any, Any, Any]:
+    cfg: PlayConfig, task: str, session_dir: Path | None
+) -> tuple[Any, Any, Any, Any]:
   """Construct the task, wrap it as rlmcp, and return (env, lab, rl cfg, vec).
 
   Shared with :mod:`rlmcp.check`, deliberately: a check that built the
@@ -833,15 +944,15 @@ def build_env(
   return env, env.rlmcp, agent_cfg, vec_env
 
 
-def _default_session(trained_session: Optional[Path], mode: str) -> Path:
+def _default_session(trained_session: Path | None, mode: str) -> Path:
   stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
   root = trained_session if trained_session else Path.cwd() / "rlmcp_session"
   return root / "play" / f"{stamp}_{mode}"
 
 
 def _restore_conditions(
-    cfg: PlayConfig, lab: Any, session_dir: Optional[Path]
-) -> Tuple[Conditions, Dict[str, Any]]:
+    cfg: PlayConfig, lab: Any, session_dir: Path | None
+) -> tuple[Conditions, dict[str, Any]]:
   """Put the environment back where the checkpoint left it."""
   if not cfg.replay:
     conditions = with_overrides(Conditions(), cfg.overrides)
@@ -849,9 +960,9 @@ def _restore_conditions(
     conditions = with_overrides(
         Conditions(
             warnings=(
-                "No rlmcp session found next to this checkpoint, so there is "
-                "nothing to replay: the environment runs at the task's own play "
-                "configuration, which is rung zero of any curriculum.",
+                ("No rlmcp session found next to this checkpoint, so there is "
+                 "nothing to replay: the environment runs at the task's own play "
+                 "configuration, which is rung zero of any curriculum."),
             )
         ),
         cfg.overrides,
@@ -876,7 +987,7 @@ def _restore_conditions(
   return conditions, restored
 
 
-def _cannot_restore(restored: Dict[str, Any]) -> str:
+def _cannot_restore(restored: dict[str, Any]) -> str:
   """Say what went wrong, and what to do about that particular thing.
 
   The advice matters more than the list. "Unknown command" and "the command no
@@ -886,7 +997,7 @@ def _cannot_restore(restored: Dict[str, Any]) -> str:
   """
   listed = "\n  ".join(restored["errors"])
   kinds = set(restored.get("error_kinds") or ())
-  advice: List[str] = []
+  advice: list[str] = []
   if "missing_command" in kinds:
     advice.append(
         "A command that does not exist here means the package defining this "
@@ -943,9 +1054,9 @@ def _record(
     env: Any,
     vec_env: Any,
     policy: Any,
-    checkpoint: Optional[Path],
-    session_dir: Optional[Path],
-) -> Dict[str, Any]:
+    checkpoint: Path | None,
+    session_dir: Path | None,
+) -> dict[str, Any]:
   """Roll the policy out and encode what it did."""
   import imageio.v2 as imageio
   import numpy as np
@@ -955,10 +1066,10 @@ def _record(
 
   lab = env.rlmcp
   step_dt = float(getattr(env.unwrapped, "step_dt", 0.02))
-  steps = max(1, int(round(cfg.seconds / step_dt)))
+  steps = max(1, round(cfg.seconds / step_dt))
   fps = int(cfg.fps or round(1.0 / step_dt))
 
-  frames: List[Any] = []
+  frames: list[Any] = []
   stopped = ""
   obs, _ = vec_env.reset()
   with torch.no_grad():
@@ -1017,7 +1128,7 @@ def _record(
 
 
 def _default_out(
-    checkpoint: Optional[Path], session_dir: Optional[Path], cfg: PlayConfig
+    checkpoint: Path | None, session_dir: Path | None, cfg: PlayConfig
 ) -> Path:
   """Beside the run's other evidence, named for what it shows.
 
@@ -1034,7 +1145,7 @@ def _default_out(
   return Path(cfg.session_dir or ".") / "artifacts" / f"{stem}.mp4"
 
 
-def _headline(env: Any) -> Dict[str, float]:
+def _headline(env: Any) -> dict[str, float]:
   """Whatever the run publishes about itself, measured over the clip.
 
   Numbers beside a video stop it being a vibe. These are the same metrics the
@@ -1051,7 +1162,7 @@ def _headline(env: Any) -> Dict[str, float]:
   }
 
 
-def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any]:
+def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> dict[str, Any]:
   """Hand the environment to one of the backend's interactive viewers.
 
   Both block until the window (or the browser tab) is closed, which is the
@@ -1089,8 +1200,17 @@ def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any
         flush=True,
     )
   viewer_cls = NativeMujocoViewer if cfg.mode == "native" else ViserPlayViewer
+  # One viser server, not two. The session's live view opens it -- it is the
+  # thing that picks the port, publishes the url in `status`, and closes it
+  # when the run ends -- and mjlab's viewer draws its own GUI on it. Letting
+  # the viewer open its own left the published port serving a second, smaller
+  # panel of the same environment, which is the one anybody reading `status`
+  # would have gone to. `host()` returns None on an install without viser, and
+  # then this is exactly what it was before.
+  hosted = lab.live_view.host_for_viewer() if cfg.mode == "viser" else None
+  extra = {"viser_server": hosted} if hosted is not None else {}
   try:
-    viewer = viewer_cls(vec_env, policy)
+    viewer = viewer_cls(vec_env, policy, **extra)
   except ImportError as exc:
     # viser in particular is an optional install of its own, and only says so
     # when the viewer is actually built.
@@ -1125,13 +1245,18 @@ def add_arguments(parser: Any) -> Any:
       help="Checkpoint .pt, or a run directory to take the latest one from",
   )
   parser.add_argument("--mode", default="video", choices=list(MODES),
-                      help="video: render an mp4. native/viser: open a viewer.")
+                      help="video: render an mp4. native/viser: open a viewer. "
+                           "hold: step it and serve nothing, so rlmcp commands "
+                           "can drive it.")
   parser.add_argument(
       "--policy", default="checkpoint", choices=list(POLICIES),
       help="Where actions come from. zero/random need no checkpoint, so they "
            "are how you look at a task that does not train yet (needs --task).",
   )
-  parser.add_argument("--seconds", type=float, default=8.0)
+  parser.add_argument(
+      "--seconds", type=float, default=None,
+      help="video: how long a clip. hold: how long to hold, 0 for until "
+           "`rlmcp stop`. Defaults: 8 for a clip, 0 for a hold.")
   parser.add_argument("--out", default="", help="Video path (video mode)")
   parser.add_argument("--fps", type=int, default=None)
   parser.add_argument("--num-envs", type=int, default=1)
@@ -1171,13 +1296,18 @@ def add_arguments(parser: Any) -> Any:
   return parser
 
 
-def config_from_args(args: Any, overrides: Dict[str, Any]) -> PlayConfig:
+def config_from_args(args: Any, overrides: dict[str, Any]) -> PlayConfig:
+  # A clip has a natural length and a hold does not, so the default differs by
+  # mode rather than by one number that is wrong for one of them.
+  seconds = args.seconds
+  if seconds is None:
+    seconds = 0.0 if args.mode == "hold" else 8.0
   return PlayConfig(
       checkpoint=args.checkpoint,
       task=args.task,
       mode=args.mode,
       policy=args.policy,
-      seconds=args.seconds,
+      seconds=seconds,
       num_envs=args.num_envs,
       device=args.device,
       out=args.out,
@@ -1195,18 +1325,18 @@ def config_from_args(args: Any, overrides: Dict[str, Any]) -> PlayConfig:
 
 
 __all__ = [
-    "MODES",
-    "build_env",
-    "PlayConfig",
-    "PlayError",
-    "PolicySwap",
-    "SwappablePolicy",
-    "add_arguments",
-    "config_from_args",
-    "find_checkpoint",
-    "run_play",
-    "session_for",
-    "untrained_policy",
-    "stage_at_iteration",
-    "task_for",
+  "MODES",
+  "PlayConfig",
+  "PlayError",
+  "PolicySwap",
+  "SwappablePolicy",
+  "add_arguments",
+  "build_env",
+  "config_from_args",
+  "find_checkpoint",
+  "run_play",
+  "session_for",
+  "stage_at_iteration",
+  "task_for",
+  "untrained_policy",
 ]

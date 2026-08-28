@@ -17,13 +17,12 @@ import time
 import pytest
 
 from rlmcp.records.filestore import FileStore
-from rlmcp.records.record import (FEEDBACK_KINDS, Falsifier, Feedback,
-                                  RunRecord, Weights)
+from rlmcp.records.record import FEEDBACK_KINDS, Falsifier, Feedback, RunRecord, Weights
 from rlmcp.records.store import (
-    ConflictError,
-    SlotUnavailable,
-    StoreError,
-    next_display_id,
+  ConflictError,
+  SlotUnavailable,
+  StoreError,
+  next_display_id,
 )
 from rlmcp.records.validate import check_verdict_change
 
@@ -114,7 +113,7 @@ def test_query_filters_on_the_ancestry_and_the_text(store):
 
   assert [r.id for r in store.query(parent=root.id)] == [child.id]
   assert {r.id for r in store.query(stage="locomotion")} == {root.id, child.id}
-  assert [r.id for r in store.query(proposed_by="orchestrator")][0] not in (root.id, child.id)
+  assert next(r.id for r in store.query(proposed_by="orchestrator")) not in (root.id, child.id)
   assert [r.id for r in store.query(text="clearance")] == [child.id]
 
 
@@ -154,7 +153,8 @@ def test_an_asset_is_copied_out_of_its_session(tmp_path, store):
   assert store.media.exists(key)
   frame.unlink()  # the session goes away
   assert store.media.exists(key)  # the record does not
-  assert open(store.media.get(key), "rb").read() == b"\x89PNG fake"
+  with open(store.media.get(key), "rb") as fh:
+    assert fh.read() == b"\x89PNG fake"
 
 
 def test_recording_a_missing_asset_is_an_error(store):

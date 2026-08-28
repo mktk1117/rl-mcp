@@ -16,7 +16,7 @@ letting somebody discover that four hours into a run.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class NotAFlatEnv(TypeError):
@@ -70,7 +70,7 @@ REQUIRED = ("reward_scales", "env_cfg")
 """Without these there is nothing to tune, so there is nothing to wrap."""
 
 
-def detect(env: Any, spec: Optional[FlatEnvSpec] = None) -> FlatEnvSpec:
+def detect(env: Any, spec: FlatEnvSpec | None = None) -> FlatEnvSpec:
   """Confirm ``env`` is this shape, or say exactly what was missing.
 
   A spec passed in is honoured as given -- somebody who names their attributes
@@ -79,7 +79,7 @@ def detect(env: Any, spec: Optional[FlatEnvSpec] = None) -> FlatEnvSpec:
   message.
   """
   spec = spec or FlatEnvSpec()
-  missing: Dict[str, str] = {}
+  missing: dict[str, str] = {}
   for field in REQUIRED:
     attr = getattr(spec, field)
     if getattr(env, attr, None) is None:

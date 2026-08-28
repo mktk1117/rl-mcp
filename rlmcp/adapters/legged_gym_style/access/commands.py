@@ -20,7 +20,8 @@ the live surface and is written directly.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 from rlmcp.adapters.access.base import AccessProvider, Synthetic, Term
 from rlmcp.core.parameters.spec import ParameterCategory
@@ -44,14 +45,14 @@ class CommandAccess(AccessProvider):
     return cfg if isinstance(cfg, dict) else {}
 
   @property
-  def limits(self) -> Optional[Tuple[Any, Any]]:
+  def limits(self) -> tuple[Any, Any] | None:
     """The ``(lower, upper)`` tensors the sampler reads, when there are any."""
     limits = self.spec.resolve(self.env, "command_limits", None)
     if isinstance(limits, (tuple, list)) and len(limits) == 2:
       return limits[0], limits[1]
     return None
 
-  def channel_names(self) -> List[str]:
+  def channel_names(self) -> list[str]:
     """One name per commanded channel, in the order the tensors are packed.
 
     The names come from the ``*_range`` keys of ``command_cfg`` in insertion
@@ -64,7 +65,7 @@ class CommandAccess(AccessProvider):
     limits = self.limits
     if limits is None:
       return named
-    width = int(len(limits[0]))
+    width = len(limits[0])
     if len(named) != width:
       return [f"channel_{i}" for i in range(width)]
     return named
@@ -72,10 +73,10 @@ class CommandAccess(AccessProvider):
   def available(self) -> bool:
     return bool(self.channel_names())
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     return []
 
-  def synthetic(self) -> List[Synthetic]:
+  def synthetic(self) -> list[Synthetic]:
     return [
         Synthetic(
             key=f"{self.domain}.{name}",
@@ -92,7 +93,7 @@ class CommandAccess(AccessProvider):
 
   # Reads and writes go to the tensors when there are tensors.
 
-  def _read(self, index: int, name: str) -> List[float]:
+  def _read(self, index: int, name: str) -> list[float]:
     limits = self.limits
     if limits is None:
       return [float(v) for v in self.cfg.get(f"{name}{RANGE_SUFFIX}", (0.0, 0.0))]
@@ -100,7 +101,7 @@ class CommandAccess(AccessProvider):
     return [float(lower[index]), float(upper[index])]
 
   def _getter(self, index: int, name: str):
-    def get() -> List[float]:
+    def get() -> list[float]:
       return self._read(index, name)
     return get
 
@@ -125,7 +126,7 @@ class CommandAccess(AccessProvider):
     return put
 
   @staticmethod
-  def _coerce(value: Any, name: str) -> Tuple[float, float]:
+  def _coerce(value: Any, name: str) -> tuple[float, float]:
     if not isinstance(value, (tuple, list)) or len(value) != 2:
       raise ValueError(
           f"Command range '{name}' takes a [min, max] pair; got {value!r}."

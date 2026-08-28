@@ -66,6 +66,14 @@ output. Present and the command is not `record`, take `"result"` on success and
 `"error"` on failure. Every command's family is pinned by
 `tests/test_cli_output.py`, so none of it can drift silently.
 
+**One document, and nothing else.** In JSON mode stdout carries the payload and
+nothing but the payload, so `json.loads` on the whole of it works. Anything the
+command says on the way — a note from the CLI, a simulator announcing its
+version and every kernel it compiles from inside native code — goes to stderr,
+where it is still there to read. `rlmcp train` and `rlmcp serve` are outside
+this: the trainer's stdout is yours, and the MCP server speaks its protocol on
+stdout. Text mode is untouched; watching a viewer build is the point of it.
+
 ## Quick index
 
 | what you want | command | MCP tool |
@@ -902,19 +910,46 @@ rlmcp play logs/rsl_rl/my_run/model_final_4375.pt --device cpu
 rlmcp play --stage 2_hardest --seconds 12
 rlmcp play --mode native                        # MuJoCo's own viewer
 rlmcp play --mode viser                         # a viewer in the browser
+rlmcp play --task My-Task --policy zero --mode hold   # built, stepping, serving nothing
 ```
 
 | flag | meaning |
 | --- | --- |
-| `--mode video\|native\|viser` | render an mp4 (works over ssh), or open a viewer |
+| `--mode video\|native\|viser\|hold` | render an mp4 (works over ssh), open a viewer, or hold the env open and serve nothing |
 | `--device cpu` | play without touching a GPU that is training |
 | `--stage NAME` | restore conditions as of the end of that stage |
 | `--set KEY=VALUE` | override a parameter after the replay, so it wins. Repeatable |
 | `--no-replay` | do not restore conditions at all |
+| `--policy zero\|random` | no checkpoint at all: hold zero actions, or sample random ones |
 | `--allow-partial` | render even if some conditions could not be restored |
 | `--task-package MODULE` | import this first so your tasks register. Repeatable |
 | `--num-envs`, `--extra-envs` | how many robots, and how many composited into the frame |
 | `--seconds`, `--fps`, `--out`, `--render-width/-height` | clip options |
+
+### `--mode hold`: an environment to drive rather than watch
+
+The other three modes end with somebody *looking* at the robot — a file, a
+window, a browser tab. `hold` opens nothing. It steps the environment at its
+own control rate and waits, which turns a task into something you can drive
+with everything else rlmcp already has:
+
+```bash
+rlmcp play --task My-Task --policy zero --mode hold --session-dir /tmp/preview &
+rlmcp --session /tmp/preview view --on          # look at it, when you want to
+rlmcp --session /tmp/preview shot               # a frame
+rlmcp --session /tmp/preview set reward.alive.weight 0.5 --why "it just stands"
+rlmcp --session /tmp/preview reset-envs
+rlmcp --session /tmp/preview stop
+```
+
+No renderer, no window, no port, no display, no GPU, and with `--policy zero`
+no checkpoint — which makes it the cheapest way to have a task standing in
+front of you. `--seconds` bounds it; the default is to hold until `rlmcp stop`.
+
+It paces itself to the environment's control rate on purpose. An unpaced hold
+advances simulated time as fast as the machine can integrate it, so a view
+attached to it shows a robot sprinting and anything measured "per second" is
+measuring the machine. If the loop cannot keep up it says so and how often.
 
 ### Why `play` replays the run first
 
@@ -937,6 +972,12 @@ arguments" send you to different places to look.
 
 The reconstruction lives in `rlmcp/core/replay.py` and imports no simulator. It
 is a plain parse-and-fold over the event log.
+
+`--policy zero|random` is the exception, and it is not really one: with no
+checkpoint there is no run whose conditions went missing, so nothing is
+restored and nothing is said about it. The environment runs at the task's own
+play configuration, which is what you want when the task, not a policy, is the
+thing being looked at. `--set` still applies on top.
 
 ### Steering a play session
 
@@ -962,6 +1003,15 @@ response always names the stage it trained at next to the stage the environment
 is in. When those disagree the conditions are deliberately **not** changed, and
 the payload says so loudly. Pass `replay=true` to restore that checkpoint's own
 conditions instead.
+
+One command a play session does *not* answer the same way: with `--mode viser`,
+the port `status` publishes is the viewer's own window — rlmcp opened the server
+and the viewer draws on it, which is how there is one panel and not two. So
+`rlmcp view --off` and `rlmcp view --port N` are refused there and say why; the
+way to close that window is to close the tab, or `rlmcp stop`. `--fps`,
+`--env` and `--pause` steer a push a hosted view does not do, and are accepted
+and ignored. A training run's view is unaffected: it owns its scene and all of
+this still applies to it.
 
 ---
 

@@ -28,12 +28,12 @@ if os.environ.get("GENESIS_LOCOMOTION"):
   # get_cfgs the first time it was run.
   sys.path.append(os.environ["GENESIS_LOCOMOTION"])
 
-import genesis as gs  # noqa: E402
-from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+import genesis as gs
+from genesis_env import QuadrupedEnv
+from go1_cfg import get_cfgs
+from rsl_rl.runners import OnPolicyRunner
 
-import rlmcp.adapters.genesis as rlmcp_genesis  # noqa: E402
-from genesis_env import QuadrupedEnv  # noqa: E402
-from go1_cfg import get_cfgs  # noqa: E402
+import rlmcp.adapters.genesis as rlmcp_genesis
 
 
 def add_camera_before_build(rendered_envs):

@@ -12,12 +12,12 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from rlmcp import cli, cli_output
 from rlmcp.session import Response, Session
-
 
 # Mode resolution: a pipe is an agent, a terminal is a person.
 
@@ -454,3 +454,123 @@ def test_record_subcommands_tag_their_payload_rather_than_wrapping_it(
 
   code, checked = _run_json([*root, "check"], tmp_path, capsys, monkeypatch)
   assert code == 0 and "ok" in checked and "result" not in checked
+
+
+# One document on stdout, whatever the simulator has to say.
+#
+# `_emit` is the only thing in `cli.py` that writes to stdout, but any command
+# that builds an environment imports Warp and mujoco_warp, which announce
+# themselves from native code straight to descriptor 1. `capfd`, not `capsys`,
+# is the fixture that can see writes at that level -- which is the whole point.
+
+
+def _noisy(returns):
+  """A command handler that prints like a simulator before it answers."""
+
+  def handler():
+    os.write(1, b'Warp 1.16.0 initialized:\n   Devices:\n     "cpu" : "CPU"\n')
+    print("Module _update_gradient_cholesky took 131.46 ms  (compiled)")
+    return returns
+
+  return handler
+
+
+def test_json_mode_leaves_exactly_one_document_on_stdout(capfd, monkeypatch):
+  """The promise `docs/tools.md` makes about a pipe. It was not kept: a
+  simulator's startup banner shared stdout with the payload, so `json.loads`
+  failed on output that was perfectly good."""
+  monkeypatch.setattr("rlmcp.extensions.catalog", _noisy([{"name": "terrain"}]))
+
+  code = cli.main(["--json", "extensions"])
+
+  captured = capfd.readouterr()
+  assert code == 0
+  assert json.loads(captured.out) == {"installed": [{"name": "terrain"}]}
+  assert "Warp 1.16.0" in captured.err
+
+
+def test_the_banner_is_moved_aside_rather_than_thrown_away(capfd, monkeypatch):
+  """Everything the command said still reaches a terminal -- on the stream
+  already carrying this CLI's own notes. Losing it would trade one bad
+  debugging session for another."""
+  monkeypatch.setattr("rlmcp.extensions.catalog", _noisy([]))
+
+  cli.main(["--json", "extensions"])
+
+  err = capfd.readouterr().err
+  assert "Warp 1.16.0" in err and "(compiled)" in err
+
+
+def test_text_mode_leaves_stdout_alone(capfd, monkeypatch):
+  """A person watching a viewer build wants that output where they are
+  looking, interleaved with the rest of it."""
+  monkeypatch.setattr("rlmcp.extensions.catalog", _noisy([]))
+
+  cli.main(["--text", "extensions"])
+
+  assert "Warp 1.16.0" in capfd.readouterr().out
+
+
+def test_stdout_is_given_back_even_when_the_command_raises(capfd, monkeypatch):
+  """Restoring in `finally` is what keeps a traceback, and the shell after it,
+  visible to whoever ran the command."""
+  def explode():
+    raise RuntimeError("the environment did not build")
+
+  monkeypatch.setattr("rlmcp.extensions.catalog", explode)
+
+  with pytest.raises(RuntimeError):
+    cli.main(["--json", "extensions"])
+
+  print("back on stdout")
+  assert "back on stdout" in capfd.readouterr().out
+
+
+def test_train_and_serve_keep_the_stdout_they_were_handed(capfd, monkeypatch):
+  """Neither is a command that answers in JSON. The trainer's stdout is the
+  user's, and the MCP server *speaks* a protocol on stdout -- redirecting
+  either would take the run's progress or the protocol with it."""
+  import types
+
+  for name, module in (("train", "rlmcp.train"),
+                       ("serve", "rlmcp.server.mcp_server")):
+    stand_in = types.ModuleType(module)
+    stand_in.main = lambda argv: os.write(1, b"handed over\n") and 0
+    monkeypatch.setitem(sys.modules, module, stand_in)
+
+    assert cli.main([name, "--anything"]) == 0
+    assert "handed over" in capfd.readouterr().out
+
+
+def test_the_reserved_stdout_answers_for_the_stream_it_stands_in_for(tmp_path):
+  """The duplicate is opened by hand, so it takes the locale's encoding rather
+  than the one stdout was actually configured with. Under an ascii locale with
+  `PYTHONIOENCODING=utf-8` that turned a markdown ledger with a note in it into
+  a UnicodeEncodeError -- on output a plain `print` had no trouble with.
+
+  A subprocess because the locale has to be wrong before the interpreter
+  starts; `json.dumps` escapes to ascii and would never have shown this.
+  """
+  import subprocess
+
+  script = tmp_path / "emit.py"
+  script.write_text(
+      "import sys\n"
+      "from rlmcp import cli\n"
+      "print('baseline: \\u65e5\\u672c\\u8a9e')\n"
+      "with cli._stdout_reserved_for_the_payload():\n"
+      "  cli._emit_text('payload: \\u65e5\\u672c\\u8a9e')\n",
+      encoding="utf-8")
+
+  root = Path(__file__).resolve().parent.parent
+  done = subprocess.run(
+      [sys.executable, str(script)],
+      capture_output=True, check=False,
+      # This checkout, not whatever `rlmcp` the interpreter has installed.
+      env={**os.environ, "PYTHONPATH": str(root), "LC_ALL": "C", "LANG": "C",
+           "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+           "PYTHONIOENCODING": "utf-8"},
+  )
+
+  assert done.returncode == 0, done.stderr.decode("utf-8", "replace")
+  assert "payload: 日本語" in done.stdout.decode("utf-8")

@@ -19,7 +19,6 @@ import pytest
 
 from rlmcp import tasks
 
-
 #: The list a fake task package registers into. It has to live in a module a
 #: generated package can import by name, because the whole point of the
 #: attribution test is that registration happens *during* the import.
@@ -195,7 +194,7 @@ def test_the_cli_says_what_to_do_when_nothing_registers_a_task(
   from rlmcp.cli import main
 
   monkeypatch.setattr(tasks, "BACKENDS", (
-      {"backend": "fake", "ids": lambda: [], "describe": lambda t: {}, "note": ""},
+      {"backend": "fake", "ids": list, "describe": lambda t: {}, "note": ""},
   ))
   monkeypatch.delenv(tasks.TASK_PACKAGES_ENV, raising=False)
   monkeypatch.chdir(tmp_path)

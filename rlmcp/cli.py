@@ -27,12 +27,13 @@ simulator lives in the training process, not here.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from rlmcp import cli_output
 from rlmcp.records.record import FEEDBACK_KINDS
@@ -41,7 +42,7 @@ from rlmcp.session import Session, iter_sessions
 DEFAULT_ROOTS = ("./logs", "./rlmcp_session", ".")
 
 
-def _search_roots(args: argparse.Namespace) -> Tuple[List[str], str]:
+def _search_roots(args: argparse.Namespace) -> tuple[list[str], str]:
   """The roots a bare command searches, and where that list came from.
 
   Precedence matches the MCP server's: an explicit ``--root`` wins, then
@@ -97,7 +98,7 @@ def _remember(session: Session) -> Session:
   return session
 
 
-def _registry_fallback() -> Tuple[Optional[Session], str]:
+def _registry_fallback() -> tuple[Session | None, str]:
   """The newest session the registry can still vouch for, with provenance.
 
   Live registrants outrank dead ones -- "what is running?" is the question a
@@ -140,7 +141,7 @@ def _registry_fallback() -> Tuple[Optional[Session], str]:
   return None, ""
 
 
-def _refuse_no_session(roots: List[str], origin: str) -> None:
+def _refuse_no_session(roots: list[str], origin: str) -> None:
   """Exit with a report: where the search went, and what would point it right.
 
   In JSON mode the refusal is a payload on stdout -- an agent that captured
@@ -198,16 +199,92 @@ def _refuse_no_session(roots: List[str], origin: str) -> None:
 _MODE = "json"
 _OPEN = "auto"
 
+# The real stdout, set aside while file descriptor 1 is pointed at stderr; see
+# _stdout_reserved_for_the_payload. None whenever no redirect is in force.
+_PAYLOAD_STDOUT: Any | None = None
 
-def _emit(payload: Any, pretty: bool = True, *, command: Optional[str] = None) -> None:
-  """The one place anything reaches stdout.
+
+@contextlib.contextmanager
+def _stdout_reserved_for_the_payload():
+  """Keep stdout clear of everything except the JSON document, for one command.
+
+  ``_emit`` is the only thing in *this module* that writes to stdout, but it is
+  a long way from being the only thing in the process that does. Any command
+  that builds an environment imports Warp and mujoco_warp, which announce their
+  version, their CUDA toolkit, their device list and every kernel they compile.
+  So a caller who did what ``docs/tools.md`` promises and piped us into
+  ``json.loads`` got a parse error over a payload that was perfectly good.
+
+  Those announcements come out of native code, straight to descriptor 1, where
+  reassigning ``sys.stdout`` cannot reach them -- so the descriptor is
+  redirected too: 1 points at 2 for the length of the command, and the original
+  is kept aside for the payload. Both levels are moved, because either one
+  alone leaves a hole: the descriptor for the simulator, ``sys.stdout`` for the
+  case where something in front of us has already replaced it.
+
+  Nothing is lost. The announcements still reach a terminal, on the stream that
+  was already carrying this CLI's own notes, and a person watching gets the
+  same output they always did. Only the pipe gets a stricter promise.
+
+  Restoring in ``finally`` is the point of the context manager: a command that
+  raises on the way out must leave a working stdout behind it, so the traceback
+  and the shell that follows land somewhere a person can see.
+  """
+  global _PAYLOAD_STDOUT
+  reserved = sys.stdout
+  with contextlib.suppress(Exception):
+    reserved.flush()
+  try:
+    # The duplicate has to answer for the stream it stands in for, encoding
+    # included: `os.fdopen` would otherwise take the *locale's* encoding, and
+    # under an ascii locale with `PYTHONIOENCODING=utf-8` a markdown ledger
+    # with a note in it would raise where a plain `print` had worked. JSON is
+    # escaped to ascii and never noticed; `_emit_text` is not.
+    kept = os.fdopen(os.dup(1), "w",
+                     encoding=getattr(reserved, "encoding", None) or "utf-8",
+                     errors=getattr(reserved, "errors", None) or "strict")
+    os.dup2(2, 1)
+  except (OSError, ValueError):
+    # Nothing to shuffle -- stdout closed, or an embedder holding something
+    # unusual. Swapping sys.stdout alone is still worth having, and a tidier
+    # pipe is not worth failing the command over.
+    kept = None
+  # Only when the reserved stream *is* the descriptor just borrowed does the
+  # payload need the duplicate. When it is not, the caller has already said
+  # where its output goes, and that answer outranks ours.
+  _PAYLOAD_STDOUT = kept if kept and _is_descriptor(reserved, 1) else reserved
+  sys.stdout = sys.stderr
+  try:
+    yield
+  finally:
+    _PAYLOAD_STDOUT = None
+    sys.stdout = reserved
+    if kept is not None:
+      with contextlib.suppress(Exception):
+        kept.flush()
+      os.dup2(kept.fileno(), 1)
+      kept.close()
+
+
+def _is_descriptor(stream: Any, fd: int) -> bool:
+  """Whether ``stream`` writes to file descriptor ``fd``, as far as it will say."""
+  try:
+    return stream.fileno() == fd
+  except Exception:  # No fileno at all, or a closed or detached stream.
+    return False
+
+
+def _emit(payload: Any, pretty: bool = True, *, command: str | None = None) -> None:
+  """The one place a payload reaches stdout (``_emit_text`` is the other door).
 
   ``command`` is the *trainer* command name, so ``rlmcp shot`` and
   ``rlmcp run screenshot`` render through the same formatter; it is ignored
   in JSON mode, where the bytes must not depend on how the call was spelled.
   """
   if _MODE != "text":
-    print(json.dumps(payload, indent=2 if pretty else None, default=str))
+    # file=None means sys.stdout, which is right whenever nothing was reserved.
+    print(json.dumps(payload, indent=2 if pretty else None, default=str),
+          file=_PAYLOAD_STDOUT)
     return
   print(cli_output.render(payload, command))
   shown, held = cli_output.show_artifacts(payload, _OPEN)
@@ -216,6 +293,16 @@ def _emit(payload: Any, pretty: bool = True, *, command: Optional[str] = None) -
       print(cli_output.note(f"-> opened {path} ({how})"))
   if held and _OPEN != "never":
     print(cli_output.note(f"-> {len(held)} artifact(s) not opened; --open to show"))
+
+
+def _emit_text(text: str) -> None:
+  """An answer that was never JSON -- ``record timeline --markdown``.
+
+  It is still the answer, so it goes where a payload goes rather than joining
+  the noise that gets moved aside: somebody redirecting the ledger into a file
+  wants the ledger in the file.
+  """
+  print(text, file=_PAYLOAD_STDOUT)
 
 
 def _call(session: Session, cmd: str, timeout: float, **args: Any) -> int:
@@ -247,8 +334,8 @@ def _parse_value(text: str) -> Any:
     return text
 
 
-def _kv_pairs(items: Optional[List[str]]) -> Dict[str, Any]:
-  out: Dict[str, Any] = {}
+def _kv_pairs(items: list[str] | None) -> dict[str, Any]:
+  out: dict[str, Any] = {}
   for item in items or []:
     if "=" not in item:
       raise SystemExit(f"Expected key=value, got '{item}'")
@@ -257,7 +344,7 @@ def _kv_pairs(items: Optional[List[str]]) -> Dict[str, Any]:
   return out
 
 
-def _default_metric_names(session: Session, limit: int = 4) -> List[str]:
+def _default_metric_names(session: Session, limit: int = 4) -> list[str]:
   """A sensible default selection, drawn from what this run actually recorded.
 
   Naming metrics up front would bake one task's vocabulary into the CLI -- a
@@ -276,15 +363,15 @@ def _default_metric_names(session: Session, limit: int = 4) -> List[str]:
 
 
 def _offline_series(
-    session: Session, names: List[str], last_n: Optional[int] = None
-) -> Dict[str, List[List[float]]]:
+    session: Session, names: list[str], last_n: int | None = None
+) -> dict[str, list[list[float]]]:
   """Rebuild metric series from metrics.jsonl, for runs that have finished.
 
   ``last_n`` bounds the file read to its tail: rows are one per iteration, so
   the last N rows hold the last N points of every still-recorded metric.
   """
   rows = session.metrics(last_n=last_n)
-  series: Dict[str, List[List[float]]] = {name: [] for name in names}
+  series: dict[str, list[list[float]]] = {name: [] for name in names}
   for row in rows:
     iteration = row.get("iteration")
     for name in names:
@@ -297,7 +384,7 @@ def _offline_series(
 
 
 def _offline_plot(
-    session: Session, names: List[str], last_n: int, smooth: int
+    session: Session, names: list[str], last_n: int, smooth: int
 ) -> int:
   """Plot a finished run's metrics without talking to a training process."""
   try:
@@ -462,7 +549,7 @@ def _record_command(args: argparse.Namespace) -> int:
     # on a fresh read if another writer interleaves), a refusal aborts before
     # any write and leaves the file untouched, and a lost compare-and-swap is
     # retried instead of surfacing as an error.
-    box: Dict[str, Any] = {}
+    box: dict[str, Any] = {}
 
     def close_out(fresh) -> Any:
       if args.outcome:
@@ -510,6 +597,7 @@ def _record_command(args: argparse.Namespace) -> int:
 
       fresh.verdict = args.verdict
       fresh.lease = None
+      return None  # Anything but False: write the record.
 
     try:
       closed = store.update_record(record.id, close_out)
@@ -608,7 +696,7 @@ def _record_command(args: argparse.Namespace) -> int:
       out.write_text(text)
       _emit({"ok": True, "path": str(out), "count": len(rows)})
     else:
-      print(text)
+      _emit_text(text)
     return 0
 
   if action == "asset":
@@ -660,15 +748,15 @@ def _record_command(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
   if action == "graph":
-    from rlmcp.records.views import plot_records, render_records_html
     from rlmcp.records.graph import build, summarize
     from rlmcp.records.poster import ensure_posters
+    from rlmcp.records.views import plot_records, render_records_html
 
     records = store.list_records()
     if not records:
       _emit({"ok": False, "error": "No records to draw."})
       return 1
-    posters: Dict[str, str] = {}
+    posters: dict[str, str] = {}
     if args.png:
       out = Path(args.out or (store.root / "records.png"))
       out.write_bytes(plot_records(records, title=args.title))
@@ -709,7 +797,7 @@ def _record_command(args: argparse.Namespace) -> int:
              "`rlmcp.wrap(code_root=...)`, to stamp the package."})
       return 1
 
-    payload: Dict[str, Any] = {"ok": True, "record": record.id, "code": code}
+    payload: dict[str, Any] = {"ok": True, "record": record.id, "code": code}
     if args.restore:
       payload["restored"] = str(
           snapshot.restore(code["repo"], code["tree"], args.restore))
@@ -789,7 +877,7 @@ def _record_command(args: argparse.Namespace) -> int:
   raise SystemExit(f"Unhandled record command '{action}'")
 
 
-def _parse_conditions(tokens: Optional[List[str]]):
+def _parse_conditions(tokens: list[str] | None):
   """``metric op value`` triples into Conditions."""
   from rlmcp.core.curriculum import Condition
 
@@ -806,7 +894,7 @@ def _parse_conditions(tokens: Optional[List[str]]):
   ]
 
 
-def _falsifier_row(result: Dict[str, Any]) -> str:
+def _falsifier_row(result: dict[str, Any]) -> str:
   """The falsifier's one-line verdict, recorded against the run's metrics."""
   if result.get("too_early"):
     return (
@@ -819,7 +907,7 @@ def _falsifier_row(result: Dict[str, Any]) -> str:
   return state if evaluated_at is None else f"{state} (at iteration {evaluated_at})"
 
 
-def _parse_metrics(items: Optional[List[str]]) -> List[List[str]]:
+def _parse_metrics(items: list[str] | None) -> list[list[str]]:
   """``name=value`` pairs, kept as strings on purpose."""
   out = []
   for item in items or []:
@@ -905,7 +993,8 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("params", help="List tunable parameters")
   p.add_argument("--contains")
   p.add_argument("--category")
-  p.add_argument("--live", action="store_true", help="Ask the trainer instead of reading params.json")
+  p.add_argument("--live", action="store_true",
+                 help="Ask the trainer instead of reading params.json")
 
   p = sub.add_parser("get", help="Read one parameter")
   p.add_argument("key")
@@ -1095,7 +1184,8 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument("--why", default="")
 
   rec = sub.add_parser("record", help="Run records: plans, outcomes, ancestry")
-  rec.add_argument("--records-root", help="Records directory (default: $RLMCP_RECORDS or ./records)")
+  rec.add_argument("--records-root",
+                   help="Records directory (default: $RLMCP_RECORDS or ./records)")
   rec.add_argument("--slots", type=int, default=1,
                    help="How many runs may hold a lease at once (default: 1)")
   record_sub = rec.add_subparsers(dest="record_command", required=True)
@@ -1244,12 +1334,19 @@ def build_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
+  """Parse the line, decide who owns stdout, and run the command."""
   global _MODE, _OPEN
 
   # `train` and `serve` launch a process rather than talking to one, and their
   # flags are their own. Hand the rest of the line over before argparse claims
   # it. Imported lazily: `rlmcp status` should not pay for mjlab or torch.
+  #
+  # They are also the two commands whose stdout is not ours to touch. The
+  # trainer's stdout is the user's -- its progress lines are the run. The MCP
+  # server *speaks* JSON-RPC on stdout, one message per line, and redirecting
+  # that would take the protocol with it. Handing over here, above the
+  # redirect, is what keeps both of them out of it.
   head = list(sys.argv[1:] if argv is None else argv)
   if head and head[0] == "train":
     from rlmcp.train import main as train_main
@@ -1259,10 +1356,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     return serve_main(head[1:])
 
   args = build_parser().parse_args(argv)
-  cmd = args.command
-  timeout = args.timeout
+  # Resolved here rather than in _dispatch, because _dispatch runs with the
+  # descriptor already borrowed: `resolve_mode` asks stdout whether it is a
+  # terminal, and by then stdout is stderr and would answer for it.
   _MODE = cli_output.resolve_mode(getattr(args, "output", None))
   _OPEN = cli_output.resolve_open(getattr(args, "open_policy", None))
+  if _MODE == "text":
+    # Somebody is watching. A viewer coming up, a renderer warming, a simulator
+    # naming its device -- that is progress, and it belongs on their screen.
+    return _dispatch(args)
+  with _stdout_reserved_for_the_payload():
+    return _dispatch(args)
+
+
+def _dispatch(args: argparse.Namespace) -> int:
+  """Every command, one `if` each, ending in `_emit` or a `_call`."""
+  cmd = args.command
+  timeout = args.timeout
 
   if cmd == "tasks":
     # The one command with no session: it answers what *could* run, which is
@@ -1327,7 +1437,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     roots, origin = _search_roots(args)
     seen, rows = set(), []
-    newest: Optional[Session] = None
+    newest: Session | None = None
     newest_started = 0.0
 
     def add(session: Session) -> None:

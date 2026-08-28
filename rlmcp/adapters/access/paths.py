@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterator, List, Mapping, MutableMapping, Sequence, Tuple
+from typing import Any
 
 MAX_DEPTH = 4
 """How deep to descend when hunting for leaves. Four covers
@@ -77,7 +78,7 @@ def join_path(parts: Sequence[str]) -> str:
   return ".".join(escape_segment(p) for p in parts)
 
 
-def split_path(key: str) -> List[str]:
+def split_path(key: str) -> list[str]:
   """Split a dotted path on separators only, then unescape each segment."""
   return [unescape_segment(part) for part in _UNESCAPED_DOT.split(key)]
 
@@ -226,7 +227,7 @@ class _Missing:
 _MISSING = _Missing()
 
 
-def _step(container: Any, key: str) -> Tuple[Any, bool]:
+def _step(container: Any, key: str) -> tuple[Any, bool]:
   """Take one step into ``container``. Returns (value, came_from_mapping)."""
   if isinstance(container, Mapping):
     actual = mapping_key(container, key)
@@ -278,7 +279,7 @@ def walk_leaves(
     prefix: Sequence[str] = (),
     depth: int = 0,
     skip_keys: frozenset = SKIP_KEYS,
-) -> Iterator[Tuple[List[str], Any]]:
+) -> Iterator[tuple[list[str], Any]]:
   """Yield ``(path_parts, value)`` for every tunable leaf inside ``obj``.
 
   Descends through dicts and dataclasses only. Everything that is not a number,
@@ -296,8 +297,8 @@ def walk_leaves(
   else:
     return
 
-  for key, value in items:
-    key = str(key)
+  for raw_key, value in items:
+    key = str(raw_key)
     if key.startswith("_") or key in skip_keys:
       continue
     parts = [*prefix, key]

@@ -46,6 +46,7 @@ without the variable set; it is a scratch directory, not the records.
 | --- | --- |
 | grep a task package to find out which task ids exist | `rlmcp tasks` — every registered id, which package registered it, and where its runs land |
 | write a scratch script that rolls zero actions to see whether a new task works | `rlmcp check --task <id>` — the six gates (including one training iteration), plus what each reward term pays |
+| write a loop that builds a task and steps it so you can poke at it | `rlmcp play --policy zero --mode hold` — a built, stepping, steerable session with no viewer |
 | parse `metrics.jsonl` / `status.json` yourself | `rlmcp status`, `rlmcp metrics`, `rlmcp plot` |
 | write a loop that pokes weights at milestones | a **curriculum** (`StageSchedule`) — see below |
 | add a task-specific verb by editing core code | an **extension** (`rlmcp/extensions/`, or your own package) |
@@ -218,3 +219,31 @@ So:
 See the Tests section of `README.md` for the current incantation. The suite runs
 the real controller against a fake simulator — no GPU and no simulator needed —
 and the MCP-server tests skip unless the optional `mcp` package is installed.
+
+## Style: two spaces, and a linter that says so
+
+`ruff check` is the whole style guide, and `[tool.ruff]` in `pyproject.toml` is
+where it is written down. Two-space indent, four for a continuation, 100 columns
+as a wall (write to ~80), and annotations that read like the py310+ tree this
+is. [docs/style.md](docs/style.md) is the long form: what every rule is doing
+there, why the ones that are off are off, and how to spell a `noqa`.
+
+```bash
+uvx ruff@0.16.4 check rlmcp tests examples      # what CI runs
+uvx ruff@0.16.4 check --fix rlmcp tests examples
+```
+
+Three places run it for you, all with the same pinned version and the same
+config, so they cannot disagree:
+
+* **CI** — a `lint` job on every push and pull request, before the test matrix.
+* **`.claude/settings.json`** — a `PostToolUse` hook. An agent that writes a
+  `.py` file gets it linted and auto-fixed on the spot, and the leftovers come
+  back as an error rather than as a red pull request twenty minutes later.
+* **`.pre-commit-config.yaml`** — for a human with `pre-commit install` run.
+
+Do not reach for a formatter. `ruff format` and black are 4-space tools; black
+cannot emit two spaces at all, and either one rewrites 99 of the 102 modules
+here, re-wrapping line breaks that were placed by hand. The rules that were
+deliberately left out — blind `except`, unused protocol arguments, `print` in
+the CLI — are listed with their reasons next to the config.
