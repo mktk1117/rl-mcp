@@ -19,6 +19,8 @@ Layout::
       inbox/              pending requests written by the agent side
       outbox/             responses written by the trainer side
       artifacts/          png / mp4 / npz produced on demand
+      env_terms.json      reward / observation / action terms, with their source
+      rewards/            source of every reward term added mid-run
 """
 
 from __future__ import annotations
@@ -298,6 +300,27 @@ class Session:
   def artifacts(self) -> Path:
     return self.dir / "artifacts"
 
+  @property
+  def env_terms_file(self) -> Path:
+    """The captured reward / observation / action terms of this run.
+
+    Written once at startup and refreshed when a term is added. It is what
+    lets a checkpoint be paired with the environment it trained under after
+    the training process is gone -- see ``rlmcp env export``.
+    """
+    return self.dir / "env_terms.json"
+
+  @property
+  def rewards(self) -> Path:
+    """Source of reward terms added during the run, one file per term.
+
+    Kept out of ``artifacts`` because it is not an output to look at: it is
+    what the run was optimising, and the only copy of a term that existed
+    nowhere before the agent wrote it. Created on first write, so a run that
+    adds none has no empty directory.
+    """
+    return self.dir / "rewards"
+
   # Lifecycle.
 
   def create(self, info: Dict[str, Any]) -> "Session":
@@ -358,6 +381,12 @@ class Session:
 
   def publish_params(self, schema: Dict[str, Any]) -> None:
     _atomic_write_json(self.params_file, schema)
+
+  def publish_env_terms(self, terms: Dict[str, Any]) -> None:
+    _atomic_write_json(self.env_terms_file, terms)
+
+  def env_terms(self) -> Dict[str, Any]:
+    return _read_json(self.env_terms_file, {}) or {}
 
   def append_metrics(self, iteration: int, metrics: Dict[str, float]) -> None:
     _append_jsonl(self.metrics_file, {"iteration": iteration, "t": time.time(), **metrics})
