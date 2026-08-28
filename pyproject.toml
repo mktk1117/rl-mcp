@@ -90,7 +90,11 @@ rlmcp = ["py.typed"]
 line-length = 100
 indent-width = 2
 target-version = "py310"
-extend-exclude = ["records", ".venv", ".venv-server"]
+# Anchored with a leading slash: a bare "records" would match any path
+# segment of that name and quietly stop linting the rlmcp/records/ package.
+# This is the scratch records/ that appears when somebody runs a record
+# command with $RLMCP_RECORDS unset.
+extend-exclude = ["/records", "/.venv", "/.venv-server"]
 
 [tool.ruff.lint]
 # E1 (indentation) is absent on purpose: those rules assume four spaces.
@@ -120,6 +124,18 @@ ignore = [
   # {...}. This run has: ..."). TRY003 would push every one of those into a
   # custom exception class and make them worse.
   "TRY003",
+
+  # These helpers are documented to raise ValueError, the CLI turns a
+  # ValueError into a message for the user, and the difference between a wrong
+  # type and a wrong value is not one that surface makes. Switching them to
+  # TypeError is a change to the public behaviour, not a lint fix.
+  "TRY004",
+
+  # Module-level singletons -- the pinned stdout of the payload split, the
+  # once-only entry-point scan, the CLI's output mode -- are the design here,
+  # and `global` is how a module writes to its own state. The alternative is a
+  # class whose only instance is a module.
+  "PLW0603",
 ]
 
 # Rules considered and deliberately left out, so nobody re-litigates them:
@@ -144,3 +160,8 @@ known-first-party = ["rlmcp"]
 # An example is read top to bottom; the import that sets a simulator up has to
 # come after the flags that configure it.
 "examples/*" = ["E402"]
+# The long lines in here are inside the embedded JavaScript of the record
+# graph. A `# noqa` cannot go on a line that is inside a string literal, and
+# re-wrapping somebody else's language to satisfy a Python linter is worse
+# than the long line.
+"rlmcp/records/views.py" = ["E501"]

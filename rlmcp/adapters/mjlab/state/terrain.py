@@ -156,7 +156,7 @@ class TerrainControl:
       )
       changed["terrains"] = requested
       changed["envs_per_terrain"] = {
-          names[c]: int(n) for c, n in zip(columns, counts)
+          names[c]: int(n) for c, n in zip(columns, counts, strict=True)
       }
 
     # Recompute spawn origins so the new assignment takes effect on reset.

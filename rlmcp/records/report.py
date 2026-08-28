@@ -13,8 +13,9 @@ is the excuse that assembling the evidence was too much work.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any
 
 from rlmcp.records.record import OWED_A_RESPONSE, RunRecord, fold_recipe
 from rlmcp.session import Session
@@ -28,7 +29,7 @@ _PLAN_PROMPTS = {
 }
 
 
-def render_plan(record: RunRecord, recipe: Optional[Sequence] = None) -> str:
+def render_plan(record: RunRecord, recipe: Sequence | None = None) -> str:
   """The pre-registration document."""
   lines = [f"# {record.id} — {record.slug.replace('_', ' ')}", ""]
 
@@ -84,8 +85,8 @@ def render_plan(record: RunRecord, recipe: Optional[Sequence] = None) -> str:
 
 
 def gather_evidence(
-    session_dir: Optional[str], window: int = 50
-) -> Dict[str, Any]:
+    session_dir: str | None, window: int = 50
+) -> dict[str, Any]:
   """Pull the run's own record of itself out of its session directory.
 
   ``metrics.jsonl`` is tail-read: only the last ``window`` rows are parsed, and
@@ -105,7 +106,7 @@ def gather_evidence(
   events = session.events()
   final = rows[-1] if rows else {}
 
-  final_values: Dict[str, float] = {}
+  final_values: dict[str, float] = {}
   for row in rows:  # oldest first, so the newest logged value wins.
     for key, value in row.items():
       if isinstance(value, (int, float)) and key not in ("iteration", "t"):
@@ -151,7 +152,8 @@ def gather_evidence(
       if e.get("kind") == "feedback"
   ]
 
-  artifacts = sorted(p.name for p in session.artifacts.glob("*")) if session.artifacts.exists() else []
+  artifacts = (sorted(p.name for p in session.artifacts.glob("*"))
+               if session.artifacts.exists() else [])
 
   return {
       "iterations": final.get("iteration"),
@@ -169,15 +171,16 @@ def gather_evidence(
 
 def render_report(
     record: RunRecord,
-    evidence: Optional[Dict[str, Any]] = None,
-    falsifier_result: Optional[Dict[str, Any]] = None,
+    evidence: dict[str, Any] | None = None,
+    falsifier_result: dict[str, Any] | None = None,
 ) -> str:
   """The close-out document, with the measurable half already filled in."""
   evidence = evidence or {}
   lines = [f"# {record.id} — REPORT", ""]
 
   lines += ["## Outcome", ""]
-  lines += [record.outcome or "_Prediction met, missed, or ambiguous — say which in the first line._", ""]
+  lines += [record.outcome
+            or "_Prediction met, missed, or ambiguous — say which in the first line._", ""]
   lines += [f"**Verdict:** `{record.verdict}`", ""]
 
   if falsifier_result:
@@ -185,16 +188,16 @@ def render_report(
     if record.falsifier.prose:
       lines += [f"> {record.falsifier.prose}", ""]
     if falsifier_result.get("too_early"):
-      lines += [f"**Not evaluable yet** — the run closed at iteration "
-                f"{falsifier_result.get('evaluated_at')}, before the "
-                f"pre-registered read-point (check_after "
-                f"{falsifier_result.get('check_after')}). Neither fired nor "
-                "held: the run ended before its falsifier meant anything.", ""]
+      lines += [(f"**Not evaluable yet** — the run closed at iteration "
+                 f"{falsifier_result.get('evaluated_at')}, before the "
+                 f"pre-registered read-point (check_after "
+                 f"{falsifier_result.get('check_after')}). Neither fired nor "
+                 "held: the run ended before its falsifier meant anything."), ""]
     elif falsifier_result.get("fired"):
       lines += ["**It fired.** The hypothesis is dead, which is a result.", ""]
     elif falsifier_result.get("undecidable"):
-      lines += ["**Undecidable** — the metric it names was never logged. That is "
-                "not survival; the run could not test its own hypothesis.", ""]
+      lines += [("**Undecidable** — the metric it names was never logged. That is "
+                 "not survival; the run could not test its own hypothesis."), ""]
     elif record.falsifier.conditions:
       lines += ["**It did not fire.**", ""]
     for check in falsifier_result.get("checks", []):
@@ -255,9 +258,9 @@ def render_report(
 
   if record.feedback:
     lines += ["## What the humans said", "",
-              "_Verbatim, in the order it arrived, with what was done about it. "
-              "Several of the load-bearing corrections in a project never appear "
-              "in a metric._", ""]
+              ("_Verbatim, in the order it arrived, with what was done about it. "
+               "Several of the load-bearing corrections in a project never appear "
+               "in a metric._"), ""]
     for index, entry in enumerate(record.feedback):
       when = f"iteration {entry.iteration}" if entry.iteration is not None else "off-run"
       lines += [f"**[{index}] {entry.kind}** — {entry.author}, {when}", "",
@@ -268,8 +271,8 @@ def render_report(
         moved = "changed something" if entry.changed else "changed nothing"
         lines += [f"Response ({moved}): {entry.response}", ""]
       elif entry.kind in OWED_A_RESPONSE:
-        lines += ["**No recorded response.** This instruction was heard and "
-                  "not answered.", ""]
+        lines += [("**No recorded response.** This instruction was heard and "
+                   "not answered."), ""]
       else:
         # An observation or an approval asked for nothing, so an empty
         # response slot is not a dropped ball and must not read like one.
@@ -280,24 +283,24 @@ def render_report(
         lines += ["Artifacts: " + ", ".join(f"`{a}`" for a in entry.artifacts), ""]
 
   lines += ["## Diagnosis", "",
-            "_For a failure: the mechanism, backed by a measurement. "
-            "\"Self-collision was the dominant termination at 1.83 vs 0.75 for falls\" "
-            "beats \"it seemed unstable\"._", ""]
+            ("_For a failure: the mechanism, backed by a measurement. "
+             "\"Self-collision was the dominant termination at 1.83 vs 0.75 for falls\" "
+             "beats \"it seemed unstable\"._"), ""]
   lines += ["## Belief update", "",
-            "_What you now think that you did not before, and what it invalidates "
-            "in earlier runs._", ""]
+            ("_What you now think that you did not before, and what it invalidates "
+             "in earlier runs._"), ""]
   lines += ["## Next plan", "",
             "_The single next change and its falsifier._", ""]
 
   if record.weights is not None:
     lines += ["---", "",
-              f"_Warm-started from {record.weights.describe()}: this result shows the "
-              "change preserves a behaviour, not that it creates one._", ""]
+              (f"_Warm-started from {record.weights.describe()}: this result shows the "
+               "change preserves a behaviour, not that it creates one._"), ""]
 
   return "\n".join(lines)
 
 
-def render_feedback_ledger(rows: Sequence[Dict[str, Any]]) -> str:
+def render_feedback_ledger(rows: Sequence[dict[str, Any]]) -> str:
   """Every remark in the store as one readable ledger.
 
   Generated, never hand-maintained. A ledger kept by hand beside the records is
@@ -306,9 +309,9 @@ def render_feedback_ledger(rows: Sequence[Dict[str, Any]]) -> str:
   records and renders; the records stay the truth.
   """
   lines = ["# Feedback ledger", "",
-           "_Generated by `rlmcp record timeline --markdown`. Every remark lives "
-           "on the run record it was said to; this is the fold of them, oldest "
-           "first. Edit the records, not this file._", ""]
+           ("_Generated by `rlmcp record timeline --markdown`. Every remark lives "
+            "on the run record it was said to; this is the fold of them, oldest "
+            "first. Edit the records, not this file._"), ""]
   if not rows:
     lines += ["No feedback recorded yet.", ""]
     return "\n".join(lines)
@@ -316,7 +319,7 @@ def render_feedback_ledger(rows: Sequence[Dict[str, Any]]) -> str:
   changed = sum(1 for r in rows if r.get("changed"))
   outstanding = [r for r in rows
                  if r["kind"] in OWED_A_RESPONSE and not (r.get("response") or "").strip()]
-  by_kind: Dict[str, int] = {}
+  by_kind: dict[str, int] = {}
   for row in rows:
     by_kind[row["kind"]] = by_kind.get(row["kind"], 0) + 1
 
@@ -340,16 +343,16 @@ def render_feedback_ledger(rows: Sequence[Dict[str, Any]]) -> str:
   for n, row in enumerate(rows, 1):
     when = (f"iteration {row['iteration']}" if row.get("iteration") is not None
             else "off-run")
-    lines += [f"### {n}. {row['run']}[{row['index']}] — {row['kind']} "
-              f"({row.get('author', 'user')}, {when})", "",
+    lines += [(f"### {n}. {row['run']}[{row['index']}] — {row['kind']} "
+               f"({row.get('author', 'user')}, {when})"), "",
               f"> {row.get('text', '')}", ""]
     if row.get("interpretation"):
       lines += [f"**Read as:** {row['interpretation']}", ""]
     if (row.get("response") or "").strip():
       lines += [f"**Done:** {row['response']}", ""]
       if not row.get("changed"):
-        lines += ["Nothing changed as a result, and that is recorded rather "
-                  "than quietly omitted.", ""]
+        lines += [("Nothing changed as a result, and that is recorded rather "
+                   "than quietly omitted."), ""]
     else:
       lines += ["**No recorded response.**", ""]
     if row.get("affects"):
@@ -365,7 +368,7 @@ def _cell(text: str, limit: int = 110) -> str:
   return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
-def write_plan(store: Any, record: RunRecord) -> Optional[Path]:
+def write_plan(store: Any, record: RunRecord) -> Path | None:
   """Render and persist PLAN.md beside the record."""
   records = {r.id: r for r in store.list_records()}
   try:
@@ -378,9 +381,9 @@ def write_plan(store: Any, record: RunRecord) -> Optional[Path]:
 def write_report(
     store: Any,
     record: RunRecord,
-    falsifier_result: Optional[Dict[str, Any]] = None,
-    evidence: Optional[Dict[str, Any]] = None,
-) -> Optional[Path]:
+    falsifier_result: dict[str, Any] | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> Path | None:
   """Render and persist REPORT.md, gathering evidence from the session.
 
   A caller that already gathered evidence (the close-out does, to evaluate the
@@ -393,7 +396,7 @@ def write_report(
   )
 
 
-def final_metrics(session_dir: Optional[str]) -> Dict[str, float]:
+def final_metrics(session_dir: str | None) -> dict[str, float]:
   """The newest value per metric at the end of the run (see gather_evidence)."""
   evidence = gather_evidence(session_dir)
   return evidence.get("final_metrics", {})

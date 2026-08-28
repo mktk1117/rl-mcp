@@ -297,8 +297,8 @@ def walk_leaves(
   else:
     return
 
-  for key, value in items:
-    key = str(key)
+  for raw_key, value in items:
+    key = str(raw_key)
     if key.startswith("_") or key in skip_keys:
       continue
     parts = [*prefix, key]

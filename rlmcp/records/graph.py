@@ -19,8 +19,9 @@ visible as a branch rather than as a longer list.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from rlmcp.records.record import RunRecord, fold_recipe
 
@@ -38,8 +39,8 @@ class Node:
   row: int
   lane: int
   depth: int
-  children: List[str] = field(default_factory=list)
-  warm_children: List[str] = field(default_factory=list)
+  children: list[str] = field(default_factory=list)
+  warm_children: list[str] = field(default_factory=list)
 
   @property
   def id(self) -> str:
@@ -50,11 +51,11 @@ class Node:
 class Graph:
   """The placed tree, plus the edges to draw."""
 
-  nodes: Dict[str, Node]
-  order: List[str]
-  config_edges: List[Tuple[str, str]] = field(default_factory=list)
-  warm_edges: List[Tuple[str, str]] = field(default_factory=list)
-  prior_edges: List[Tuple[str, str]] = field(default_factory=list)
+  nodes: dict[str, Node]
+  order: list[str]
+  config_edges: list[tuple[str, str]] = field(default_factory=list)
+  warm_edges: list[tuple[str, str]] = field(default_factory=list)
+  prior_edges: list[tuple[str, str]] = field(default_factory=list)
 
   @property
   def lanes(self) -> int:
@@ -64,7 +65,7 @@ class Graph:
   def rows(self) -> int:
     return len(self.order)
 
-  def recipe(self, record_id: str) -> List[Tuple[str, List[str]]]:
+  def recipe(self, record_id: str) -> list[tuple[str, list[str]]]:
     """The fold of changes from the root to ``record_id``."""
     return fold_recipe(record_id, {k: n.record for k, n in self.nodes.items()})
 
@@ -74,9 +75,9 @@ def build(records: Sequence[RunRecord]) -> Graph:
   ordered = sorted(records, key=lambda r: (r.seq, r.id))
   by_id = {r.id: r for r in ordered}
 
-  depths: Dict[str, int] = {}
+  depths: dict[str, int] = {}
 
-  def depth_of(record: RunRecord, seen: Optional[set] = None) -> int:
+  def depth_of(record: RunRecord, seen: set | None = None) -> int:
     seen = seen or set()
     if record.id in depths:
       return depths[record.id]
@@ -95,14 +96,14 @@ def build(records: Sequence[RunRecord]) -> Graph:
   # forks into a lane that nothing else is still using. Without the release step
   # a long linear history drifts diagonally forever; without the first-child
   # rule every run forks.
-  pending: Dict[str, int] = {r.id: 0 for r in ordered}
+  pending: dict[str, int] = {r.id: 0 for r in ordered}
   for record in ordered:
     if record.parent in pending:
       pending[record.parent] += 1
 
-  nodes: Dict[str, Node] = {}
-  lane_of: Dict[str, int] = {}
-  lane_debt: Dict[int, set] = {}
+  nodes: dict[str, Node] = {}
+  lane_of: dict[str, int] = {}
+  lane_debt: dict[int, set] = {}
   continued: set = set()
 
   def free_lane() -> int:
@@ -146,9 +147,9 @@ def build(records: Sequence[RunRecord]) -> Graph:
   return graph
 
 
-def summarize(graph: Graph) -> Dict[str, Any]:
+def summarize(graph: Graph) -> dict[str, Any]:
   """Counts an agent can read without rendering anything."""
-  counts: Dict[str, int] = {}
+  counts: dict[str, int] = {}
   for node in graph.nodes.values():
     counts[node.record.verdict] = counts.get(node.record.verdict, 0) + 1
   roots = [i for i, n in graph.nodes.items() if not n.record.parent]
@@ -167,7 +168,7 @@ def summarize(graph: Graph) -> Dict[str, Any]:
   }
 
 
-def frontier(graph: Graph, max_children: int = 1) -> List[str]:
+def frontier(graph: Graph, max_children: int = 1) -> list[str]:
   """Nodes worth expanding: a result, and not yet branched from.
 
   The query an orchestrator asks when it is choosing where to spend the next
@@ -182,7 +183,7 @@ def frontier(graph: Graph, max_children: int = 1) -> List[str]:
   return sorted(out, key=lambda i: graph.nodes[i].row)
 
 
-def headline_video(record: RunRecord) -> Optional[List[str]]:
+def headline_video(record: RunRecord) -> list[str] | None:
   """The clip that stands for the run: the last video attached to it.
 
   Last rather than first because attachments arrive in time order, so the last
@@ -195,7 +196,7 @@ def headline_video(record: RunRecord) -> Optional[List[str]]:
 
 
 def _clip_of(record: RunRecord,
-             posters: Optional[Dict[str, str]] = None) -> Optional[Dict[str, str]]:
+             posters: dict[str, str] | None = None) -> dict[str, str] | None:
   """The headline clip with its still, or None for a run nobody filmed.
 
   ``posters`` maps a video key to a poster key -- see
@@ -217,7 +218,7 @@ def _clip_of(record: RunRecord,
 
 
 def to_payload(graph: Graph,
-               posters: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+               posters: dict[str, str] | None = None) -> list[dict[str, Any]]:
   """Everything a viewer needs, with the derived bits derived here."""
   payload = []
   for node_id in graph.order:

@@ -39,6 +39,8 @@ from typing import Any
 # ``MCPServer`` in mcp>=2, ``FastMCP`` in mcp 1.x, and the standalone ``fastmcp``
 # package outside the official SDK. The surface we use (tool/resource decorators,
 # Image, run) is the same in all three.
+from rlmcp.session import Session, iter_sessions
+
 SDK_MISSING = (
     "No MCP server SDK found in this interpreter. Install one with "
     "`pip install mcp` (or `uv pip install mcp`) -- it is deliberately an "
@@ -65,8 +67,6 @@ except ImportError:
       Image = None  # type: ignore[assignment]
 
 MCPServer = _Server
-
-from rlmcp.session import Session, iter_sessions
 
 DEFAULT_TIMEOUT = 180.0
 
@@ -149,7 +149,8 @@ def _dead_error(session: Session, live: dict[str, Any], cmd: str) -> dict[str, A
   return out
 
 
-def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT, **args: Any) -> dict[str, Any]:
+def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT,
+          **args: Any) -> dict[str, Any]:
   """Send ``cmd`` to the pinned trainer; refuse up front when it is dead.
 
   "Dead" here is :meth:`Session.liveness`, not the bare pid: a pid that exists

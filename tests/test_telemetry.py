@@ -100,7 +100,9 @@ def test_non_floatable_values_are_reported_once_per_key():
 
 def test_plot_metric_series_closes_its_figure_when_data_is_bad():
   before = set(plt.get_fignums())
-  with pytest.raises(Exception):
+  # Any exception: the assertion under test is that the figure is closed
+  # whichever way matplotlib chooses to reject the data.
+  with pytest.raises(Exception):  # noqa: B017
     plotter.plot_metric_series({"a": [(0, object())]})  # Not plottable.
   assert set(plt.get_fignums()) == before
 

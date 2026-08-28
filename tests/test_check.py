@@ -307,8 +307,10 @@ class FakeVecEnv(FakeEnv):
   num_actions = 3
 
 
-def _fake_build(monkeypatch, agent_cfg=FakeAgentCfg(), **env_kwargs):
+def _fake_build(monkeypatch, agent_cfg=None, **env_kwargs):
   """Stand in for `build_env`, which would want a simulator."""
+  if agent_cfg is None:
+    agent_cfg = FakeAgentCfg()
   import rlmcp.play as play
 
   vec_env = FakeVecEnv(**env_kwargs)

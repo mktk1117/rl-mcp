@@ -145,8 +145,8 @@ def read_events(session_dir: Path | str) -> list[dict[str, Any]]:
   if not path.exists():
     return []
   events: list[dict[str, Any]] = []
-  for line in path.read_text(errors="replace").splitlines():
-    line = line.strip()
+  for raw in path.read_text(errors="replace").splitlines():
+    line = raw.strip()
     if not line:
       continue
     try:

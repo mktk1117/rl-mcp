@@ -91,9 +91,10 @@ def register(
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:6]}.tmp")
     tmp.write_text(json.dumps(payload, indent=2))
     os.replace(tmp, path)
-    return path
   except Exception:
     return None
+  else:
+    return path
 
 
 def _pid_alive(pid: Any) -> bool:

@@ -58,8 +58,8 @@ def packages_to_import(explicit: list[str] | tuple[str, ...] = ()) -> list[str]:
   it finds is a listing that can execute code nobody asked it to.
   """
   found = [name for name in explicit if name]
-  for name in os.environ.get(TASK_PACKAGES_ENV, "").split(","):
-    name = name.strip()
+  for raw in os.environ.get(TASK_PACKAGES_ENV, "").split(","):
+    name = raw.strip()
     if name and name not in found:
       found.append(name)
   return found

@@ -267,8 +267,8 @@ def packages_to_import(cfg: PlayConfig) -> list[str]:
   imports what it was told to import, and says so plainly when that is nothing.
   """
   found = list(cfg.task_package)
-  for name in os.environ.get(TASK_PACKAGES_ENV, "").split(","):
-    name = name.strip()
+  for raw in os.environ.get(TASK_PACKAGES_ENV, "").split(","):
+    name = raw.strip()
     if name and name not in found:
       found.append(name)
   return found
@@ -960,9 +960,9 @@ def _restore_conditions(
     conditions = with_overrides(
         Conditions(
             warnings=(
-                "No rlmcp session found next to this checkpoint, so there is "
-                "nothing to replay: the environment runs at the task's own play "
-                "configuration, which is rung zero of any curriculum.",
+                ("No rlmcp session found next to this checkpoint, so there is "
+                 "nothing to replay: the environment runs at the task's own play "
+                 "configuration, which is rung zero of any curriculum."),
             )
         ),
         cfg.overrides,

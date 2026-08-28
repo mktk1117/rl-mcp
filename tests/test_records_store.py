@@ -153,7 +153,8 @@ def test_an_asset_is_copied_out_of_its_session(tmp_path, store):
   assert store.media.exists(key)
   frame.unlink()  # the session goes away
   assert store.media.exists(key)  # the record does not
-  assert open(store.media.get(key), "rb").read() == b"\x89PNG fake"
+  with open(store.media.get(key), "rb") as fh:
+    assert fh.read() == b"\x89PNG fake"
 
 
 def test_recording_a_missing_asset_is_an_error(store):

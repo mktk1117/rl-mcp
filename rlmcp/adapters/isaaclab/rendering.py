@@ -141,10 +141,10 @@ def _aim_viewport(env: Any, env_index: int,
   # Follow the robot when we know which one it is: on a locomotion task the env
   # origin is where the robot started, not where it is now. The env origin is
   # still one environment rather than the whole grid.
-  if not _apply(controller, _Anchor("asset_root", env_index, robot_name)):
-    if not _apply(controller, _Anchor("env", env_index)):
-      viewer.env_index = previous.env_index
-      return None
+  if (not _apply(controller, _Anchor("asset_root", env_index, robot_name))
+      and not _apply(controller, _Anchor("env", env_index))):
+    viewer.env_index = previous.env_index
+    return None
 
   def restore() -> None:
     viewer.env_index = previous.env_index

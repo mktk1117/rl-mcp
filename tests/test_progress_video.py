@@ -375,7 +375,7 @@ def test_the_trainer_gets_past_its_import_and_reports_an_unknown_task():
 
   done = subprocess.run(
       [sys.executable, "-m", "rlmcp.train", "No-Such-Task-Here"],
-      capture_output=True, text=True, timeout=180)
+      capture_output=True, text=True, timeout=180, check=False)
 
   assert "ImportError" not in done.stderr, done.stderr[-400:]
   assert "cannot import name" not in done.stderr, done.stderr[-400:]

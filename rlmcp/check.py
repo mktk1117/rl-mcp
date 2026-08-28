@@ -239,7 +239,8 @@ def roll(vec_env: Any, adapter: Any, policy: Any, steps: int) -> dict[str, Any]:
 
     completed = step + 1
     with torch.no_grad():
-      mean_reward = float(reward.float().mean().item()) if hasattr(reward, "float") else float(reward)
+      mean_reward = (float(reward.float().mean().item())
+                     if hasattr(reward, "float") else float(reward))
       done_now = int(done.sum().item()) if hasattr(done, "sum") else int(bool(done))
     if not _finite(mean_reward):
       nonfinite.append(f"total reward at step {completed}")
@@ -552,7 +553,7 @@ def run_check(cfg: CheckConfig) -> dict[str, Any]:
 
   try:
     try:
-      env, lab, agent_cfg, vec_env = build_env(play_cfg, cfg.task, None)
+      _env, lab, agent_cfg, vec_env = build_env(play_cfg, cfg.task, None)
     except PlayError as exc:
       # Everything `build_env` refuses is one of the first two gates, and it
       # already says which: an unknown task and a package that will not import
@@ -627,7 +628,7 @@ def _describe_env(lab: Any, vec_env: Any, num_envs: int) -> dict[str, Any]:
       "num_envs": num_envs,
       "step_dt": _try(lambda: float(lab.sim.step_dt())),
       "actions": _try(lambda: int(vec_env.num_actions)),
-      # noqa, and not a style question: the lambda is what puts the attribute
+      # The lambda is load-bearing, not decoration: it is what puts the attribute
       # lookup inside _try's guard. Unwrapped, it is evaluated eagerly at the
       # call and an adapter that lacks the attribute raises instead of
       # reporting "unknown".

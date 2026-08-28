@@ -20,9 +20,10 @@ the curriculum advancing.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, List
+from collections.abc import Callable, Iterable
+from typing import Any
 
-KINDS: Dict[str, str] = {
+KINDS: dict[str, str] = {
     "set_parameter": "parameter",
     "reset_parameters": "parameter",
     "curriculum_stage": "curriculum",
@@ -42,7 +43,7 @@ decided.
 """
 
 
-def _phrase(event: Dict[str, Any]) -> str:
+def _phrase(event: dict[str, Any]) -> str:
   """One line saying what was done, in the run's own vocabulary."""
   kind = event.get("kind")
   if kind == "set_parameter":
@@ -68,7 +69,7 @@ def _phrase(event: Dict[str, Any]) -> str:
   return str(kind)
 
 
-def _why(event: Dict[str, Any]) -> str:
+def _why(event: dict[str, Any]) -> str:
   for key in ("rationale", "reason", "why"):
     value = event.get(key)
     if value:
@@ -76,14 +77,14 @@ def _why(event: Dict[str, Any]) -> str:
   return ""
 
 
-def from_events(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def from_events(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
   """The interventions in an event log, oldest first.
 
   Each is ``{iteration, kind, layer, what, why, at}`` -- enough for a timeline
   beside a metric chart, and the same shape a recipe distiller reads to turn a
   history of ad-hoc edits into a ladder.
   """
-  out: List[Dict[str, Any]] = []
+  out: list[dict[str, Any]] = []
   for event in events:
     if not isinstance(event, dict):
       continue
@@ -106,7 +107,7 @@ def from_events(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def from_session(session_dir: Any, reader: Callable[..., Any] | None = None
-                 ) -> List[Dict[str, Any]]:
+                 ) -> list[dict[str, Any]]:
   """The interventions of one run, read through rlmcp's own session reader."""
   from rlmcp.session import Session
 

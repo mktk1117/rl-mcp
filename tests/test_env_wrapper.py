@@ -15,7 +15,7 @@ constructor runs.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from test_access import FakeEnv
@@ -25,7 +25,7 @@ from rlmcp.core.curriculum import CurriculumStage, StageSchedule
 
 class _Robot:
   is_articulated = True
-  joint_names = ["a_joint", "b_joint"]
+  joint_names: ClassVar[list[str]] = ["a_joint", "b_joint"]
 
 
 class _Scene(dict):

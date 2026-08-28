@@ -41,7 +41,7 @@ import os
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 REF_PREFIX = "refs/rlmcp/runs"
 """Where snapshot trees are anchored so ``git gc`` keeps them."""
@@ -54,12 +54,13 @@ class SnapshotError(RuntimeError):
   """A git command that was expected to work did not."""
 
 
-def _git(repo: Path, *args: str, env: Optional[Dict[str, str]] = None) -> str:
+def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
   """Run one git command in ``repo`` and return its stdout."""
   result = subprocess.run(
       ["git", "-C", str(repo), *args],
       capture_output=True, text=True,
       env={**os.environ, **(env or {})},
+      check=False,  # The returncode is read below, with the stderr in the message.
   )
   if result.returncode != 0:
     raise SnapshotError(
@@ -67,7 +68,7 @@ def _git(repo: Path, *args: str, env: Optional[Dict[str, str]] = None) -> str:
   return result.stdout.strip()
 
 
-def repo_of(path: Path | str) -> Optional[Path]:
+def repo_of(path: Path | str) -> Path | None:
   """The git repository ``path`` lives in, or None."""
   directory = Path(path).expanduser().resolve()
   if not directory.is_dir():
@@ -78,7 +79,7 @@ def repo_of(path: Path | str) -> Optional[Path]:
     return None
 
 
-def head_of(repo: Path) -> Optional[Dict[str, Any]]:
+def head_of(repo: Path) -> dict[str, Any] | None:
   """The commit a reader would cite, or None in a repo with no commits yet."""
   try:
     commit = _git(repo, "rev-parse", "HEAD")
@@ -98,7 +99,7 @@ def head_of(repo: Path) -> Optional[Dict[str, Any]]:
   }
 
 
-def capture(package: Path | str, record_id: str = "") -> Dict[str, Any]:
+def capture(package: Path | str, record_id: str = "") -> dict[str, Any]:
   """Stamp ``package`` as it is right now. Never raises.
 
   Returns the ``code`` payload a record stores: ``head``, ``tree``, ``dirty``
@@ -159,7 +160,7 @@ def _write_tree(repo: Path, scope: str) -> str:
 
 
 def diff(repo: Path | str, before: str, after: str,
-         scope: str = "") -> Dict[str, Any]:
+         scope: str = "") -> dict[str, Any]:
   """Per-file line counts between two trees.
 
   Whitespace-only changes are marked ``trivial`` rather than dropped: deciding
@@ -175,7 +176,7 @@ def diff(repo: Path | str, before: str, after: str,
       for line in _git(repo, "diff", "-w", "--numstat", before, after,
                        *paths).split("\n") if line.strip()
   }
-  files: List[Dict[str, Any]] = []
+  files: list[dict[str, Any]] = []
   added = removed = 0
   for line in numstat.split("\n"):
     if not line.strip():

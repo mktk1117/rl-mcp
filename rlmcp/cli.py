@@ -597,6 +597,7 @@ def _record_command(args: argparse.Namespace) -> int:
 
       fresh.verdict = args.verdict
       fresh.lease = None
+      return None  # Anything but False: write the record.
 
     try:
       closed = store.update_record(record.id, close_out)
@@ -992,7 +993,8 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("params", help="List tunable parameters")
   p.add_argument("--contains")
   p.add_argument("--category")
-  p.add_argument("--live", action="store_true", help="Ask the trainer instead of reading params.json")
+  p.add_argument("--live", action="store_true",
+                 help="Ask the trainer instead of reading params.json")
 
   p = sub.add_parser("get", help="Read one parameter")
   p.add_argument("key")
@@ -1182,7 +1184,8 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument("--why", default="")
 
   rec = sub.add_parser("record", help="Run records: plans, outcomes, ancestry")
-  rec.add_argument("--records-root", help="Records directory (default: $RLMCP_RECORDS or ./records)")
+  rec.add_argument("--records-root",
+                   help="Records directory (default: $RLMCP_RECORDS or ./records)")
   rec.add_argument("--slots", type=int, default=1,
                    help="How many runs may hold a lease at once (default: 1)")
   record_sub = rec.add_subparsers(dest="record_command", required=True)

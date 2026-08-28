@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -81,10 +82,9 @@ class TelemetryBuffer:
         row[key] = f_val
     if self._on_drop is not None:
       for key, val in dropped:
-        try:
+        # A broken sink must not take the push down.
+        with contextlib.suppress(Exception):
           self._on_drop(key, val)
-        except Exception:
-          pass  # A broken sink must not take the push down.
 
   def get_series(
       self, metric_name: str, last_n: int | None = None

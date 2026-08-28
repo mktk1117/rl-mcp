@@ -155,8 +155,8 @@ def read_jsonl(path: Path, last_n: int | None = None) -> list[Any]:
   except OSError:
     return []
   out: list[Any] = []
-  for line in lines:
-    line = line.strip()
+  for raw in lines:
+    line = raw.strip()
     if not line:
       continue
     try:

@@ -29,8 +29,8 @@ def _console_scripts() -> dict:
                     _pyproject_text(), re.S | re.M)
   assert block, "pyproject.toml has no [project.scripts] table"
   entries = {}
-  for line in block.group(1).splitlines():
-    line = line.strip()
+  for raw in block.group(1).splitlines():
+    line = raw.strip()
     if not line or line.startswith("#"):
       continue
     name, _, target = line.partition("=")

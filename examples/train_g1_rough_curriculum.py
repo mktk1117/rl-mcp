@@ -173,7 +173,8 @@ def main() -> int:
   configure_torch_backends()
   log_dir = (
       Path(args.log_root) / agent_cfg.experiment_name
-      / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_g1_rough")
+      # Local time deliberately: a person has to find this in a listing.
+      / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_g1_rough")  # noqa: DTZ005
   ).resolve()
   log_dir.mkdir(parents=True, exist_ok=True)
 

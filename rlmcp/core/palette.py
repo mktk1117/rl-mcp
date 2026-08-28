@@ -45,7 +45,7 @@ def rgba_distance(a: RGBA, b: RGBA) -> float:
   the same hue is exactly the confusion this is here to prevent.
   """
   weights = (0.30, 0.59, 0.11)
-  return sum(w * (float(x) - float(y)) ** 2 for w, x, y in zip(weights, a, b)) ** 0.5
+  return sum(w * (float(x) - float(y)) ** 2 for w, x, y in zip(weights, a, b, strict=False)) ** 0.5
 
 
 def find_collisions(

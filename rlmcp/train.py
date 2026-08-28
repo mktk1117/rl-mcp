@@ -210,7 +210,9 @@ def main(argv: list[str] | None = None) -> int:
   configure_torch_backends()
 
   log_root = (Path(args.log_root) / agent_cfg.experiment_name).resolve()
-  run_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+  # Local time deliberately: this becomes a directory name somebody has to
+  # find in a listing.
+  run_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")  # noqa: DTZ005
   if args.run_name:
     run_dir += f"_{args.run_name}"
   log_dir = log_root / run_dir

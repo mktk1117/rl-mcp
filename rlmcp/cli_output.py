@@ -147,7 +147,9 @@ def format_scalar(value: Any, key: str = "") -> str:
   if isinstance(value, bool):
     return "true" if value else "false"
   if _looks_like_epoch(key, value):
-    return _dt.datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+    # Local time deliberately: this is a timestamp being formatted for a
+    # person reading a terminal, not one being stored.
+    return _dt.datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ006
   if isinstance(value, float):
     return f"{value:.6g}"
   return str(value)

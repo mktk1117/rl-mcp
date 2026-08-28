@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 import torch
 
@@ -40,7 +40,7 @@ from rlmcp.core.controller import RlMcp, SessionStopped
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.extensions import discover as discover_extensions
 
-CurriculumArg = Union[None, str, StageSchedule, Sequence[Any]]
+CurriculumArg = None | str | StageSchedule | Sequence[Any]
 
 
 def serve_a_live_view(viser: bool | None, session_kind: str) -> bool:
@@ -305,14 +305,14 @@ class RlMcpEnvWrapper:
     """Sum mjlab's episode logs on-device; convert once per iteration."""
     if not log:
       return
-    for key, value in log.items():
-      if torch.is_tensor(value):
-        value = value.detach().reshape(-1)
+    for key, raw in log.items():
+      if torch.is_tensor(raw):
+        value = raw.detach().reshape(-1)
         if value.numel() == 0:
           continue
         value = value.mean() if value.numel() > 1 else value.reshape(())
-      elif isinstance(value, (int, float)):
-        value = torch.tensor(float(value))
+      elif isinstance(raw, (int, float)):
+        value = torch.tensor(float(raw))
       else:
         continue
       if key in self._log_sums:

@@ -16,7 +16,7 @@ import json
 import sys
 import types
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -854,7 +854,7 @@ def test_the_policy_choice_round_trips_through_the_command_line():
 class _RecordingViewer:
   """A stand-in for mjlab's viewer that remembers how it was built."""
 
-  seen: dict[str, Any] = {}
+  seen: ClassVar[dict[str, Any]] = {}
 
   def __init__(self, vec_env, policy, **kwargs):
     _RecordingViewer.seen = dict(kwargs)

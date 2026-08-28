@@ -14,8 +14,9 @@ video nobody can order is still a video somebody should be able to watch.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from rlmcp.records.record import RunRecord
 
@@ -32,7 +33,7 @@ def caption_for(iteration: int) -> str:
   return f"iteration {int(iteration)}"
 
 
-def iteration_of(*candidates: Any) -> Optional[int]:
+def iteration_of(*candidates: Any) -> int | None:
   """The iteration named by a caption or a filename, first answer wins."""
   for candidate in candidates:
     if candidate is None:
@@ -56,9 +57,9 @@ def is_progress_clip(key: str) -> bool:
 
 def from_record(
     record: RunRecord,
-    posters: Optional[Dict[str, str]] = None,
+    posters: dict[str, str] | None = None,
     kind: str = "videos",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
   """One entry per attached clip, ordered by the iteration it is of.
 
   Plain dicts -- ``key``, ``caption``, ``iteration``, ``poster``,
@@ -67,7 +68,7 @@ def from_record(
   :func:`rlmcp.records.poster.record_posters` returns.
   """
   posters = posters or {}
-  out: List[Dict[str, Any]] = []
+  out: list[dict[str, Any]] = []
   for entry in (record.assets or {}).get(kind) or []:
     if not entry:
       continue
@@ -83,7 +84,7 @@ def from_record(
   return order(out)
 
 
-def order(clips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def order(clips: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
   """Sort clips by iteration, with the un-orderable ones kept at the end."""
   return sorted(
       clips,

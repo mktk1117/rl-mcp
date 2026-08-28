@@ -28,9 +28,9 @@ def rlmcp_imports(path: Path) -> list[tuple[str, list[str]]]:
       for alias in node.names:
         if alias.name == "rlmcp" or alias.name.startswith("rlmcp."):
           out.append((alias.name, []))
-    elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-      if node.module == "rlmcp" or node.module.startswith("rlmcp."):
-        out.append((node.module, [alias.name for alias in node.names]))
+    elif (isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+          and (node.module == "rlmcp" or node.module.startswith("rlmcp."))):
+      out.append((node.module, [alias.name for alias in node.names]))
   return out
 
 

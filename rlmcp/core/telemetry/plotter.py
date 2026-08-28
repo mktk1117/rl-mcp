@@ -77,7 +77,7 @@ def plot_metric_series(
   try:
     flat = axes.flatten()
 
-    for ax, (name, points) in zip(flat, populated):
+    for ax, (name, points) in zip(flat, populated, strict=False):
       xs = np.array([p[0] for p in points], dtype=np.float64)
       ys = np.array([p[1] for p in points], dtype=np.float64)
       ax.plot(xs, ys, color=_LINE, linewidth=1.0,
@@ -168,7 +168,7 @@ def plot_trace(
   try:
     flat = axes.flatten()
 
-    for ax, channel in zip(flat, channels):
+    for ax, channel in zip(flat, channels, strict=False):
       values = np.atleast_2d(data[channel])
       if values.shape[0] != time.shape[0] and values.shape[1] == time.shape[0]:
         values = values.T

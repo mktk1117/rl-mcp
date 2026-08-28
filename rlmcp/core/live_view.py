@@ -123,9 +123,10 @@ def find_free_port(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
       probe.bind((host, candidate))
-      return candidate
     except OSError:
       continue
+    else:
+      return candidate
     finally:
       probe.close()
   raise RuntimeError(

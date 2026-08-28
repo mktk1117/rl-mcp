@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from rlmcp.records.record import Falsifier, RunRecord
 
@@ -40,7 +40,7 @@ def _section(text: str, pattern: re.Pattern) -> str:
   return body[:800]
 
 
-def read_record(path: Path) -> Optional[RunRecord]:
+def read_record(path: Path) -> RunRecord | None:
   """Load one ``meta.json``, enriching it from a sibling ``PLAN.md``."""
   try:
     payload = json.loads(path.read_text())
@@ -68,14 +68,14 @@ def read_record(path: Path) -> Optional[RunRecord]:
   return record
 
 
-def find_records(source: Path) -> List[Path]:
+def find_records(source: Path) -> list[Path]:
   """Every record file under ``source``, in both layouts."""
   return sorted(source.glob("*/meta.json")) + sorted(source.glob("legacy/*.json"))
 
 
 def import_records(
     store: Any, source: str | Path, dry_run: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
   """Copy records from another store into this one, ids intact."""
   source = Path(source).expanduser().resolve()
   if not source.exists():

@@ -41,10 +41,11 @@ import sqlite3
 import sys
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Callable, Iterator, List, Optional, Tuple
+from typing import Any
 
-from rlmcp.records.record import FEEDBACK_KINDS, Feedback, RunRecord, Lease, slugify
+from rlmcp.records.record import FEEDBACK_KINDS, Feedback, Lease, RunRecord, slugify
 from rlmcp.records.store import ConflictError, MediaStore, SlotUnavailable, StoreError
 
 INDEX_NAME = "index.sqlite"
@@ -183,13 +184,13 @@ class FileMediaStore(MediaStore):
       shutil.copy2(source, target)
     return str(target.relative_to(self.root))
 
-  def _resolve(self, key: str) -> Optional[Path]:
+  def _resolve(self, key: str) -> Path | None:
     """The path for ``key``, or None when the key points outside the store."""
     root = self.root.resolve()
     candidate = (root / key).resolve()
     return candidate if candidate.is_relative_to(root) else None
 
-  def get(self, key: str) -> Optional[str]:
+  def get(self, key: str) -> str | None:
     candidate = self._resolve(key)
     return str(candidate) if candidate is not None and candidate.exists() else None
 
@@ -227,7 +228,7 @@ class FileStore:
     slug = _safe_component(record.slug, "slug")
     return self.runs_dir / f"{rid}-{slug}"
 
-  def _find_dir(self, record_id: str) -> Optional[Path]:
+  def _find_dir(self, record_id: str) -> Path | None:
     rid = _safe_component(record_id, "record id")
     matches = sorted(self.runs_dir.glob(f"{rid}-*"))
     if len(matches) > 1:
@@ -383,7 +384,7 @@ class FileStore:
         floor = max(floor, int(candidate))
     return floor
 
-  def _allocate(self, conn: sqlite3.Connection) -> Tuple[str, int]:
+  def _allocate(self, conn: sqlite3.Connection) -> tuple[str, int]:
     """The next id and seq, under the write lock.
 
     The id clears three floors: the counter, the run directories (which is
@@ -428,11 +429,11 @@ class FileStore:
     if meta.exists():
       try:
         found = int(json.loads(meta.read_text()).get("version", 0))
-      except (KeyError, TypeError, ValueError):
+      except (KeyError, TypeError, ValueError) as exc:
         raise StoreError(
             f"Refusing to overwrite {meta}: the file there does not parse. "
             "Repair or remove it; its id stays reserved either way."
-        )
+        ) from exc
       if found != record.version:
         raise ConflictError(record.id, record.version, found)
     # The record owns its mutable fields once written: a caller mutating the
@@ -456,7 +457,7 @@ class FileStore:
       record_id: str,
       mutate: Callable[[RunRecord], Any],
       retries: int = 3,
-  ) -> Optional[RunRecord]:
+  ) -> RunRecord | None:
     """Re-read, apply ``mutate``, persist; retry when a writer got in between.
 
     ``mutate`` edits the record in place; returning ``False`` aborts without
@@ -464,7 +465,7 @@ class FileStore:
     :class:`ConflictError` is allowed out -- at that point the record is
     genuinely contended and the caller should know.
     """
-    conflict: Optional[ConflictError] = None
+    conflict: ConflictError | None = None
     for _ in range(max(0, int(retries)) + 1):
       record = self.get_record(record_id)
       if record is None:
@@ -477,7 +478,7 @@ class FileStore:
         conflict = exc
     raise conflict  # type: ignore[misc]  # At least one attempt always ran.
 
-  def _read_meta(self, path: Path) -> Optional[RunRecord]:
+  def _read_meta(self, path: Path) -> RunRecord | None:
     """Parse one record file, or warn once and skip it.
 
     ``json.JSONDecodeError`` is a ``ValueError``; ``TypeError`` and
@@ -497,7 +498,7 @@ class FileStore:
         _warn(f"skipping corrupt record {path}: {exc}")
       return None
 
-  def get_record(self, record_id: str) -> Optional[RunRecord]:
+  def get_record(self, record_id: str) -> RunRecord | None:
     directory = self._find_dir(record_id)
     if directory is None:
       return None
@@ -506,7 +507,7 @@ class FileStore:
       return None
     return self._read_meta(meta)
 
-  def list_records(self) -> List[RunRecord]:
+  def list_records(self) -> list[RunRecord]:
     records = []
     for meta in self.runs_dir.glob("*/meta.json"):
       record = self._read_meta(meta)
@@ -516,13 +517,13 @@ class FileStore:
 
   def query(
       self,
-      stage: Optional[str] = None,
-      verdict: Optional[str] = None,
-      parent: Optional[str] = None,
-      proposed_by: Optional[str] = None,
-      text: Optional[str] = None,
-      limit: Optional[int] = None,
-  ) -> List[RunRecord]:
+      stage: str | None = None,
+      verdict: str | None = None,
+      parent: str | None = None,
+      proposed_by: str | None = None,
+      text: str | None = None,
+      limit: int | None = None,
+  ) -> list[RunRecord]:
     clauses, params = [], []
     for column, value in (
         ("stage", stage), ("verdict", verdict),
@@ -614,6 +615,7 @@ class FileStore:
       entry = fresh.feedback[index]
       entry.response = response
       entry.changed = bool(changed)
+      return None  # Anything but False: write the record.
 
     updated = self.update_record(record_id, answer)
     if updated is None:
@@ -622,11 +624,11 @@ class FileStore:
 
   def feedback_timeline(
       self,
-      kind: Optional[str] = None,
-      author: Optional[str] = None,
+      kind: str | None = None,
+      author: str | None = None,
       outstanding: bool = False,
-      limit: Optional[int] = None,
-  ) -> List[dict]:
+      limit: int | None = None,
+  ) -> list[dict]:
     """Every remark in the store, oldest first."""
     clauses, params = [], []
     if kind is not None:
@@ -663,7 +665,7 @@ class FileStore:
 
   # Documents.
 
-  def write_document(self, record_id: str, name: str, text: str) -> Optional[Path]:
+  def write_document(self, record_id: str, name: str, text: str) -> Path | None:
     """Write PLAN.md / REPORT.md next to the record."""
     directory = self._find_dir(record_id)
     if directory is None:
@@ -672,7 +674,7 @@ class FileStore:
     _atomic_write(path, text)
     return path
 
-  def read_document(self, record_id: str, name: str) -> Optional[str]:
+  def read_document(self, record_id: str, name: str) -> str | None:
     directory = self._find_dir(record_id)
     if directory is None:
       return None
@@ -687,7 +689,7 @@ class FileStore:
       slot: str,
       holder: str = "",
       ttl_seconds: float = 900.0,
-      owner: Optional[str] = None,
+      owner: str | None = None,
   ) -> RunRecord:
     """Take ``slot`` for this record, or raise :class:`SlotUnavailable`.
 
@@ -730,7 +732,7 @@ class FileStore:
       )
       return self._persist(record, conn)
 
-  def heartbeat(self, record_id: str) -> Optional[RunRecord]:
+  def heartbeat(self, record_id: str) -> RunRecord | None:
     if self.get_record(record_id) is None:
       return None
 
@@ -738,10 +740,11 @@ class FileStore:
       if record.lease is None:
         return False
       record.lease.renewed_at = time.time()
+      return None  # Anything but False: write the record.
 
     return self.update_record(record_id, renew)
 
-  def release(self, record_id: str) -> Optional[RunRecord]:
+  def release(self, record_id: str) -> RunRecord | None:
     if self.get_record(record_id) is None:
       return None
 
@@ -750,7 +753,7 @@ class FileStore:
 
     return self.update_record(record_id, drop)
 
-  def reap_expired(self, stale_running_ttl: float = STALE_RUNNING_TTL) -> List[RunRecord]:
+  def reap_expired(self, stale_running_ttl: float = STALE_RUNNING_TTL) -> list[RunRecord]:
     """A job that died is not a result -- move it out of ``running``.
 
     Three shapes of death, one verdict: ``interrupted`` is the terminal state
@@ -775,6 +778,7 @@ class FileStore:
           if fresh.verdict == "running":
             fresh.verdict = "interrupted"
             fresh.links["reaped"] = cause
+          return None  # Anything but False: write the record.
 
         updated = self.update_record(record.id, expire)
       elif (record.verdict == "running" and record.lease is None
@@ -786,6 +790,7 @@ class FileStore:
             return False
           fresh.verdict = "interrupted"
           fresh.links["reaped"] = "stale-leaseless"
+          return None  # Anything but False: write the record.
 
         updated = self.update_record(record.id, stale)
       else:
@@ -798,7 +803,7 @@ class FileStore:
     return f"FileStore({str(self.root)!r}, slots={self.slots})"
 
 
-def open_store(root: Optional[Path | str] = None, slots: int = 1) -> FileStore:
+def open_store(root: Path | str | None = None, slots: int = 1) -> FileStore:
   """Open (or create) the records.
 
   Resolution order: the argument, ``$RLMCP_RECORDS``, then ``./records`` -- the same

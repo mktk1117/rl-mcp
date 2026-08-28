@@ -194,9 +194,10 @@ class ExtensionRegistry:
     if self._error_sink is not None:
       try:
         self._error_sink(extension_name, hook, message)
-        return
       except Exception:
         pass  # A broken sink must not mask the original failure.
+      else:
+        return
     warnings.warn(
         f"rlmcp extension '{extension_name}' failed in {hook}: {message}",
         RuntimeWarning,

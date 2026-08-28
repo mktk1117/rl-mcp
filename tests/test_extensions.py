@@ -553,7 +553,7 @@ def test_terrain_plan_is_expressed_as_ordinary_stages(terrain_module):
 
 def test_each_terrain_stage_keeps_what_came_before(terrain_module):
   plan = terrain_module.build_terrain_plan(ROUGH, num_levels=10)
-  for earlier, later in zip(plan.stages, plan.stages[1:]):
+  for earlier, later in zip(plan.stages, plan.stages[1:], strict=False):
     assert set(earlier.apply[0].args["terrains"]).issubset(
         set(later.apply[0].args["terrains"])
     )
