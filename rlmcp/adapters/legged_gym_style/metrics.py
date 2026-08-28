@@ -40,6 +40,23 @@ def summary_metrics(env: Any, sampler: Optional[StateSampler] = None) -> Dict[st
     )
 
   def action_rate() -> None:
+    """Only when the environment still holds two different actions.
+
+    Genesis's Go2Env ends `step()` with `last_actions.copy_(actions)`, so by
+    the time rlmcp services a command at the iteration boundary the two buffers
+    are identical and the difference is exactly zero -- not "the policy is
+    smooth", but "the question cannot be asked here". Publishing 0.0 would be a
+    number computed from the wrong signal, and it read as a perfectly smooth
+    policy on a robot that was visibly buzzing.
+
+    Exact equality is the detector rather than a threshold: a real converged
+    policy gets close to zero but not to the bit pattern. A fork that keeps the
+    previous action distinct still gets the metric. Per-step action rate is
+    always available from `trace` and `diagnose`, which record the action
+    channel every step and measure the rate there.
+    """
+    if torch.equal(env.actions, env.last_actions):
+      return
     delta = env.actions - env.last_actions
     out["rlmcp/action_rate_rms"] = float(
         torch.sqrt(torch.mean(delta.float() ** 2)).item()

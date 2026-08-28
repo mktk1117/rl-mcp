@@ -462,15 +462,15 @@ def _verdict(report: Dict[str, Any]) -> List[str]:
           f"The whole body carries high-frequency motion (median {median_share:.2f} of "
           f"joint-velocity power above {smooth.get('hf_cutoff_hz', 8)} Hz across "
           f"{num_joints} joints; worst: {worst}). This is a global smoothness problem "
-          "-- raise action_rate_l2 or lower action.joint_pos.scale_gain rather than "
-          "chasing one joint."
+          "-- raise the action-rate penalty or lower the action scale rather "
+          "than chasing one joint."
       )
     elif buzzing:
       names = ", ".join(b["name"] for b in buzzing[:4])
       lines.append(
           f"{len(buzzing)} of {num_joints} joints stand out above the gait band "
           f"({names}), against a median share of {median_share:.2f} -- localised "
-          "chatter, usually cured by a larger action_rate_l2 penalty or a lower "
+          "chatter, usually cured by a larger action-rate penalty or a lower "
           "action scale."
       )
     else:

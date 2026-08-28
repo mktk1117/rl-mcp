@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import json
 
 import numpy as np
@@ -340,3 +341,21 @@ def test_non_numeric_channel_raises_a_named_error():
 
   with pytest.raises(ValueError, match="ragged_channel"):
     analyze_trace({"joint_pos": pos, "ragged_channel": ragged}, dt=DT)
+
+
+def test_advice_does_not_name_keys_from_one_backends_vocabulary():
+  """`diagnose` runs on every backend, so its advice has to describe the lever
+  rather than name a key that may not exist.
+
+  Found on a real Genesis run: the smoothness verdict told the operator to
+  "raise action_rate_l2 or lower action.joint_pos.scale_gain", which are mjlab
+  term names. On that run the keys were `reward.action_rate.weight` and
+  `action.scale`, so the one actionable sentence in the report pointed at
+  nothing.
+  """
+  source = (Path(__file__).resolve().parent.parent
+            / "rlmcp" / "core" / "diagnostics.py").read_text()
+  for mjlab_key in ("action_rate_l2", "action.joint_pos.scale_gain"):
+    assert mjlab_key not in source, (
+        f"diagnostics advice names '{mjlab_key}', which only exists on mjlab"
+    )

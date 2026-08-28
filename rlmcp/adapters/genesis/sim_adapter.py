@@ -114,7 +114,7 @@ class GenesisSimAdapter(SimAdapter):
       )
     total = self.num_envs()
     if env_ids is None:
-      reset(None)
+      self._reset(reset, None)
       return {"num_reset": total, "env_ids": None}
 
     ids = sorted({int(i) for i in env_ids})
@@ -126,8 +126,26 @@ class GenesisSimAdapter(SimAdapter):
       )
     if not ids:
       return {"num_reset": 0, "env_ids": []}
-    reset(self._mask(ids, total))
+    self._reset(reset, self._mask(ids, total))
     return {"num_reset": len(ids), "env_ids": ids}
+
+  @staticmethod
+  def _reset(reset: Any, mask: Any) -> None:
+    """Reset inside inference mode, because that is where the buffers were made.
+
+    rsl_rl collects rollouts under ``torch.inference_mode()``, so an
+    environment's state buffers are *inference tensors*. Genesis's reset writes
+    them in place, and torch refuses an in-place write to an inference tensor
+    from outside inference mode -- which is exactly where rlmcp services
+    commands from. Without this, `rlmcp reset-envs` fails on a real run with
+    "Inplace update to inference tensor outside InferenceMode is not allowed",
+    while every test against a fake env passes: nothing about a fake makes its
+    tensors inference tensors.
+    """
+    import torch
+
+    with torch.inference_mode():
+      reset(mask)
 
   def _mask(self, ids: List[int], total: int) -> Any:
     import torch

@@ -195,3 +195,55 @@ def test_the_dt_assumption_is_stated_rather_than_left_implicit(
 def test_categories_survive_the_trip_through_the_adapter(sim):
   by_key = {s.key: s for s in sim.discover_parameters()}
   assert by_key["command.lin_vel_x"].category is ParameterCategory.CURRICULUM
+
+
+# Regressions from the first run against real Genesis. Both of these passed on
+# a fake and failed on the robot, so each fake below reproduces the *mechanism*
+# that broke rather than the shape of the fix.
+
+
+def test_resetting_works_on_buffers_made_under_inference_mode(genesis_env):
+  """rsl_rl collects rollouts inside torch.inference_mode().
+
+  That makes the environment's state buffers inference tensors, and torch
+  refuses an in-place write to one from outside inference mode -- which is
+  exactly where rlmcp services commands. On a real run this failed with
+  "Inplace update to inference tensor outside InferenceMode is not allowed";
+  nothing about an ordinary fake tensor reproduces it, so the fake has to be
+  built the way the runner builds them.
+  """
+  with torch.inference_mode():
+    genesis_env.dof_pos = torch.zeros_like(genesis_env.dof_pos)
+    genesis_env.base_pos = torch.zeros_like(genesis_env.base_pos)
+
+  def reset(mask=None):
+    # What Genesis's _reset_idx does: write the buffers in place.
+    genesis_env.dof_pos.zero_()
+    genesis_env.base_pos.zero_()
+    genesis_env.reset_calls.append(mask)
+
+  genesis_env._reset_idx = reset
+  result = GenesisSimAdapter(genesis_env).reset_envs([1])
+  assert result["num_reset"] == 1
+
+
+def test_action_rate_is_omitted_when_the_env_has_already_synced_it(genesis_env):
+  """Go2Env ends step() with last_actions.copy_(actions).
+
+  So at the iteration boundary the two buffers are identical and the rate is
+  exactly zero -- which is not "the policy is smooth" but "the question cannot
+  be asked here". It read as a perfectly smooth policy on a robot that was
+  visibly buzzing.
+  """
+  genesis_env.actions = torch.full_like(genesis_env.actions, 0.4)
+  genesis_env.last_actions = genesis_env.actions.clone()
+  assert "rlmcp/action_rate_rms" not in GenesisSimAdapter(genesis_env).summary_metrics()
+
+
+def test_action_rate_is_reported_when_the_env_does_keep_the_previous_action(
+    genesis_env):
+  """A fork that keeps them distinct still gets the metric."""
+  genesis_env.actions = torch.full_like(genesis_env.actions, 0.4)
+  genesis_env.last_actions = torch.full_like(genesis_env.actions, 0.1)
+  metrics = GenesisSimAdapter(genesis_env).summary_metrics()
+  assert metrics["rlmcp/action_rate_rms"] == pytest.approx(0.3)
