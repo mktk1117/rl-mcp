@@ -84,6 +84,7 @@ class ParameterAccess:
               max_value=item.max_value,
               description=item.description,
               category=self._synthetic_category(item.key),
+              liveness=item.liveness,
           )
       )
     return specs
@@ -116,9 +117,14 @@ class ParameterAccess:
         if rest[: len(t.key.split("."))] == t.key.split(".")
     ]
     if not matches:
+      known = sorted(t.key for t in candidates)
+      served = sorted(k for k in self._synthetic if k.startswith(f"{domain}."))
+      hint = provider.miss_hint(key)
       raise KeyError(
-          f"No {domain} term in '{key}'. Available: "
-          f"{sorted(t.key for t in candidates)}"
+          f"No {domain} term in '{key}'. Available: {known}"
+          + (f"; and these keys, served directly rather than as term fields: "
+             f"{served}" if served else "")
+          + (f". {hint}" if hint else "")
       )
     term, term_parts = max(matches, key=lambda pair: len(pair[1]))
     leaf = rest[len(term_parts) :]
@@ -147,6 +153,7 @@ class ParameterAccess:
     """
     item = self._synthetic.get(key)
     if item is not None:
+      self._refuse_if_not_live(key, item.liveness)
       if not item.setter(value):
         raise RuntimeError(f"Parameter '{key}' could not be applied.")
       return {}
@@ -154,22 +161,7 @@ class ParameterAccess:
     provider, term, parts = self._split(key)
     resolved = paths.resolve(term.root, parts)
     liveness = provider.liveness(term, parts, resolved.read())
-    if liveness is Liveness.AT_STARTUP:
-      raise ValueError(
-          f"Cannot set '{key}': liveness is 'at_startup'. This value is read "
-          "exactly once, when the environment is constructed, so the write "
-          "would report success and then change nothing for the rest of the "
-          "run. Change the task config and restart training instead."
-      )
-    if liveness is Liveness.INERT:
-      raise ValueError(
-          f"Cannot set '{key}': liveness is 'inert'. The term's class "
-          "instance cached this value when it was constructed and never "
-          "re-reads the config, so no write can take effect during this run. "
-          "Change the task config and restart training instead (or give the "
-          "term an update_params(**fields) method that rebuilds its cache, "
-          "which makes the field live)."
-      )
+    self._refuse_if_not_live(key, liveness)
     try:
       written = resolved.write(value)
     except (TypeError, ValueError) as exc:
@@ -192,6 +184,30 @@ class ParameterAccess:
           "reset.",
       )
     return notes
+
+  @staticmethod
+  def _refuse_if_not_live(key: str, liveness: Liveness) -> None:
+    """Reject a write that would report success and then change nothing.
+
+    Checked before anything is mutated, so a refused call leaves the config
+    exactly as it was. Synthetics go through here too: a parameter served by a
+    getter and a setter can still stand in front of a value the environment
+    copied into a tensor at construction and never reads again.
+    """
+    if liveness is Liveness.AT_STARTUP:
+      raise ValueError(
+          f"Cannot set '{key}': liveness is 'at_startup'. This value is read "
+          "exactly once, when the environment is constructed, so the write "
+          "would report success and then change nothing for the rest of the "
+          "run. Change the task config and restart training instead."
+      )
+    if liveness is Liveness.INERT:
+      raise ValueError(
+          f"Cannot set '{key}': liveness is 'inert'. The value was cached when "
+          "the term or the environment was constructed and is never re-read, "
+          "so no write can take effect during this run. Change the task config "
+          "and restart training instead."
+      )
 
   @staticmethod
   def _notify_class_term(term: Term, parts: List[str], value: Any) -> None:

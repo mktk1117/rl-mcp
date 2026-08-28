@@ -107,6 +107,11 @@ class Synthetic:
   data_type: str = "float"
   min_value: Optional[float] = None
   max_value: Optional[float] = None
+  liveness: Liveness = Liveness.LIVE
+  """When a write here reaches the run. A synthetic is usually live -- it is
+  written to stand in front of something live -- but not always: a flat config
+  bag holds values that were copied into tensors at construction, and those are
+  refused for the same reason a startup event term is."""
 
 
 class AccessProvider:
@@ -151,6 +156,17 @@ class AccessProvider:
       self, term: Term, parts: Sequence[str], value: Any
   ) -> Tuple[Optional[float], Optional[float]]:
     return None, None
+
+  def miss_hint(self, key: str) -> str:
+    """Anything worth adding when a key in this domain matches nothing.
+
+    Listing what exists answers "which one did you mean". It does not answer
+    "why is the one I want not there", and for some families that has a real
+    answer -- a reward term bound once at construction cannot be added later,
+    however sensible the name looks. A provider that knows such a reason says
+    it here; the default is to say nothing.
+    """
+    return ""
 
   def liveness(self, term: Term, parts: Sequence[str], value: Any) -> Liveness:
     """When a write to this leaf actually reaches the running simulation.
