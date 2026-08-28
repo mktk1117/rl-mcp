@@ -100,9 +100,9 @@ output. Present and the command is not `record`, take `"result"` on success and
 
 ## `check`
 
-Build the task, roll it with no policy, and answer the five questions that
-decide whether training it is worth a GPU. Everything else here talks to a run;
-this runs before one exists.
+Build the task, roll it with no policy, build the runner a training run would
+build, and answer the six questions that decide whether training it is worth a
+GPU. Everything else here talks to a run; this runs before one exists.
 
 ```bash
 rlmcp check --task Mjlab-Velocity-Rough-Unitree-G1
@@ -117,6 +117,7 @@ constructs      true  8 env(s) on cuda:0          5.97 s
 steps           true  40 of 40 steps
 rewards_finite  true  6 terms, all finite
 terminations    true  0.6 episodes per env
+trains          true  1 iteration of 24 steps/env 0.71 s
 
 term              mean      share
 alive             2.98      0.83
@@ -131,6 +132,7 @@ joint_acc_l2     -0.18      0.05
 | `steps` | an env that dies on step 1 |
 | `rewards_finite` | a NaN, a divide by zero, an exploding scale |
 | `terminations` | everything ending at once, or nothing ever ending |
+| `trains` | a runner that will not build, or dies at iteration 0 |
 
 A gate that fails **stops the ones after it**, and they report `not run` rather
 than passing — a "reward is NaN" line under "the env would not construct" sends
@@ -145,6 +147,43 @@ you to fix a reward that was never the problem. Exit code is the verdict, so
 | `--device` | `cpu` by default, so a check never queues behind a run |
 | `--task-package MODULE` | import this first, so your tasks register. Repeatable |
 | `--session-dir` | keep the throwaway session instead of using a temp dir |
+| `--no-runner` | skip the `trains` gate. On by default; see below for why |
+
+### Why `trains` is on by default
+
+The first five gates roll a *zero policy* — a callable returning zeros. It
+never constructs an RL runner, so it never opens the task's `rl_cfg`, and a
+task whose agent config is wrong passes all five and dies at iteration 0. That
+happened: five green ticks, then a run that was dead before its first log
+line, because the `rl_cfg` had no `distribution_cfg` and the actor had no
+distribution to sample from.
+
+`trains` builds the runner `rlmcp train` would build — the same
+`load_rl_cfg` / `load_runner_cls` from the same registry — against the
+environment that was just built, and takes one iteration on it: a rollout and
+one optimiser update. A missing config field, an actor whose input does not
+match the observation the env returns, an optimiser that cannot be built: all
+of them fail here, on CPU, in under a second, instead of on the card.
+
+It costs about that. The environment is already built and already rolled by
+the time this runs; the iteration adds `num_steps_per_env` steps on a handful
+of CPU envs and one PPO update over what they produce. Measured: 0.34 s of a
+4.8 s cartpole check, 0.71 s of a 5.9 s check of a 29-joint G1 task. Turn it
+off with `--no-runner` if your task's iteration really is expensive and you
+are checking something else.
+
+Two things it does *not* say. It runs nothing to W&B or tensorboard and leaves
+no run behind — the runner is built with no log directory on purpose. And a
+green `trains` means training **starts**, not that the task learns: that is
+what [`docs/tuning.md`](tuning.md) is for.
+
+It is the **last** gate, and deliberately so. It is the only one that needs
+the five before it to be true to mean anything — PPO will take an optimiser
+step on a NaN reward without complaining — so a failure anywhere above leaves
+it `not run` rather than spending an iteration proving nothing. It is also the
+only gate that steps the environment with something other than zeros, and the
+terms table below the gates is only "what doing nothing pays" because nothing
+before it did.
 
 ### What the terms table is for
 
