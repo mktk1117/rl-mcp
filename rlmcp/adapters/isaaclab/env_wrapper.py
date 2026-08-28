@@ -1,7 +1,7 @@
 """The IsaacLab half of the wrapper: its adapter, and one startup check.
 
 Everything else -- servicing, telemetry, curricula, records, progress clips --
-comes from :mod:`rlmcp.adapters.manager_based.env_wrapper`, unchanged. That is
+comes from :mod:`rlmcp.adapters.env_wrapper`, unchanged. That is
 the point of the split: adding a backend should be a page, not a fork.
 
 Usage, after IsaacLab's app is launched::
@@ -18,10 +18,10 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from rlmcp.adapters.isaaclab.sim_adapter import IsaacLabSimAdapter
-from rlmcp.adapters.manager_based.env_wrapper import (
+from rlmcp.adapters.env_wrapper import (
     RlMcpEnvWrapper as _ManagerBasedWrapper,
 )
-from rlmcp.adapters.manager_based.env_wrapper import TrainingStopped
+from rlmcp.adapters.env_wrapper import TrainingStopped
 
 
 class RlMcpEnvWrapper(_ManagerBasedWrapper):
@@ -50,7 +50,7 @@ class RlMcpEnvWrapper(_ManagerBasedWrapper):
 def wrap(env: Any, **kwargs: Any) -> RlMcpEnvWrapper:
   """Wrap an IsaacLab environment so rlmcp can watch and steer the run.
 
-  See :class:`~rlmcp.adapters.manager_based.env_wrapper.RlMcpEnvWrapper` for the
+  See :class:`~rlmcp.adapters.env_wrapper.RlMcpEnvWrapper` for the
   keyword arguments.
   """
   return RlMcpEnvWrapper(env, **kwargs)

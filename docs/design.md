@@ -53,17 +53,22 @@ and dicts, so rlmcp walks them and emits a key for every leaf that is a number, 
 bool or a `[min, max]` pair.
 
 ```
-rlmcp/adapters/manager_based/
-  access/                 # parameters: discovery, reads, writes
-    paths.py              #   the reflective core: walk, resolve, coerce
-    base.py               #   what a provider supplies
-    rewards.py  terminations.py  events.py  commands.py  actions.py
-  sampling.py  metrics.py # live state, read the same way on either backend
+rlmcp/adapters/
   env_wrapper.py          # servicing, telemetry, curricula, records, clips
-rlmcp/adapters/mjlab/
-  sim_adapter.py          # thin: implements SimAdapter by delegating
-  state/                  # what is mjlab's own: rendering, terrain, the live view
+  manager_based/
+    access/               # parameters: discovery, reads, writes
+      paths.py            #   the reflective core: walk, resolve, coerce
+      base.py             #   what a provider supplies
+      rewards.py  terminations.py  events.py  commands.py  actions.py
+    sampling.py  metrics.py  # live state, read the same way on either backend
+  mjlab/
+    sim_adapter.py        # thin: implements SimAdapter by delegating
+    state/                # what is mjlab's own: rendering, terrain, the live view
 ```
+
+`env_wrapper.py` sits a level above the family because none of it is
+manager-based either: a backend subclasses it and answers two questions, which
+is what keeps `wrap()` the same call everywhere.
 
 None of that is mjlab's, which is why it does not live there: term configs are
 dataclasses in IsaacLab too, and the same walk finds the same kinds of leaf.
@@ -104,9 +109,11 @@ degrade with an explanation instead of crashing.
 Two backends ship, and what they share is where most of the code lives:
 
 ```
+rlmcp/adapters/env_wrapper.py   the wrapper every backend subclasses; nothing
+                                in it belongs to a simulator or a family
 rlmcp/adapters/manager_based/   parameter access, trace sampling, summary
-                                metrics, the env wrapper — written against the
-                                shape both backends have, not against either
+                                metrics — written against the shape both
+                                backends have, not against either
 rlmcp/adapters/rsl_rl_runner.py the RunnerAdapter; both drive the same library
 rlmcp/adapters/mjlab/           MjlabSimAdapter + its offscreen renderer
 rlmcp/adapters/isaaclab/        IsaacLabSimAdapter + its Kit-app renderer

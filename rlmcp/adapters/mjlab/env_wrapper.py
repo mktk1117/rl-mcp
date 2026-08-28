@@ -1,7 +1,7 @@
 """The mjlab half of the wrapper: its adapter, and its startup check.
 
 Everything else -- servicing, telemetry, curricula, records, progress clips --
-is in :mod:`rlmcp.adapters.manager_based.env_wrapper`, because none of it is
+is in :mod:`rlmcp.adapters.env_wrapper`, because none of it is
 mjlab's. What is mjlab's is which SimAdapter to build and one diagnostic that
 has caught the same class of bug twice.
 """
@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from rlmcp.adapters.manager_based.env_wrapper import (
+from rlmcp.adapters.env_wrapper import (
     RlMcpEnvWrapper as _ManagerBasedWrapper,
 )
-from rlmcp.adapters.manager_based.env_wrapper import TrainingStopped
+from rlmcp.adapters.env_wrapper import TrainingStopped
 from rlmcp.adapters.mjlab.sim_adapter import MjlabSimAdapter
 from rlmcp.adapters.mjlab.viz_check import check_marker_colors
 from rlmcp.core.palette import format_report
@@ -55,7 +55,7 @@ class RlMcpEnvWrapper(_ManagerBasedWrapper):
 def wrap(env: Any, **kwargs: Any) -> RlMcpEnvWrapper:
   """Wrap an mjlab environment so rlmcp can watch and steer the run.
 
-  See :class:`~rlmcp.adapters.manager_based.env_wrapper.RlMcpEnvWrapper` for the
+  See :class:`~rlmcp.adapters.env_wrapper.RlMcpEnvWrapper` for the
   keyword arguments.
   """
   return RlMcpEnvWrapper(env, **kwargs)
