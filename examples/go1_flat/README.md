@@ -35,6 +35,14 @@ that has to be kept in step with the first for no gain. mjlab gets its own
 script because its construction differs enough to be worth showing; Genesis
 gets one because it needs an environment at all.
 
+## What has actually been run
+
+| script | status |
+| --- | --- |
+| `train_genesis.py` | run end to end on genesis-world 1.3.3, RTX 3090. Trains, and the tuning campaign below was done through it. |
+| `train_mjlab.py` | trains — smoke-run for 3 iterations on mjlab 1.5.3. Progress clips fail on that machine with an OpenGL/EGL error from MuJoCo's offscreen renderer, which is a GL setup problem on the box rather than anything about this script; pass `--video-every 0` or fix `MUJOCO_GL` if you hit it. |
+| IsaacLab | **not run.** Needs Isaac Sim and a matching driver, which this machine does not have set up. The command in this README is the existing example's documented form, not something that has been executed. |
+
 ## Where the robot comes from
 
 | backend | task | asset |
