@@ -20,13 +20,20 @@ jobs:
     # F821 (undefined name) is the check that would have caught `wrap()` raising
     # NameError on every call: byte-compiling cannot see it, and no test reached
     # the line. It costs a second; run it before spending minutes on the suite.
+    # The rest of the rule set is in [tool.ruff.lint] in pyproject.toml, so this
+    # job and a local `ruff check` cannot disagree about what the style is.
+    #
+    # The version is pinned. Ruff adds rules in minor releases, and a lint job
+    # that goes red because of an upgrade nobody made is a job people learn to
+    # ignore. Bump it here, in .pre-commit-config.yaml and in the dev extra
+    # together, in a commit that also fixes whatever the new release found.
     runs-on: ubuntu-latest
-    name: lint (undefined names)
+    name: lint (ruff)
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name: Check for undefined names and redefinitions
-        run: uv run --with ruff ruff check --select F821,F811,F401 rlmcp tests examples
+      - name: ruff check
+        run: uv run --with ruff==0.16.4 ruff check rlmcp tests examples
 
   test:
     runs-on: ubuntu-latest

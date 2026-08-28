@@ -99,8 +99,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: Check for undefined names and redefinitions
-        run: uv run --with ruff ruff check --select F821,F811,F401 rlmcp tests examples
+      - name: ruff check
+        run: uv run --with ruff==0.16.4 ruff check rlmcp tests examples
         continue-on-error: true
         id: lint
 
