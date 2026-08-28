@@ -283,6 +283,7 @@ SHAPES = {
     "reset-envs": ENVELOPE,
     "add-reward": ENVELOPE,
     "rewards": BARE,       # via `rewards list`; read from the session, not the run
+    "env": BARE,           # via `env show`; likewise read from the session
     "metrics": ENVELOPE,
     "plot": ENVELOPE,
     "shot": ENVELOPE,
@@ -322,6 +323,7 @@ _SHAPE_ARGS = {
     "set": ["reward.x.weight", "-0.2"],
     "add-reward": ["upright", SOURCE_PLACEHOLDER],
     "rewards": ["list"],
+    "env": ["show"],
     "run": ["get_status"],
     "raw": ["get_status"],
     "note": ["a note"],

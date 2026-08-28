@@ -89,6 +89,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 | change a weight | [`set`](#set), [`reset`](#reset) | `set_parameter`, `reset_parameters` |
 | add a reward the task lacks | [`add-reward`](#add-reward) | `add_reward` |
 | keep a term you added | [`rewards export`](#rewards) | (CLI only) |
+| the env a checkpoint trained under | [`env export`](#env) | (CLI only) |
 | restart episodes | [`reset-envs`](#reset-envs) | `reset_environments` |
 | task-specific verbs | [`commands`](#commands), [`run`](#run) | `list_commands`, `run_command` |
 | the stage ladder | [`curriculum`](#curriculum) | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
@@ -826,6 +827,57 @@ the history kept as a comment.
 Editing the task's own files is left to you on purpose: rlmcp does not know
 which package a term belongs to, and nothing task-shaped may live in this repo
 (see `AGENTS.md`).
+
+## `env`
+
+The environment a policy trained under, written out beside the checkpoint.
+
+A `.pt` file is half an answer. To use it you need the observations it expects
+in the order it expects them, the actions it emits, and — to keep training it
+or judge it — what it was being paid for. That lives in a task package which
+has since moved on, at a commit nobody wrote down.
+
+```bash
+rlmcp env show                        # what was captured
+rlmcp env export --out ./exported_env # write it out
+```
+
+```
+exported_env/
+  mdp_terms.py   every term's implementation, inlined
+  env_cfg.py     RewardsCfg / ObservationsCfg / ActionsCfg over those
+  README.md      what it is, what it pairs with, what did not survive
+```
+
+**Self-contained on purpose.** Implementations are inlined rather than
+imported, so the export runs without the task package installed at the version
+the run used. Each term's source is captured from the live manager while the
+run is alive — including terms an agent [added](#add-reward) mid-run, which
+exist nowhere else.
+
+**Weights are the ones the run ended on**, not the ones the config shipped
+with, because those are what the checkpoint actually trained against. The
+configured value stays as a comment.
+
+**What could not be rendered is named, never guessed.** A term whose source
+cannot be read, or a param holding an object that cannot be reconstructed from
+its fields, is reported in `README.md` and left out of the config rather than
+approximated. A config that quietly differs from the one that trained the
+policy is worse than one that says where it stopped.
+
+Rewards, observations and actions only. Terminations and events shape
+*training* rather than the policy's interface, and a checkpoint pairs with the
+interface.
+
+This is a snapshot, not a package: it will not pick up later fixes to those
+terms. When what you want is the living package at the run's commit, that is
+[`rlmcp recipe build`](records.md).
+
+Nothing in the export is executed by rlmcp. Import it once against your backend
+before pairing it with a checkpoint.
+
+> Runs started before this existed have no `env_terms.json`, and `env export`
+> says so rather than writing an empty config.
 
 ## `commands`
 

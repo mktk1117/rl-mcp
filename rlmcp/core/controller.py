@@ -464,6 +464,7 @@ class RlMcp:
     self._register_handlers()
     self._discover_parameters()
     self._defaults = self.parameters.get_snapshot()
+    self._capture_env_terms()
 
     self._extension_context = ExtensionContext(
         write_artifact=self.write_artifact,
@@ -1228,6 +1229,11 @@ class RlMcp:
     key = f"reward.{compiled.name}.weight"
     self._defaults.setdefault(key, float(weight))
 
+    # The captured terms describe the environment as it is, and it has just
+    # changed. Without this the export would miss the very term the agent
+    # added -- the one nothing else in the world has a copy of.
+    self._capture_env_terms()
+
     detail = {
         "iteration": self.iteration,
         "name": compiled.name,
@@ -1254,6 +1260,28 @@ class RlMcp:
             "the config lines to go with it."
         ),
     }
+
+  def _capture_env_terms(self) -> None:
+    """Write down the terms a policy trained under, while they still exist.
+
+    Taken at startup, and again whenever a reward term is added, so the file
+    always describes the environment as it currently is. Never allowed to
+    fail the run: the terms are a convenience for afterwards, and a backend
+    that cannot be read simply has no file. A backend with nothing to capture
+    returns ``{}``, and no file is written rather than an empty one that reads
+    as "this run had no reward function".
+    """
+    reader = getattr(self.sim, "capture_env_terms", None)
+    if not callable(reader):
+      return
+    terms = self._safe(reader, {}) or {}
+    if not terms:
+      return
+    terms = {"task": self._task_label, "iteration": self.iteration, **terms}
+    try:
+      self.session.publish_env_terms(terms)
+    except Exception:  # pragma: no cover - a session that cannot be written.
+      pass
 
   def _reward_namespace(self) -> Dict[str, Any]:
     """What an agent's reward source is compiled against.

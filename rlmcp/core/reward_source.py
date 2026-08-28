@@ -42,6 +42,13 @@ from typing import Any, Callable, Dict, Optional
 
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+SOURCE_ATTR = "__rlmcp_source__"
+"""Attribute a compiled reward function carries its own source in.
+
+``inspect.getsource`` is how every other term's implementation is captured, and
+it needs a file. A function compiled from text has none, so it carries the text
+instead and the capture reads this first."""
+
 
 class RewardSourceError(ValueError):
   """The source an agent supplied cannot become a reward term.
@@ -131,6 +138,15 @@ def compile_reward_source(
 
   func, func_name = _pick_function(module_ns, name=name)
   _check_signature(func, name=name, func_name=func_name)
+
+  # A function compiled from a string has no file, so `inspect.getsource` --
+  # which is how the env capture reads every other term -- cannot read it.
+  # Carrying the source on the object itself keeps that one code path working
+  # for agent-written terms instead of needing a second one.
+  try:
+    setattr(func, SOURCE_ATTR, text)
+  except (AttributeError, TypeError):  # pragma: no cover - builtins only.
+    pass
 
   return CompiledReward(
       name=name,

@@ -326,6 +326,27 @@ class SimAdapter(ABC):
     """
     raise NotSupported("add_reward_term")
 
+  def capture_env_terms(self) -> Dict[str, Any]:
+    """Snapshot the terms that define what a policy trained against.
+
+    The rewards it was paid, the observations it saw and the actions it
+    emitted -- with each term's implementation captured as *source*, not as an
+    import path, because an import path is only as good as the package still
+    being installed at the version the run used.
+
+    Taken once at run start and kept in the session, so that a checkpoint can
+    be paired with the environment it trained under after the training process
+    is gone. Terminations and events are out of scope: they shape training
+    rather than the policy's interface.
+
+    Must not raise for a manager that is absent or oddly shaped -- a capture is
+    a convenience and cannot be allowed to stop a run. Report what could not be
+    read in the payload's ``problems`` list instead.
+
+    Returns ``{}`` on a backend with nothing to capture.
+    """
+    return {}
+
   # Optional: rendering.
 
   def render(self, env_id: int = 0) -> np.ndarray:

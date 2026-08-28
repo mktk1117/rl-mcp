@@ -947,6 +947,23 @@ def build_parser() -> argparse.ArgumentParser:
 
   rewards_sub.add_parser("list", help="List the terms this run added")
 
+  envp = sub.add_parser(
+      "env",
+      help="The environment a policy trained under: export it beside the checkpoint",
+      description="A checkpoint is half an answer; this writes the other half "
+                  "-- the reward, observation and action terms the policy "
+                  "trained under, implementations inlined so the export needs "
+                  "no task package.")
+  env_sub = envp.add_subparsers(dest="env_command", required=True)
+
+  q = env_sub.add_parser(
+      "export", help="Write the env config plus merged implementations")
+  q.add_argument("--out", default="exported_env",
+                 help="Directory to write into (default: ./exported_env)")
+
+  env_sub.add_parser(
+      "show", help="Summarise the captured terms without writing anything")
+
   p = sub.add_parser(
       "reset-envs",
       help="Start fresh episodes in some or all environments",
@@ -1497,6 +1514,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     if _MODE == "text":
       print(cli_output.note(rewards_export.describe(payload)), file=sys.stderr)
     return 0
+  if cmd == "env":
+    # Offline like `rewards`: the terms were captured into the session while
+    # the run was alive, so this answers for a run that exited long ago.
+    from rlmcp import env_export
+
+    if args.env_command == "show":
+      snapshot = session.env_terms()
+      groups = snapshot.get("observations") or {}
+      _emit({
+          "session": str(session.dir),
+          "task": snapshot.get("task"),
+          "captured": bool(snapshot),
+          "rewards": [t.get("name") for t in snapshot.get("rewards") or []],
+          "observations": {g: [t.get("name") for t in (s.get("terms") or [])]
+                           for g, s in groups.items()},
+          "actions": [t.get("name") for t in snapshot.get("actions") or []],
+          "problems": snapshot.get("problems") or [],
+      })
+      return 0
+    payload = env_export.export_env(session, args.out)
+    _emit(payload)
+    if _MODE == "text":
+      print(cli_output.note(env_export.describe(payload)), file=sys.stderr)
+    return 0 if payload.get("ok") else 1
   if cmd == "params" and not args.live:
     schema = session.params()
     items = {
