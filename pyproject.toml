@@ -50,6 +50,13 @@ mjlab = [
     "torch>=2.0.0",
     "mujoco>=3.0.0",
 ]
+# The live browser view (`rlmcp view`). Not a hard dependency of anything: a
+# build without it keeps every other command and says what is missing when
+# somebody asks for a view. mjlab already pulls viser in for its own viewer, so
+# this extra is for an install that wants the view without the rest.
+viser = [
+    "viser>=1.0.0",
+]
 
 # Third-party capabilities register themselves by publishing an entry point in
 # this group; see rlmcp/extensions/__init__.py.

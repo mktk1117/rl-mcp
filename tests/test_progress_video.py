@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import contextlib
+import io
+from typing import Any
+
 import pytest
 from conftest import FakeSimAdapter
 
 from rlmcp.adapters.base import NotSupported
 from rlmcp.core.controller import RlMcp
-from rlmcp.core.progress_video import Cadence, ProgressVideoSchedule
+from rlmcp.core.progress_video import (
+    Cadence,
+    CadenceError,
+    ProgressVideoSchedule,
+)
 from rlmcp.records.filestore import FileStore
 from rlmcp.records.link import RecordLink
 from rlmcp.session import Session
@@ -372,3 +380,49 @@ def test_the_trainer_gets_past_its_import_and_reports_an_unknown_task():
 
   assert "ImportError" not in done.stderr, done.stderr[-400:]
   assert "cannot import name" not in done.stderr, done.stderr[-400:]
+
+
+# What the help offers, and what the parser accepts, are the same set.
+#
+# They were not. Every help string said `0` and none of them mentioned `off`,
+# so the documented way to stop clips was the one spelling that reads as its
+# own opposite -- "every 0" is naturally "constantly". These pin the wording to
+# the parser, so a spelling cannot be added or dropped without a reader of the
+# help finding out.
+
+OFF_SPELLINGS = ("off", "none", "never", "0", "", 0)
+
+
+@pytest.mark.parametrize("spec", OFF_SPELLINGS)
+def test_every_spelling_of_off_turns_clips_off(spec):
+  assert Cadence.parse(spec) is None
+
+
+def _help_text(parse: Any, argv: list) -> str:
+  """What argparse prints for --help, without exiting the test."""
+  buffer = io.StringIO()
+  with contextlib.redirect_stdout(buffer):
+    with pytest.raises(SystemExit):
+      parse(argv)
+  return buffer.getvalue()
+
+
+def test_the_help_offers_off_wherever_a_cadence_is_asked_for():
+  from rlmcp.cli import build_parser
+  from rlmcp.train import _parse_args
+
+  surfaces = {
+      "rlmcp-train --help": _help_text(_parse_args, ["--help"]),
+      "rlmcp video --help": _help_text(
+          build_parser().parse_args, ["video", "--help"]),
+  }
+  for where, text in surfaces.items():
+    assert "off" in text, (
+        f"{where} never offers 'off', so the only documented way to stop "
+        "clips is a spelling that reads as its opposite")
+
+
+def test_a_refused_cadence_points_at_off_not_zero():
+  with pytest.raises(CadenceError) as caught:
+    Cadence.parse("weekly")
+  assert "off" in str(caught.value)

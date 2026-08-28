@@ -63,7 +63,7 @@ dead run.
 | --- | --- |
 | sessions | `list_sessions`, `switch_session` |
 | observe | `get_training_status`, `list_metrics`, `get_metrics`, `plot_metrics`, `get_events`, `list_artifacts` |
-| see the robot | `take_screenshot`, `record_video`, `diagnose_motion`, `record_trace`, `plot_joint_trace` |
+| see the robot | `take_screenshot`, `record_video`, `live_view`, `diagnose_motion`, `record_trace`, `plot_joint_trace` |
 | tune | `list_parameters`, `set_parameter`, `reset_parameters` |
 | task verbs | `list_commands`, `run_command` |
 | curriculum | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
@@ -115,6 +115,13 @@ extensions, e.g. `{"where": {"terrain": "pyramid_stairs"}}` on a locomotion task
 `take_screenshot` and `record_video` take the same selector and return the image
 inline **plus** the data payload. Images are downscaled to fit MCP message
 limits; if one still does not fit, you get the path and a note.
+
+`live_view` takes it too, and answers with a URL rather than an image: it
+attaches a browser view to the run that keeps updating on its own. Hand the URL
+to whoever asked to see the robot -- that is the deliverable, and you cannot
+look at it yourself. Pass `realtime: true` when the question is about the gait
+rather than about what the robot is doing this second: training steps far
+faster than life, so the default view is a fast-forward.
 
 ### 3. Change something, with the reason on the record
 

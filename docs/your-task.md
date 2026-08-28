@@ -80,7 +80,7 @@ runner.save(str(log_dir / f"model_final_{runner.current_learning_iteration}.pt")
 | `records_root` | `$RLMCP_RECORDS` | where records live |
 | `record_slot` | `""` | resource lease to claim, e.g. `gpu0` |
 | `code_root` | the launch directory | task package stamped on the record at launch ([what the code was](records.md#what-the-code-was-the-other-half-of-a-recipe)); `""` records none |
-| `video_every` | `"double"` | the [progress-clip](tools.md#progress-clips-the-ones-you-do-not-have-to-ask-for) cadence: `"double"` (0, 50, 100, 200, 400 …), a flat `200`, or `0` to turn them off |
+| `video_every` | `"double"` | the [progress-clip](tools.md#progress-clips-the-ones-you-do-not-have-to-ask-for) cadence: `"double"` (0, 50, 100, 200, 400 …), a flat `200`, or `"off"` for none |
 | `video_seconds` | `4.0` | how long each progress clip is |
 | `video_budget_mb` | `200` | disk the clips may use before the schedule stops itself |
 | `robot_name`, `trace_capacity` | auto, `6000` | rarely needed |
