@@ -45,14 +45,35 @@ class FakeMarkdown:
     self.content = content
 
 
+class FakeButton:
+  """A viser button as far as LiveView is concerned: a label and a handler."""
+
+  def __init__(self, label: str):
+    self.label = label
+    self.handler: Any = None
+
+  def on_click(self, handler: Any) -> Any:
+    self.handler = handler
+    return handler
+
+  def click(self) -> None:
+    self.handler(self)
+
+
 class FakeGui:
   def __init__(self):
     self.panels: List[FakeMarkdown] = []
+    self.buttons: List[FakeButton] = []
 
   def add_markdown(self, content: str) -> FakeMarkdown:
     panel = FakeMarkdown(content)
     self.panels.append(panel)
     return panel
+
+  def add_button(self, label: str) -> FakeButton:
+    button = FakeButton(label)
+    self.buttons.append(button)
+    return button
 
 
 class FakeServer:
@@ -516,3 +537,157 @@ def test_attaching_and_detaching_are_written_down(tmp_path, servers):
   kinds = [e["kind"] for e in Session.open(lab.session.dir).events()]
   assert "live_view_started" in kinds and "live_view_stopped" in kinds
   lab.close()
+
+
+# Pausing: attached, and costing the run nothing.
+#
+# The promise is stronger than "cheaper". A paused view is the same speed as no
+# view at all -- the tick returns before it reads a clock, asks who is watching
+# or touches the simulator -- and it is still attached, so resuming is a click
+# rather than a rebuild. That is the whole difference between this and `--off`,
+# and it is what these check.
+
+
+class PausableScene(FakeScene):
+  """A backend with a pause and a loop of its own, like the realtime one."""
+
+  def __init__(self):
+    super().__init__()
+    self.paused = False
+    self.watchers: List[int] = []
+
+  def set_paused(self, paused: bool) -> None:
+    self.paused = bool(paused)
+
+  def set_watchers(self, watchers: int) -> None:
+    self.watchers.append(int(watchers))
+
+
+def test_a_paused_view_is_not_fed(servers):
+  sim = ViewableSim()
+  view = _view(sim, enabled=True)
+  view.tick()
+  assert sim.scene.updates
+
+  view.set_paused(True)
+  before = len(sim.scene.updates)
+  for _ in range(50):
+    view.tick()
+  assert len(sim.scene.updates) == before, (
+      "a paused view pushed frames; the point of pausing is that the training "
+      "loop stops paying for it entirely")
+
+
+def test_pausing_keeps_the_port_and_the_scene(servers):
+  sim = ViewableSim()
+  view = _view(sim, enabled=True)
+  port, url = view.port, view.url
+
+  view.set_paused(True)
+  assert view.running, "pausing detached the view; that is what --off is for"
+  assert (view.port, view.url) == (port, url)
+  assert not sim.scene.closed
+  assert not servers[0].stopped
+
+
+def test_resuming_feeds_it_again(servers):
+  sim = ViewableSim()
+  view = _view(sim, enabled=True)
+  view.set_paused(True)
+  for _ in range(10):
+    view.tick()
+  view.set_paused(False)
+  view.tick()
+  assert sim.scene.updates
+
+
+def test_the_button_in_the_tab_pauses_and_resumes(servers):
+  sim = ViewableSim()
+  view = _view(sim, enabled=True)
+  button = view._pause_button
+  assert button is not None, "the live mode's tab has no pause button"
+  assert button.label == "Pause view"
+
+  button.click()
+  assert view.paused and button.label == "Resume view"
+  before = len(sim.scene.updates)
+  view.tick()
+  assert len(sim.scene.updates) == before
+
+  button.click()
+  assert not view.paused and button.label == "Pause view"
+  view.tick()
+  assert len(sim.scene.updates) > before
+
+
+def test_a_realtime_view_gets_no_second_pause_button(servers):
+  # The player already has one, and it means the same thing.
+  view = _view(ViewableSim(), enabled=True, realtime=True)
+  assert view._pause_button is None
+
+
+def test_a_backend_that_pauses_itself_stops_the_tick(servers):
+  # The realtime player's Pause is clicked in the browser, so the backend
+  # learns first; the owner has to read that rather than only its own flag.
+  sim = ViewableSim(scene=PausableScene())
+  view = _view(sim, enabled=True)
+  sim.scene.set_paused(True)
+  before = len(sim.scene.updates)
+  for _ in range(20):
+    view.tick()
+  assert len(sim.scene.updates) == before
+  assert view.paused
+  assert view.describe()["paused"] is True
+
+
+def test_pausing_reaches_a_backend_with_a_player(servers):
+  sim = ViewableSim(scene=PausableScene())
+  view = _view(sim, enabled=True)
+  view.set_paused(True)
+  assert sim.scene.paused, (
+      "`rlmcp view --pause` left the player running; its thread draws the tab "
+      "and would keep showing motion the run has stopped recording")
+  view.set_paused(False)
+  assert not sim.scene.paused
+
+
+def test_a_detach_clears_the_pause(servers):
+  sim = ViewableSim()
+  view = _view(sim, enabled=True)
+  view.set_paused(True)
+  view.configure(enabled=False)
+  view.configure(enabled=True)
+  assert not view.paused, (
+      "a view re-attached with --on came back frozen, for a reason nobody "
+      "looking at it could see")
+  view.tick()
+  assert sim.scene.updates
+
+
+def test_a_pause_survives_a_mode_switch(servers):
+  # Switching modes is a stop and a start, and the scene that comes back has
+  # not been told anything.
+  sim = ViewableSim(scene=PausableScene())
+  view = _view(sim, enabled=True)
+  view.set_paused(True)
+  view.configure(realtime=True)
+  assert view.paused and sim.scene.paused
+
+
+def test_the_backend_is_told_how_many_are_watching(servers):
+  sim = ViewableSim(scene=PausableScene())
+  view = _view(sim, enabled=True)
+  servers[0].watchers = 0
+  view.tick()
+  assert sim.scene.watchers == [0], (
+      "a backend with a loop of its own was not told nobody is there, so it "
+      "spends an unwatched run asking for work")
+
+
+def test_pause_is_reported_and_said_plainly(servers):
+  view = _view(ViewableSim(), enabled=True)
+  assert view.describe()["paused"] is False
+  view.set_paused(True)
+  assert view.describe()["paused"] is True
+  assert "paused" in view.prose()
+  assert view.url in view.prose()

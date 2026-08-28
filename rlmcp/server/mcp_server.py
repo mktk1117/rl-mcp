@@ -753,6 +753,7 @@ def create_mcp_server(
       realtime: Optional[bool] = None,
       fps: Optional[float] = None,
       port: Optional[int] = None,
+      paused: Optional[bool] = None,
   ) -> Dict[str, Any]:
     """Attach a live browser view to the run, re-point it, or detach it.
 
@@ -761,9 +762,10 @@ def create_mcp_server(
     restart, and no pause. Return the URL to whoever asked to see the robot;
     it is not an image, it is a page they open.
 
-    Call with no arguments to report whether a view is running and where. It
-    costs nothing while no browser is connected, so leaving one attached is
-    cheap; ``enabled=False`` gives the port back.
+    A training run has one attached already, so call with no arguments to
+    report where it is. It costs nothing while no browser is connected or
+    while it is paused, so leaving one attached is cheap; ``enabled=False``
+    gives the port back.
 
     Args:
       enabled: True attaches the view, False detaches it.
@@ -777,9 +779,13 @@ def create_mcp_server(
         life, so the default view is a fast-forward.
       fps: frames per second pushed while somebody is watching (live mode).
       port: first port to try; busy ones are skipped.
+      paused: True stops feeding an attached view -- the tab holds the frame
+        it has and the run goes back to the speed it trains at unwatched --
+        without giving the port back. False starts it again.
     """
     return _call(handle, "live_view", enabled=enabled, env_id=env_id,
-                 where=where, realtime=realtime, fps=fps, port=port)
+                 where=where, realtime=realtime, fps=fps, port=port,
+                 paused=paused)
 
   # Motion analysis.
 

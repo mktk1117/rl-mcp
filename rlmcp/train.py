@@ -78,10 +78,16 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                       help="Stop taking progress clips once they have used "
                            "this much disk (default 200; 0 for no limit)")
   parser.add_argument(
-      "--viser", action="store_true",
-      help="Serve a live 3-D view of the run in a browser, over viser. Costs "
-           "no renderer and nothing at all while no browser is open. It can "
-           "also be attached to a run already going with `rlmcp view --on`.",
+      "--viser", dest="viser", action="store_true", default=True,
+      help="Serve a live 3-D view of the run in a browser, over viser. On by "
+           "default: it needs no renderer and costs nothing at all while no "
+           "browser is open or the view is paused, so the only thing an "
+           "unwatched one uses is a port.",
+  )
+  parser.add_argument(
+      "--no-viser", dest="viser", action="store_false",
+      help="Do not serve a live view, and do not bind a port for one. It can "
+           "still be attached to the run later with `rlmcp view --on`.",
   )
   parser.add_argument("--viser-port", type=int, default=None, metavar="PORT",
                       help="First port to try for the live view (default 8740; "

@@ -962,14 +962,21 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser(
       "view",
       help="Watch the run live in a browser, over viser",
-      description="Attach a live 3-D view to a run in progress, or detach it. "
-                  "No restart, no checkpoint, no pause: with no flags this "
-                  "reports whether a view is running and on what URL.",
+      description="A run trains with one of these already attached, so with "
+                  "no flags this reports where it is. The rest re-point it, "
+                  "stop it paying for itself, or give the port back -- none "
+                  "of which restarts or pauses the run itself.",
   )
   p.add_argument("--on", dest="on", action="store_true",
                  help="Attach the view and print its URL")
   p.add_argument("--off", dest="off", action="store_true",
                  help="Detach the view and give the port back")
+  p.add_argument("--pause", dest="paused", action="store_true", default=None,
+                 help="Stop feeding the view without detaching it: the tab "
+                      "keeps the frame it has and the run goes back to full "
+                      "speed. The same thing the button in the tab does")
+  p.add_argument("--resume", dest="paused", action="store_false",
+                 help="Start feeding it again")
   p.add_argument("--port", type=int,
                  help="First port to try (default 8740; busy ports are skipped)")
   p.add_argument("--host", help="Interface to bind (default 0.0.0.0)")
@@ -1460,6 +1467,8 @@ def main(argv: Optional[List[str]] = None) -> int:
       # Any setting on its own means "make it so": somebody asking for another
       # environment or another rate wants to be looking at one, and refusing
       # until they also type --on would be pedantry.
+      # --pause is not in this list on purpose: "stop paying for the view"
+      # is the one setting that must never be the thing that starts one.
       enabled = True if (args.port is not None or args.fps is not None
                          or args.env_id is not None or args.where
                          or args.host is not None or args.realtime is not None
@@ -1467,7 +1476,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     return _call(session, "live_view", timeout, enabled=enabled, port=args.port,
                  host=args.host, fps=args.fps, env_id=args.env_id,
                  realtime=args.realtime, buffer_seconds=args.buffer_seconds,
-                 where=_kv_pairs(args.where) or None)
+                 paused=args.paused, where=_kv_pairs(args.where) or None)
   if cmd in ("trace", "diagnose"):
     name = "record_trace" if cmd == "trace" else "diagnose"
     return _call(session, name, max(timeout, args.seconds * 20 + 60),

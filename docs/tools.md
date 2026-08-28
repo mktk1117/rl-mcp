@@ -78,7 +78,8 @@ output. Present and the command is not `record`, take `"result"` on success and
 | a picture of the robot | [`shot`](#shot) | `take_screenshot` |
 | a clip of the robot | [`video`](#video) | `record_video` |
 | clips taken automatically | [`video --every`](#video) | `set_progress_video` |
-| watch it live in a browser | [`view --on`](#view) | `live_view` |
+| watch it live in a browser | [`view`](#view) | `live_view` |
+| stop the view costing the run anything | [`view --pause`](#pause-the-tab-stays-the-cost-goes) | `live_view` |
 | watch it at the robot's own speed | [`view --realtime`](#--realtime-the-same-view-at-the-speed-the-robot-moves) | `live_view` |
 | why does it move badly | [`diagnose`](#diagnose) | `diagnose_motion` |
 | raw per-step signals | [`trace`](#trace), [`plot-trace`](#plot-trace), [`analyze`](#analyze) | `record_trace`, `plot_joint_trace` |
@@ -281,17 +282,19 @@ waiting on; if it cannot start it says so in the events
 
 ## `view`
 
-The run in a browser tab, live, while it trains.
+The run in a browser tab, live, while it trains. **A run already has one** --
+the URL is printed at startup and `rlmcp view` says it again.
 
 ```bash
-rlmcp view --on                   # attach; prints the URL
-rlmcp view                        # is one running, and where?
+rlmcp view                        # where is it?
+rlmcp view --pause                # stop it costing the run anything
+rlmcp view --resume               # start feeding it again
 rlmcp view --realtime             # play it back at the speed the robot moves
 rlmcp view --env-id 300           # show another environment
 rlmcp view --where terrain=pyramid_stairs
 rlmcp view --off                  # detach, and give the port back
-rlmcp-train <task> --viser        # or have the run start with one
-rlmcp-train <task> --viser --viser-realtime
+rlmcp view --on                   # attach one to a run launched with --no-viser
+rlmcp-train <task> --no-viser     # or launch without one, and no port bound
 ```
 
 **MCP:** `live_view({"enabled": true})` -- returns the URL to hand to whoever
@@ -303,6 +306,11 @@ with no viewer gets one on the next iteration boundary, showing the policy
 currently being trained -- exploration noise, curriculum stage and all -- and
 `--off` gives the port back. Which environment is shown can be changed from
 either end: the slider in the tab, or `--env-id` / `--where` from a shell.
+
+**Why it is on rather than a flag.** Because the hour into a run when somebody
+wants to see the robot is not an hour they can go back and pass a flag in, and
+because an unwatched view uses a port and nothing else. `--no-viser` opts out
+and binds no port.
 
 ```
    the run ──▶ every step ──▶ due? ──▶ anybody watching? ──▶ push ──▶ browser
@@ -323,6 +331,53 @@ if it is taken, so a second run on the same machine does not silently fail or
 show you the first one. Bound on all interfaces: from another machine use
 `http://<host>:<port>` (`host_url` in the status payload), or forward it with
 `ssh -L 8740:localhost:8740 <host>`.
+
+### Pause: the tab stays, the cost goes
+
+```bash
+rlmcp view --pause     # or the button in the tab; the player's Pause in realtime
+rlmcp view --resume
+```
+
+The same idea as IsaacGym's sync toggle. The tab holds the frame it last
+painted, the port stays bound, the scene stays built in the browser -- and the
+run goes straight back to the speed it trains at unwatched, because the
+per-step tick returns at its first gate, before it reads a clock or asks who
+is connected. Resuming is a click rather than a rebuild, which is the whole
+difference between this and `--off`.
+
+In realtime the player's **Pause** is this: it stops the playback *and* the
+recording together, because a window recorded during a pause is a stretch of
+the run nobody watched. On resume the next window starts after the pause
+rather than splicing across it.
+
+`status.live_view.paused` says which it is.
+
+### What else is in the tab
+
+mjlab's own viewer panels, below rlmcp's:
+
+* **Rewards** -- live bars per reward term against their running means, plus
+  term plots. **Metrics** the same for the metrics manager.
+* **Visualization** -- contact points and forces, inertia, joints, actuators,
+  convex hulls, tendons, COM, constraints.
+* **Scene** -- the environment slider, camera, and per-sensor and per-reward
+  debug visualisation.
+
+They are mjlab's code, read on rlmcp's thread: every value they show is read
+inside the same push that sends the frame, so nothing here races the step that
+produced it. What they cost is inside the measured `push_ms`, and it is paid
+only while somebody is watching and not paused.
+
+Two of mjlab's panels are deliberately absent. **Commands**, because its
+sliders write to the command manager, and retuning a command term is a change
+to the run -- `rlmcp set` is how that is asked for, and it records who asked
+and why. **Camera Feeds**, because they need a render context and this view's
+whole claim is that it needs none.
+
+In realtime the debug *arrows* are not drawn, though their checkboxes are
+there: the pose on screen is a few seconds old and the arrows would be from
+now, which is two moments drawn as one.
 
 **What it is not.** A recording. Nothing here lands in the run record, because
 nothing here is evidence -- clips and traces are the run's memory and this is

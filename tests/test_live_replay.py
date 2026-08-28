@@ -35,7 +35,13 @@ class FakePlayer:
     self.stopped = True
 
   def get_status(self) -> Any:
-    return SimpleNamespace(speed_label="1x", paused=False)
+    return SimpleNamespace(speed_label="1x", paused=self.paused)
+
+  paused = False
+
+  def request_paused(self, paused: bool) -> None:
+    """The real one queues this and applies it a tick later, on its thread."""
+    self.paused = bool(paused)
 
 
 class FakeScene:
@@ -230,3 +236,102 @@ def test_the_players_thread_reports_rather_than_dying_quietly():
   view._thread.join(timeout=2.0)
 
   assert "the player fell over" in view.describe()["error"]
+
+
+# Pausing the replay: the recording stops with the playback.
+#
+# A window recorded during a pause is a stretch of the run nobody watched,
+# handed to a player that is not asking for one. So "pause" here has to mean
+# the training thread stops recording too -- otherwise pausing a view to look
+# at a pose would leave the run doing all the same work with nothing to show
+# for it.
+
+
+def test_pausing_stops_the_recording():
+  view = _view()
+  view.update(0)
+  assert view.describe()["recorded"] == 1
+
+  view.set_paused(True)
+  for _ in range(20):
+    view.update(0)
+  state = view.describe()
+  assert state["recording"] is False
+  assert state["recorded"] == 0, (
+      "a paused replay kept filling a window; the run is supposed to go back "
+      "to the speed it trains at unwatched")
+
+
+def test_a_paused_replay_is_not_talked_back_into_recording():
+  # Single-stepping to the end of the held window still asks for the next one.
+  view = _view()
+  view.set_paused(True)
+  view.request_window()
+  assert view.describe()["recording"] is False
+  view.update(0)
+  assert view.describe()["recorded"] == 0
+
+
+def test_re_pointing_a_paused_replay_leaves_it_paused():
+  view = _view()
+  view.set_paused(True)
+  view.set_env(2)
+  assert view.paused and view.describe()["recording"] is False
+
+
+def test_resuming_records_a_fresh_window():
+  view = _view()
+  view.update(0)
+  view.set_paused(True)
+  view.set_paused(False)
+  assert view.describe()["recording"] is True
+  assert view.describe()["recorded"] == 0, (
+      "the window resumed mid-fill, so it splices the frames either side of "
+      "the pause together and calls the result motion")
+  view.update(0)
+  assert view.describe()["recorded"] == 1
+
+
+def test_the_pause_flag_flips_when_asked_not_a_tick_later():
+  # The base class applies a queued toggle on its own thread, so reading it
+  # back is answering the previous question -- which is what the button label
+  # and the owner's per-step gate would both get wrong.
+  view = _view()
+  view.set_paused(True)
+  assert view.paused is True
+  assert view.describe()["paused"] is True
+  view.set_paused(True)  # Asking twice must not toggle it back.
+  assert view.paused is True
+  view.set_paused(False)
+  assert view.paused is False
+
+
+def test_the_player_holds_still_when_nobody_is_watching():
+  # The player has its own thread, so unlike a live push it does not stop just
+  # because the training loop stopped feeding it.
+  view = _view()
+  view.set_watchers(0)
+  player = SimpleNamespace(source=view, starved=0, window=None)
+  assert mod.ReplayPlayer._execute_step(player) is True
+  assert player.starved == 0, (
+      "the player starved through windows nobody could have recorded; that "
+      "counter is supposed to mean the run could not keep up")
+
+
+def test_a_view_assumes_somebody_until_told_otherwise():
+  # A backend that froze because nobody told it who was connected would be a
+  # worse failure than one that draws for an empty room.
+  assert _view().watchers == 1
+
+
+def test_the_player_is_asked_for_a_state_not_a_toggle():
+  # A toggle is only correct while nothing else can flip the player's own
+  # flag. The moment a second control can, a toggle drifts and the view sits
+  # frozen with the tab insisting it is running.
+  view = _view()
+  view.set_paused(True)
+  view.viewer.paused = False  # Something else moved it.
+  view._paused = False
+  view.set_paused(True)
+  assert view.viewer.paused is True, (
+      "asking for paused twice unpaused it; the request has to name the state")

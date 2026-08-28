@@ -65,6 +65,13 @@ either side of that gap are a minute apart, and playing them in sequence would
 show a robot that teleports -- a lie about the motion, told at 1x.
 """
 
+PANEL_FPS = 10.0
+"""How often the reward bars and term plots are redrawn.
+
+Slower than the robot moves, because they are read rather than watched -- and
+because every one of them is a websocket message and a manager read paid for
+on the training thread."""
+
 PLAYBACK_FPS = 30.0
 """Frames a second the player draws at. The buffer holds every control step
 (usually 50 Hz); drawing every one of them would cost more than it shows."""
@@ -80,7 +87,6 @@ def open_live_view(env: Any, server: Any, realtime: bool = False,
   """
   scene = build_scene(env, server)
   if not realtime:
-    scene.create_scene_gui()
     return MjlabLiveScene(env, server, scene)
   return MjlabReplayView(env, server, scene, seconds=buffer_seconds)
 
@@ -129,6 +135,203 @@ def build_scene(env: Any, server: Any) -> Any:
   return scene
 
 
+class LivePanels:
+  """mjlab's own viewer panels, built against a scene a trainer is feeding.
+
+  ``ViserPlayViewer`` is where these come from, and the reason this is not
+  simply that viewer is at the top of this module: it owns the environment and
+  drives everything from its own thread. What is reused here is every panel
+  that only *reads*, and the reads are moved to the training thread -- they
+  happen inside the same push that sends the frame, so the reward manager is
+  never read while the step that fills it is still running.
+
+  Two panels of mjlab's are deliberately left out:
+
+  * **Commands.** Its sliders write to the command manager. Retuning a command
+    term is a change to the run, and a change to a run with nobody's reason
+    attached to it is the one thing rlmcp exists to prevent -- `rlmcp set` is
+    how that is asked for, and it says who asked and why.
+  * **Camera Feeds.** They need a render context, and the live view's whole
+    claim is that it needs none: no GL, no GPU memory, and a headless box over
+    ssh serves it. `rlmcp shot` and `rlmcp video` are the rendered answers.
+
+  Everything else -- the reward bars and term plots, the metrics tab, contact
+  and force overlays, per-sensor and per-reward debug visualisation -- is
+  mjlab's, built by mjlab's code, and behaves the way it does in `play`.
+  """
+
+  def __init__(self, env: Any, server: Any, scene: Any,
+               debug_draws: bool = True):
+    self.env = env
+    self.server = server
+    self.scene = scene
+    # Whether the debug arrows the environment queues can be drawn honestly.
+    # In live mode they can: they are queued and sent with the very state they
+    # describe. In realtime they cannot -- the pose on screen is seconds old
+    # and the arrows would be from now, which is two different moments drawn
+    # as one. The checkboxes are still there; what they turn on is the
+    # environment's own flag, which `rlmcp play` and the next live view read.
+    self.debug_draws = bool(debug_draws)
+    self.terms: Any = None
+    self.debug: Any = None
+    self.contacts: Any = None
+    self.error = ""
+    self._selected = int(getattr(scene, "env_idx", 0))
+    self._last_panel = 0.0
+    try:
+      self._build()
+    except Exception as exc:
+      # A panel that will not build is not a reason to have no view: the robot
+      # is the thing somebody opened the tab for.
+      self.error = f"{type(exc).__name__}: {exc}"
+
+  # Construction.
+
+  def _build(self) -> None:
+    import viser
+    from mjlab.viewer.viser.overlays import (
+        ViserContactOverlays,
+        ViserDebugOverlays,
+        ViserTermOverlays,
+    )
+
+    # mjlab's panels read `env.unwrapped`; what a live view is handed is
+    # already the unwrapped environment, so this is the adapter between the
+    # two conventions and nothing more.
+    env = _AsUnwrapped(self.env)
+    self.scene.debug_visualization_enabled = True
+
+    # Everything mjlab adds goes inside this group, which is created after
+    # rlmcp's own panel and therefore below it: what the run is doing reads
+    # first, and the rest is there when somebody goes looking.
+    tabs = self.server.gui.add_tab_group()
+
+    with tabs.add_tab("Scene", icon=viser.Icon.SETTINGS):
+      self.scene.create_scene_gui(debug_viz_extra_gui=self._debug_vis_extra)
+
+    with tabs.add_tab("Visualization", icon=viser.Icon.EYE):
+      self.scene.create_overlay_gui()
+
+    self.terms = ViserTermOverlays(
+        server=self.server, env=env, scene=self.scene,
+        frame_time=1.0 / PLAYBACK_FPS)
+    self.terms.setup_tabs(tabs)
+    self.debug = ViserDebugOverlays(env=env, scene=self.scene)
+    self.contacts = ViserContactOverlays(scene=self.scene)
+
+  def _debug_vis_extra(self) -> None:
+    """The per-sensor and per-reward debug-vis checkboxes, as mjlab has them.
+
+    Both write nothing but a visualisation flag on the term or the sensor, so
+    unlike the Commands folder they cannot change what the run is learning.
+    """
+    self._sensor_checkboxes()
+    self._reward_checkboxes()
+
+  def _sensor_checkboxes(self) -> None:
+    try:
+      from mjlab.sensors import RayCastSensor
+    except Exception:
+      return
+    sensors = [s for s in getattr(self.env.scene, "sensors", {}).values()
+               if isinstance(s, RayCastSensor) and getattr(s.cfg, "debug_vis", False)]
+    for sensor in sensors:
+      box = self.server.gui.add_checkbox(
+          sensor.cfg.name, initial_value=sensor._debug_vis_enabled)
+
+      def _on(_event: Any, _s: Any = sensor, _b: Any = box) -> None:
+        _s._debug_vis_enabled = _b.value
+        self.scene.needs_update = True
+
+      box.on_update(_on)
+
+  def _reward_checkboxes(self) -> None:
+    manager = getattr(self.env, "reward_manager", None)
+    if manager is None or not hasattr(manager, "get_visualizable_terms"):
+      return
+    for name, func in manager.get_visualizable_terms():
+      box = self.server.gui.add_checkbox(
+          name, initial_value=func._debug_vis_enabled)
+
+      def _on(_event: Any, _f: Any = func, _b: Any = box) -> None:
+        _f._debug_vis_enabled = _b.value
+        self.scene.request_update()
+
+      box.on_update(_on)
+
+  # Per frame, on whichever thread pushes the frame.
+
+  def before_frame(self, env_id: int) -> None:
+    """Queue this frame's debug draws, and notice an environment switch.
+
+    Called immediately before the scene is updated, so the arrows queued here
+    are the ones sent with the state they describe rather than the previous
+    frame's.
+    """
+    if self.error:
+      return
+    try:
+      if env_id != self._selected:
+        self._selected = env_id
+        for overlay in (self.terms, self.debug, self.contacts):
+          if overlay is not None:
+            overlay.on_env_switch()
+      if self.debug is not None and self.debug_draws:
+        self.debug.queue()
+    except Exception as exc:
+      self.error = f"{type(exc).__name__}: {exc}"
+
+  def after_frame(self) -> None:
+    """Push this frame's reward bars and term plots.
+
+    After the scene, because the robot moving is what somebody is watching and
+    a plot is what they read afterwards; and on this thread, because the
+    manager buffers these read are the ones the training loop has just
+    finished writing.
+    """
+    if self.error or self.terms is None:
+      return
+    try:
+      self.terms.update(paused=False)
+    except Exception as exc:
+      self.error = f"{type(exc).__name__}: {exc}"
+
+  def describe(self) -> Dict[str, Any]:
+    return {
+        "panels": self.terms is not None,
+        "panels_error": self.error,
+    }
+
+  # Throttling, for a caller that ticks faster than a plot is worth redrawing.
+
+  def due(self, now: float, every: float = 1.0 / PANEL_FPS) -> bool:
+    if now - self._last_panel < every:
+      return False
+    self._last_panel = now
+    return True
+
+  def close(self) -> None:
+    for overlay in (self.terms,):
+      cleanup = getattr(overlay, "cleanup", None)
+      if cleanup is None:
+        continue
+      try:
+        cleanup()
+      except Exception:
+        pass
+    self.terms = self.debug = self.contacts = None
+
+
+class _AsUnwrapped:
+  """``env.unwrapped`` for code that expects a wrapper, over one that is not."""
+
+  def __init__(self, env: Any):
+    self.unwrapped = env
+
+  def __getattr__(self, name: str) -> Any:
+    return getattr(self.unwrapped, name)
+
+
 class MjlabLiveScene:
   """The live handle: ``update(env_id)`` pushes the current state, now.
 
@@ -138,11 +341,19 @@ class MjlabLiveScene:
   :meth:`update`.
   """
 
-  def __init__(self, env: Any, server: Any, scene: Any):
+  def __init__(self, env: Any, server: Any, scene: Any,
+               panels: Optional[Any] = None):
     self.env = env
     self.server = server
     self.scene = scene
     self._selected = int(getattr(scene, "env_idx", 0))
+    # mjlab's own panels, fed from this thread. Built after the scene, so the
+    # scene controls they wrap exist to be wrapped.
+    self.panels = LivePanels(env, server, scene) if panels is None else panels
+
+  def describe(self) -> Dict[str, Any]:
+    """What the panels are doing, for the ``status`` payload."""
+    return self.panels.describe() if self.panels is not None else {}
 
   def update(self, env_id: int = 0) -> None:
     """Push the current state of one environment to every connected browser.
@@ -157,10 +368,14 @@ class MjlabLiveScene:
     if wanted != self._selected:
       self.scene.env_idx = wanted
       self._selected = wanted
+    if self.panels is not None:
+      self.panels.before_frame(int(getattr(self.scene, "env_idx", wanted)))
     # atomic() sends the frame as one update, so a browser never paints half a
     # robot from this frame and half from the last one.
     with self.server.atomic():
       self.scene.update(self.env.sim.data)
+    if self.panels is not None:
+      self.panels.after_frame()
 
   def close(self) -> None:
     """Drop what the handle holds.
@@ -169,6 +384,9 @@ class MjlabLiveScene:
     that opened it, so there is nothing to remove here; letting go of the scene
     is what frees the converted meshes.
     """
+    if self.panels is not None:
+      self.panels.close()
+      self.panels = None
     self.scene = None
     self.server = None
 
@@ -245,12 +463,65 @@ class MjlabReplayView:
     self._pending: Optional[_Window] = None
     self._clock = clock
     self._last_capture: Optional[float] = None
+    self._paused = False
+    # Assume somebody until told otherwise: a view whose owner never reports
+    # watchers should show a robot, not sit frozen waiting to be told it may.
+    self.watchers = 1
 
+    # Built before the player, because the player's own controls are added
+    # after them and a tab group cannot be inserted above what already exists.
+    self.panels: Any = None
     self.viewer = (player_factory or player_class())(env, server, scene, self)
     self._error = ""
     self._thread = threading.Thread(
         target=self._play, name="rlmcp-live-view", daemon=True)
     self._thread.start()
+
+  # Pause, from either end.
+
+  @property
+  def paused(self) -> bool:
+    """Whether this view is stopped. Read by the owner on every step.
+
+    Ours rather than the player's ``_is_paused``, and that is the point: the
+    base class applies a pause on its own thread, one queued action later, so
+    reading it back here would answer the previous question. This flips when
+    somebody asks, which is what the button label and the training loop's gate
+    both need.
+    """
+    return self._paused
+
+  def set_paused(self, paused: bool) -> None:
+    """Stop the player and the recording together, or start both again.
+
+    Not "hold this frame while the buffer keeps filling": a window recorded
+    during a pause is a stretch of the run nobody watched, handed to a player
+    that is not asking for one. So recording stops with the playback and the
+    half-filled window is dropped -- on resume the next one starts at the step
+    after the pause rather than splicing across it and calling that motion.
+
+    What is queued for the player is the state wanted, not a toggle. A toggle
+    is only correct while nothing else can flip the player's own flag, and the
+    moment a second control can -- a keyboard shortcut, a panel added later --
+    a toggle drifts and the view ends up frozen with the tab insisting it is
+    running. Asking for `paused=True` twice is then simply true twice.
+    """
+    paused = bool(paused)
+    if paused == self._paused:
+      return
+    self._paused = paused
+    self._fill = 0
+    self._recording = not paused
+    self.viewer.request_paused(paused)
+
+  def set_watchers(self, watchers: int) -> None:
+    """How many browsers are attached, from the owner that counts them.
+
+    The player has its own thread, so unlike a live push it does not stop just
+    because the training loop stopped feeding it. Told nobody is there, it
+    holds still instead of spending an unwatched run asking for windows.
+    """
+    self.watchers = max(0, int(watchers))
 
   # The training thread.
 
@@ -262,7 +533,9 @@ class MjlabReplayView:
       # the wrong robot, so it goes.
       self._requested_env = wanted
       self.set_env(wanted)
-    if not self._recording:
+    # The owner's gate stops this being reached at all while paused; this is
+    # for the step in between somebody clicking Pause and the owner noticing.
+    if self._paused or not self._recording:
       return
 
     now = self._clock()
@@ -271,6 +544,11 @@ class MjlabReplayView:
       self._fill = 0  # Not one stretch of the run any more; start again.
       self._gaps += 1
     self._last_capture = now
+
+    # The numbers, on this thread: what a reward term currently reads is the
+    # run's, not the replay's, and this is the only thread allowed to ask.
+    if self.panels is not None and self.panels.due(now):
+      self.panels.after_frame()
 
     data = self.env.sim.data
     for name in _CAPTURED_FIELDS:
@@ -329,7 +607,14 @@ class MjlabReplayView:
     return window
 
   def request_window(self) -> None:
-    """Start recording again. Called as the player nears the end of a window."""
+    """Start recording again. Called as the player nears the end of a window.
+
+    Ignored while paused. Single-stepping to the end of the held window still
+    asks for the next one, and answering that would put the run back to work
+    for a tab that is explicitly stopped.
+    """
+    if self._paused:
+      return
     self._recording = True
 
   def set_env(self, env_id: int) -> None:
@@ -339,7 +624,7 @@ class MjlabReplayView:
       return
     self.env_id = env_id
     self._fill = 0
-    self._recording = True
+    self._recording = not self._paused
     with self._lock:
       self._pending = None
     if getattr(self.scene, "env_idx", env_id) != env_id:
@@ -356,10 +641,13 @@ class MjlabReplayView:
   def describe(self) -> Dict[str, Any]:
     """What the buffer is doing, for the ``status`` payload."""
     window = self.viewer.window
+    panels = self.panels.describe() if self.panels is not None else {}
     return {
+        **panels,
         "buffer_frames": self.capacity,
         "buffer_seconds": self.seconds,
         "recording": self._recording,
+        "watchers_known": self.watchers,
         "recorded": self._fill,
         "windows_recorded": self._windows,
         "windows_dropped": self._dropped,
@@ -368,7 +656,7 @@ class MjlabReplayView:
         "behind_seconds": (round(time.time() - window.recorded_at, 1)
                            if window else None),
         "speed": self.viewer.get_status().speed_label,
-        "paused": self.viewer.get_status().paused,
+        "paused": self._paused,
         "starved": self.viewer.starved,
         "error": self._error or self.viewer.error,
     }
@@ -376,6 +664,9 @@ class MjlabReplayView:
   def close(self) -> None:
     self.viewer.stop()
     self._thread.join(timeout=2.0)
+    if self.panels is not None:
+      self.panels.close()
+      self.panels = None
     self._buffers.clear()
     self.scene = None
     self.server = None
@@ -439,6 +730,26 @@ class ReplayPlayer:
 
   # Lifecycle.
 
+  SET_PAUSED = "rlmcp_set_paused"
+  """A pause action carrying the state wanted, rather than a toggle.
+
+  The base class's queue is the right place for this -- the flag it sets is
+  only ever touched on the player's own thread -- but its own action is
+  ``TOGGLE_PAUSE``, and a toggle is a fact about who asked last rather than
+  about what anybody wants.
+  """
+
+  def request_paused(self, paused: bool) -> None:
+    """Ask the loop to be paused or running. Safe from any thread."""
+    self._actions.append((self.SET_PAUSED, bool(paused)))
+
+  def _handle_custom_action(self, action: Any, payload: Any) -> bool:
+    if action != self.SET_PAUSED:
+      return super()._handle_custom_action(action, payload)
+    if bool(payload) != self._is_paused:
+      self.toggle_pause()
+    return True
+
   def stop(self) -> None:
     self._stop.set()
 
@@ -479,6 +790,12 @@ class ReplayPlayer:
     time, not a failure, and the base class reads False as "the step raised"
     and pauses itself.
     """
+    if not self.source.watchers:
+      # Nobody is looking. Hold the frame rather than starving through windows
+      # the training loop is not being allowed to record anyway -- a counter
+      # that climbs all night says the run could not keep up, which would be a
+      # lie about a run nobody asked anything of.
+      return True
     if self._pick_env_from_the_tab():
       return True
     window = self.window
@@ -556,9 +873,14 @@ class ReplayPlayer:
 
       @pause.on_click
       def _(_: Any) -> None:
-        self.request_toggle_pause()
-        pause.label = "Play" if self._is_paused else "Pause"
-        pause.icon = (viser.Icon.PLAYER_PLAY if self._is_paused
+        # Through the source, not `request_toggle_pause`, so that stopping the
+        # playback also stops the run recording for it -- and so the label can
+        # be written from a flag that has already changed rather than from the
+        # base class's, which flips a queued action later on another thread.
+        self.source.set_paused(not self.source.paused)
+        paused = self.source.paused
+        pause.label = "Resume" if paused else "Pause"
+        pause.icon = (viser.Icon.PLAYER_PLAY if paused
                       else viser.Icon.PLAYER_PAUSE)
 
       step = self.server.gui.add_button("Step", icon=viser.Icon.PLAYER_TRACK_NEXT)
@@ -586,8 +908,11 @@ class ReplayPlayer:
       def _(_: Any) -> None:
         self.request_reset()
 
-    with self.server.gui.add_folder("Scene"):
-      self.scene.create_scene_gui()
+    # mjlab's own panels, below the replay controls. The debug arrows are off
+    # here: see LivePanels.debug_draws for why a replayed pose must not be
+    # drawn with arrows from the current step.
+    self.source.panels = LivePanels(
+        self.env, self.server, self.scene, debug_draws=False)
 
   def _refresh_status(self, every: float = 0.5) -> None:
     if self._status_handle is None:
@@ -598,7 +923,11 @@ class ReplayPlayer:
     self._status_at = now
     state = self.source.describe()
     window = self.window
-    if window is not None and not window.done:
+    if self.source.paused:
+      where = "paused &mdash; the run is back to full speed"
+    elif not self.source.watchers:
+      where = "waiting for a browser"
+    elif window is not None and not window.done:
       where = (f"playing {window.index}/{window.frames} "
                f"({window.index * self.source.dt:.1f}s of "
                f"{self.source.seconds:g}s)")
@@ -611,7 +940,7 @@ class ReplayPlayer:
       <div style="font-size: 0.85em; line-height: 1.35; padding: 0 1em 0.5em 1em;">
         <strong>{where}</strong><br/>
         speed {self.get_status().speed_label}
-        {'&middot; paused' if self._is_paused else ''}<br/>
+        {'&middot; paused' if self.source.paused else ''}<br/>
         {'recorded %.0fs ago' % behind if behind is not None else '&nbsp;'}<br/>
         <span style="opacity:0.7;">env {self.source.env_id} &middot;
         {state['windows_recorded']} windows</span>

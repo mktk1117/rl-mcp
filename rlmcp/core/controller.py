@@ -437,10 +437,11 @@ class RlMcp:
     self.iteration = 0
     self.total_env_steps = 0
 
-    # The live view: a browser tab showing the environment as it trains. Off
-    # unless asked for, because it binds a port -- but attachable at any point
-    # afterwards with `rlmcp view --on`, which is the whole reason it is not a
-    # launch-time-only decision. See rlmcp.core.live_view for what it costs.
+    # The live view: a browser tab showing the environment as it trains. On
+    # by default, because an unwatched one costs a bound port and nothing else
+    # -- and because the moment somebody wants to look at a run is never the
+    # moment they launched it. Detachable and re-attachable at any point with
+    # `rlmcp view --off` / `--on`. See rlmcp.core.live_view for what it costs.
     # Built after the run's own state, because a view enabled here starts
     # immediately and its panel reads the iteration and the stage.
     self._task_label = str((session_info or {}).get("task") or "")
@@ -1376,6 +1377,7 @@ class RlMcp:
       where: Optional[Dict[str, Any]] = None,
       realtime: Optional[bool] = None,
       buffer_seconds: Optional[float] = None,
+      paused: Optional[bool] = None,
   ) -> Dict[str, Any]:
     """Attach, re-point or detach the live browser view; report where it is.
 
@@ -1387,13 +1389,17 @@ class RlMcp:
 
     ``realtime=True`` swaps the plain live push for a buffered window played
     back at the speed the robot actually moves, with a player in the tab.
+
+    ``paused=True`` stops feeding an attached view without giving the port
+    back: the tab holds the frame it has and the run returns to the speed it
+    trains at unwatched. ``paused=False`` starts it again.
     """
     if where is not None and env_id is None:
       env_id = self._resolve_env_id(env_id, where)
     was_running = self.live_view.running
     result = self.live_view.configure(
         enabled=enabled, port=port, host=host, fps=fps, env_id=env_id,
-        realtime=realtime, buffer_seconds=buffer_seconds)
+        realtime=realtime, buffer_seconds=buffer_seconds, paused=paused)
     if self.live_view.running != was_running:
       self.session.append_event(
           "live_view_started" if self.live_view.running else "live_view_stopped",

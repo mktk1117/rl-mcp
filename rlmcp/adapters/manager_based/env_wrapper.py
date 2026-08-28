@@ -42,6 +42,26 @@ from rlmcp.extensions import discover as discover_extensions
 CurriculumArg = Union[None, str, StageSchedule, Sequence[Any]]
 
 
+def serve_a_live_view(viser: Optional[bool], session_kind: str) -> bool:
+  """Whether to serve a live view when the caller did not say either way.
+
+  A training run gets one. Unwatched it is a bound port and no work at all --
+  the tick returns before it touches anything -- and the hour into a run when
+  somebody wants to see the robot is not an hour they can go back and pass a
+  flag in. That asymmetry is the whole argument: having it on is paid for by
+  nobody, and having it off is paid for exactly when it is wanted.
+
+  A play session does not. It is already opening a viewer of its own, and a
+  second scene on a second port would be nothing but a way to end up watching
+  the wrong one.
+
+  An explicit ``viser=`` wins, in both directions.
+  """
+  if viser is not None:
+    return bool(viser)
+  return not session_kind
+
+
 class TrainingStopped(SessionStopped):
   """Raised inside the training loop when an agent asks training to stop.
 
@@ -105,7 +125,7 @@ class RlMcpEnvWrapper:
       video_seconds: float = 4.0,
       video_env_id: int = 0,
       video_budget_mb: Optional[float] = None,
-      viser: bool = False,
+      viser: Optional[bool] = None,
       viser_port: Optional[int] = None,
       viser_host: Optional[str] = None,
       viser_fps: Optional[float] = None,
@@ -115,6 +135,9 @@ class RlMcpEnvWrapper:
   ):
     self.env = env
     self.service_every_steps = max(1, int(service_every_steps))
+
+    viser_asked_for = viser is not None
+    viser = serve_a_live_view(viser, session_kind)
 
     sim_adapter = self.build_sim_adapter(self.unwrapped, robot_name)
     session_dir = Path(session_dir) if session_dir else Path.cwd() / "rlmcp_session"
@@ -197,7 +220,10 @@ class RlMcpEnvWrapper:
           "open. Detach it with `rlmcp view --off`",
           flush=True,
       )
-    elif view.last_error:
+    elif view.last_error and viser_asked_for:
+      # Only for somebody who asked. The view is on by default now, and an
+      # install without viser should not have to read a paragraph about a
+      # feature it did not request on every run it launches.
       print(f"[rlmcp] the live view could not start: {view.last_error}", flush=True)
 
   # Construction helpers.

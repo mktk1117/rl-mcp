@@ -242,3 +242,40 @@ def test_the_shared_base_cannot_be_wrapped_round_an_environment(tmp_path):
     shared.RlMcpEnvWrapper(wrappable_env(), session_dir=tmp_path / "session")
   assert "build_sim_adapter" in str(caught.value)
   assert "mjlab" in str(caught.value)
+
+
+# The live view is on unless somebody says otherwise.
+#
+# It is a default rather than a flag because of what it costs: with no browser
+# open, and while paused, the tick returns before it reads a clock. What an
+# unwatched view uses is a port. What a missing one costs is the hour of a run
+# somebody now wants to look at and cannot.
+
+
+def test_a_training_run_serves_a_live_view_without_being_asked():
+  from rlmcp.adapters.manager_based.env_wrapper import serve_a_live_view
+
+  assert serve_a_live_view(None, "") is True
+
+
+def test_a_play_session_does_not():
+  # It is opening a viewer of its own; a second one on a second port is only a
+  # way to end up watching the wrong scene.
+  from rlmcp.adapters.manager_based.env_wrapper import serve_a_live_view
+
+  assert serve_a_live_view(None, "play") is False
+
+
+def test_saying_so_wins_either_way():
+  from rlmcp.adapters.manager_based.env_wrapper import serve_a_live_view
+
+  assert serve_a_live_view(False, "") is False
+  assert serve_a_live_view(True, "play") is True
+
+
+def test_rlmcp_train_defaults_the_view_on_and_no_viser_turns_it_off():
+  from rlmcp.train import _parse_args
+
+  assert _parse_args(["Some-Task"]).viser is True
+  assert _parse_args(["Some-Task", "--no-viser"]).viser is False
+  assert _parse_args(["Some-Task", "--viser"]).viser is True
