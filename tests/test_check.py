@@ -12,6 +12,7 @@ together, and `tests/test_cli_dispatch.py` walks that.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
@@ -25,7 +26,11 @@ from rlmcp.check import (
     roll,
     run_check,
     summarise,
+    train_gate,
 )
+
+ALL_GATES = ["imports", "constructs", "steps", "rewards_finite", "terminations",
+             "trains"]
 
 
 # ── a fake environment, broken in specific ways ──────────────────────────
@@ -254,7 +259,7 @@ def test_the_build_failing_stops_the_gates_after_it(monkeypatch):
   assert by_name["imports"]["ok"] is True
   assert by_name["constructs"]["ok"] is False
   assert "torso_link" in by_name["constructs"]["detail"]
-  for later in ("steps", "rewards_finite", "terminations"):
+  for later in ("steps", "rewards_finite", "terminations", "trains"):
     assert by_name[later]["ok"] is None
   assert answer["passed"] is False
   assert answer["first_problem"] == "constructs"
@@ -274,6 +279,192 @@ def test_an_unimportable_package_is_an_import_problem_not_a_build_one(monkeypatc
   assert "--task-package" in by_name["imports"]["fix"]
   # Every gate is reported, and nothing claims the environment was built and
   # then failed: the four after the import say they did not run.
-  assert [g["gate"] for g in answer["gates"]] == [
-      "imports", "constructs", "steps", "rewards_finite", "terminations"]
+  assert [g["gate"] for g in answer["gates"]] == ALL_GATES
   assert by_name["constructs"]["ok"] is None
+
+
+# ── the sixth gate: what training constructs ─────────────────────────────
+#
+# The failure that paid for this gate: five green ticks, and the run died at
+# iteration 0 because the task's `rl_cfg` had no `distribution_cfg`. Nothing
+# above `trains` constructs a runner, so nothing above it reads the agent
+# config -- which is where that field lives. Every test here is that failure
+# in one of its shapes.
+
+
+@dataclasses.dataclass
+class FakeAgentCfg:
+  """An `rl_cfg` is a dataclass, and `train_once` turns it into rsl_rl's dict."""
+  num_steps_per_env: int = 4
+
+
+class FakeLab:
+  def __init__(self, adapter):
+    self.sim = adapter
+
+
+class FakeVecEnv(FakeEnv):
+  num_actions = 3
+
+
+def _fake_build(monkeypatch, agent_cfg=FakeAgentCfg(), **env_kwargs):
+  """Stand in for `build_env`, which would want a simulator."""
+  import rlmcp.play as play
+
+  vec_env = FakeVecEnv(**env_kwargs)
+  lab = FakeLab(FakeAdapter(rewards={"alive": 1.0}, terminations={}))
+  monkeypatch.setattr(
+      play, "build_env",
+      lambda *_a, **_k: (None, lab, agent_cfg, vec_env))
+  return vec_env
+
+
+class ExplodesOnConstruction:
+  """A runner class that will not build -- a missing field, a bad shape."""
+
+  def __init__(self, *_args, **_kwargs):
+    raise KeyError("distribution_cfg")
+
+
+class ExplodesAtIterationZero:
+  """A runner that builds and then dies on the first act, which is the exact
+  shape of the missing-`distribution_cfg` failure: the actor is constructed
+  with no output distribution and nothing notices until PPO asks it to act."""
+
+  def __init__(self, *_args, **_kwargs):
+    pass
+
+  def learn(self, **_kwargs):
+    raise AttributeError("'NoneType' object has no attribute 'mean'")
+
+
+class Learns:
+  def __init__(self, _env, cfg, log_dir, _device):
+    self.cfg = cfg
+    self.log_dir = log_dir
+    self.learned = 0
+
+  def learn(self, num_learning_iterations=1, **_kwargs):
+    self.learned += num_learning_iterations
+
+
+def test_a_runner_that_will_not_build_fails_the_trains_gate(monkeypatch):
+  """The regression. Without the gate this task passes `rlmcp check` and dies
+  at iteration 0 of a run that has already paid for a GPU."""
+  import rlmcp.check as check
+
+  _fake_build(monkeypatch)
+  monkeypatch.setattr(check, "load_runner", lambda _task: ExplodesOnConstruction)
+
+  answer = run_check(CheckConfig(task="Some-Task", steps=4, num_envs=2))
+  by_name = {g["gate"]: g for g in answer["gates"]}
+
+  assert [g["gate"] for g in answer["gates"]] == ALL_GATES
+  assert by_name["trains"]["ok"] is False
+  assert "distribution_cfg" in by_name["trains"]["detail"]
+  assert "KeyError" in by_name["trains"]["traceback"]
+  assert by_name["trains"]["fix"]
+  # The five before it measured a healthy environment and still say so: the
+  # runner failing is not evidence against any of them.
+  for earlier in ("imports", "constructs", "steps", "rewards_finite", "terminations"):
+    assert by_name[earlier]["ok"] is True
+  assert answer["passed"] is False
+  assert answer["first_problem"] == "trains"
+
+
+def test_a_runner_that_dies_at_iteration_zero_fails_too(monkeypatch):
+  """Constructing the runner is not enough: the failure this exists for
+  constructs perfectly happily and raises on the first act."""
+  import rlmcp.check as check
+
+  _fake_build(monkeypatch)
+  monkeypatch.setattr(check, "load_runner", lambda _task: ExplodesAtIterationZero)
+
+  answer = run_check(CheckConfig(task="Some-Task", steps=4, num_envs=2))
+  gate = {g["gate"]: g for g in answer["gates"]}["trains"]
+
+  assert gate["ok"] is False
+  assert "NoneType" in gate["detail"]
+  assert "distribution_cfg" in gate["fix"]
+
+
+def test_a_runner_that_takes_its_iteration_passes(monkeypatch):
+  import rlmcp.check as check
+
+  built = {}
+  _fake_build(monkeypatch)
+
+  def loader(_task):
+    return lambda *args: built.setdefault("runner", Learns(*args))
+
+  monkeypatch.setattr(check, "load_runner", loader)
+  answer = run_check(CheckConfig(task="Some-Task", steps=4, num_envs=2))
+  gate = {g["gate"]: g for g in answer["gates"]}["trains"]
+
+  assert gate["ok"] is True and answer["passed"] is True
+  assert built["runner"].learned == 1
+  # No log dir: rsl_rl opens its summary writer -- which the agent config may
+  # point at W&B -- only when it has somewhere to write.
+  assert built["runner"].log_dir is None
+  assert built["runner"].cfg == {"num_steps_per_env": 4}
+
+
+def test_no_rl_library_is_a_gate_that_did_not_run(monkeypatch):
+  """"rsl_rl is not installed here" is not "your task is broken", and a check
+  that says the second sends somebody to fix a task that is fine."""
+  import rlmcp.check as check
+
+  _fake_build(monkeypatch)
+
+  def missing(_task):
+    raise ImportError("No module named 'rsl_rl'")
+
+  monkeypatch.setattr(check, "load_runner", missing)
+  answer = run_check(CheckConfig(task="Some-Task", steps=4, num_envs=2))
+  gate = {g["gate"]: g for g in answer["gates"]}["trains"]
+
+  assert gate["ok"] is None
+  assert gate["detail"].startswith("not run")
+  assert "rsl_rl" in gate["detail"]
+  assert answer["passed"] is True and "trains" in answer["skipped"]
+
+
+def test_an_environment_that_is_already_wrong_gets_no_optimiser_step():
+  """PPO will take a step on a NaN reward without complaining, and report the
+  tick this gate exists to stop being wrong."""
+  earlier = gates_from(_rolled(nonfinite=["reward.x at step 1"]), steps=100,
+                       num_envs=4)
+
+  gate = train_gate("Some-Task", None, FakeAgentCfg(), "cpu", earlier)
+
+  assert gate["ok"] is None
+  assert "rewards_finite failed" in gate["detail"]
+
+
+def test_the_gate_can_be_turned_off():
+  gate = train_gate("Some-Task", None, FakeAgentCfg(), "cpu", [], enabled=False)
+
+  assert gate["ok"] is None and "--no-runner" in gate["detail"]
+
+
+def test_a_registry_that_cannot_produce_a_runner_is_the_task_s_problem(monkeypatch):
+  """Only an ImportError means "there is no RL library here". Anything else
+  the lookup raises is the task's, and must not take `rlmcp check` down."""
+  import rlmcp.check as check
+
+  _fake_build(monkeypatch)
+
+  def broken(_task):
+    raise KeyError("Some-Task")
+
+  monkeypatch.setattr(check, "load_runner", broken)
+  answer = run_check(CheckConfig(task="Some-Task", steps=4, num_envs=2))
+  gate = {g["gate"]: g for g in answer["gates"]}["trains"]
+
+  assert gate["ok"] is False and "KeyError" in gate["detail"]
+
+
+def test_a_task_with_no_rl_config_cannot_be_asked_this_question():
+  gate = train_gate("Some-Task", None, None, "cpu", [])
+
+  assert gate["ok"] is None and "no RL config" in gate["detail"]

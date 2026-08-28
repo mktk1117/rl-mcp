@@ -11,7 +11,7 @@ loop again in a scratch file, slightly differently.
 
 This is that loop, once, as a command. It builds the task with no policy --
 exactly as ``rlmcp play --policy zero`` does, through the same builder -- rolls
-it, and answers five questions in the order they fail in:
+it, and answers six questions in the order they fail in:
 
 ===================  ======================================================
 imports              a syntax error, a package that does not import
@@ -19,13 +19,28 @@ constructs           a term naming a body the robot does not have
 steps                an env that dies on step 1, or hangs
 rewards finite       a NaN, a divide by zero, an exploding scale
 terminations sane    everything ending at once, or nothing ever ending
+trains               a runner that will not build, or dies at iteration 0
 ===================  ======================================================
 
-Those five are most of the first day of a new task and none of them needs a
-GPU, a policy, or a training run to find. A gate that fails stops the ones
-after it, because they would be measuring an environment that is already
-wrong -- and a "reward is NaN" line under "the env would not construct" sends
-somebody to fix a reward that was never the problem.
+Those six are most of the first day of a new task and none of them needs a
+GPU or a training run to find. A gate that fails stops the ones after it,
+because they would be measuring an environment that is already wrong -- and a
+"reward is NaN" line under "the env would not construct" sends somebody to fix
+a reward that was never the problem.
+
+The last one is here because the first five were once all that there was, and
+they were not enough. A task passed every one of them and its training run
+died at iteration 0: its ``rl_cfg`` was missing ``distribution_cfg``, so the
+actor had no action distribution to sample from. Nothing above could have seen
+it -- a zero policy is a callable returning zeros, it never constructs a
+runner, so it never reads the agent config at all. Five green ticks were read,
+by a GUI and by a person, as *this will train*, and it did not. ``trains``
+builds what ``rlmcp train`` builds, from the same registry, and takes one
+iteration on it. It is last because it is the only gate that needs the five
+before it to be true to mean anything, and because it is the only one that
+steps the environment with something other than zeros -- running it earlier
+would leave the reward table measuring what a half-random policy paid rather
+than what doing nothing pays.
 
 What it reports beyond pass/fail is the part worth reading: **what each reward
 term paid**. The worked example this project keeps coming back to is a task
@@ -46,7 +61,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 DEFAULT_STEPS = 150
 """Enough to leave the reset transient and see a short episode end.
@@ -84,6 +99,17 @@ class CheckConfig:
   session_dir: str = ""
   """Where the throwaway session goes. Empty means a temporary directory that
   is removed afterwards; nothing about a check belongs in the records."""
+  runner: bool = True
+  """Whether to build the RL runner and take one iteration -- the ``trains``
+  gate. On by default, and the default is the whole argument: a check that
+  skips the failure it was built for is not much of a check. It is also nearly
+  free where it matters. The environment is already built and already rolled
+  by the time this runs; one iteration adds ``num_steps_per_env`` (24, in
+  every task here) steps on a handful of CPU envs and one PPO update over the
+  ~100 transitions they produce. Cartpole pays about a second for it.
+
+  ``--no-runner`` turns it off, for the case this cannot argue with: a task
+  whose iteration really is expensive, being checked for something else."""
   quiet: bool = False
 
 
@@ -319,11 +345,174 @@ def gates_from(rolled: Dict[str, Any], steps: int, num_envs: int) -> List[Dict[s
   return gates
 
 
+# ── the gate that constructs what training constructs ─────────────────────
+#
+# Everything above rolls a zero policy, which is a callable returning zeros.
+# It is the right thing to roll -- a task must survive doing nothing -- but it
+# means nothing above here has opened the agent config, and half of what stops
+# a run at iteration 0 lives in the agent config. This is the other half of
+# the interface: the runner `rlmcp train` would build, against the environment
+# that was just built, taking one iteration.
+#
+# One caveat, stated rather than hidden: the environment under it is `play`'s
+# (`load_env_cfg(task, play=True)`), because that is what the rest of the
+# command built. Randomisation differs from training there; observation and
+# action shapes do not, which is what this gate is reading.
+
+
+def load_runner(task: str) -> Any:
+  """The runner class ``rlmcp train`` would use, from the same registry.
+
+  Deliberately a separate call from the step below, so the two failures stay
+  apart. An :class:`ImportError` here means there is no ``rsl_rl`` in this
+  environment, which is a gate that *did not run*; anything raised while
+  constructing or stepping that class belongs to the task, which is a gate
+  that *failed*. Collapsing the two is how "you have not installed the RL
+  library" gets reported as "your task is broken".
+  """
+  from mjlab.rl import MjlabOnPolicyRunner
+  from mjlab.tasks.registry import load_runner_cls
+
+  # `or MjlabOnPolicyRunner` is `rlmcp train`'s own line, not a convention
+  # invented here: a task registers a runner class only when it needs a
+  # special one.
+  return load_runner_cls(task) or MjlabOnPolicyRunner
+
+
+def train_once(runner_cls: Any, vec_env: Any, agent_cfg: Any,
+               device: str) -> Dict[str, Any]:
+  """Construct the runner and take one iteration: a rollout and an update.
+
+  Constructing it is not enough, and that is not a guess. The failure this
+  gate exists for -- a missing ``distribution_cfg`` -- builds a runner
+  perfectly happily; the actor is simply left with no output distribution,
+  and the first time PPO asks it to act, it raises. Only a step reaches that
+  code. The same is true of a shape mismatch that survives construction and
+  of an optimiser that never sees a gradient.
+  """
+  import contextlib
+  import io
+  from dataclasses import asdict, is_dataclass
+
+  cfg = asdict(agent_cfg) if is_dataclass(agent_cfg) else dict(agent_cfg)
+  started = time.time()
+  # rsl_rl prints the actor and critic modules as it builds them, and its
+  # iteration table as it learns. Both belong to a training run, not to a
+  # command whose whole output is a table of gates. Nothing is lost: a failure
+  # comes back from here as data, not as something printed.
+  with contextlib.redirect_stdout(io.StringIO()):
+    # `log_dir=None` on purpose. rsl_rl opens its summary writer only when it
+    # has somewhere to write, and which writer is the agent config's business
+    # -- it may be W&B. A check must not open a network connection, and must
+    # not leave a run behind in somebody's logs. No `attach_runner` either:
+    # that is how a *training* session adopts a runner, with the telemetry
+    # and checkpoints that go with it, and this one is thrown away in a
+    # moment.
+    runner = runner_cls(vec_env, cfg, None, device)
+    runner.learn(num_learning_iterations=1, init_at_random_ep_len=True)
+  return {
+      "steps_per_env": int(cfg.get("num_steps_per_env", 0) or 0),
+      "seconds": round(time.time() - started, 2),
+  }
+
+
+def _raised_in(exc: BaseException) -> str:
+  """The innermost frame, which for this gate is most of the diagnosis.
+
+  A runner failure surfaces deep inside the RL library, where the message on
+  its own -- "'NoneType' object has no attribute 'mean'" -- names nothing a
+  task author can act on. The file and function it came from do.
+  """
+  import traceback
+
+  frames = traceback.extract_tb(exc.__traceback__)
+  if not frames:
+    return ""
+  last = frames[-1]
+  return f"{Path(last.filename).name}:{last.lineno} in {last.name}"
+
+
+def _traceback_of(exc: BaseException) -> str:
+  """The traceback with this file's own frames removed.
+
+  The outermost two are always ``train_gate`` calling ``train_once``, which
+  say nothing: what is wanted is the first line that is not rlmcp's.
+  """
+  import traceback
+
+  ours = str(Path(__file__).resolve())
+  frames = traceback.extract_tb(exc.__traceback__)
+  theirs = [f for f in frames if str(Path(f.filename).resolve()) != ours]
+  return "".join(traceback.format_list(theirs or frames)
+                 + traceback.format_exception_only(type(exc), exc))
+
+
+TRAINS_FIX = (
+    "This is the agent config, not the environment: the env built, stepped "
+    "and paid finite rewards above. Look at the task's registered `rl_cfg` -- "
+    "a field the policy needs and does not have (`distribution_cfg` is the "
+    "one that has bitten this project), an actor whose input does not match "
+    "the observation the env returns, or an optimiser that cannot be built. "
+    "`rlmcp train` fails here too, at iteration 0, after paying for the "
+    "environment first."
+)
+
+
+def train_gate(task: str, vec_env: Any, agent_cfg: Any, device: str,
+               earlier: List[Dict[str, Any]], enabled: bool = True) -> Dict[str, Any]:
+  """Answer ``trains``: would a training run get past iteration 0?
+
+  A pass means training *starts* and takes a step. It is not a forecast that
+  the task learns anything -- no gate here is, and `docs/tuning.md` is the
+  rest of that question.
+  """
+  if not enabled:
+    return _skipped("trains", "--no-runner")
+  broken = [g["gate"] for g in earlier if g["ok"] is False]
+  if broken:
+    # Not thrift -- correctness. PPO will take an optimiser step on a NaN
+    # reward without complaining, and report the tick this gate exists to
+    # stop being wrong.
+    return _skipped(
+        "trains",
+        f"{broken[0]} failed, and one optimiser step on an environment that "
+        "is already wrong proves nothing")
+  if agent_cfg is None:
+    return _skipped("trains", "this task registers no RL config to build from")
+
+  try:
+    # Only an ImportError from the *lookup* is a gate that did not run.
+    # Everything else, from either half, is the task's answer and is reported
+    # as one -- including a registry that cannot produce a runner at all,
+    # which `rlmcp train` would hit at the same line.
+    try:
+      runner_cls = load_runner(task)
+    except ImportError as exc:
+      return _skipped("trains", f"no RL runner available here: {exc}")
+    info = train_once(runner_cls, vec_env, agent_cfg, device)
+  except Exception as exc:                        # noqa: BLE001 - it is the answer
+    where = _raised_in(exc)
+    return _gate(
+        "trains", False,
+        detail=f"{type(exc).__name__}: {exc}" + (f" (raised in {where})" if where else ""),
+        fix=TRAINS_FIX,
+        traceback=_traceback_of(exc))
+  # Short prose in `detail` and only `seconds` beside it, as `constructs`
+  # does. A column per fact -- the runner class, the rollout length -- widens
+  # the gates table past a terminal for every task that passes, and that table
+  # is the thing somebody actually reads. When it fails, the runner class is
+  # named in the traceback, which is where it is wanted anyway.
+  return _gate(
+      "trains", True,
+      detail=f"1 iteration of {info['steps_per_env']} steps/env",
+      seconds=info["seconds"])
+
+
 # ── the command ───────────────────────────────────────────────────────────
 
 
 def run_check(cfg: CheckConfig) -> Dict[str, Any]:
-  """Build the task, roll it, and answer the five questions.
+  """Build the task, roll it, and answer the six questions.
 
   The build is ``play``'s, unchanged: the same registry lookup, the same
   ``play=True`` config, the same wrapper. A check that constructed the
@@ -363,7 +552,7 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
 
   try:
     try:
-      env, lab, _agent_cfg, vec_env = build_env(play_cfg, cfg.task, None)
+      env, lab, agent_cfg, vec_env = build_env(play_cfg, cfg.task, None)
     except PlayError as exc:
       # Everything `build_env` refuses is one of the first two gates, and it
       # already says which: an unknown task and a package that will not import
@@ -373,7 +562,7 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
           "imports", not importing, detail="" if not importing else str(exc),
           fix="Name the package whose import registers this task: "
               "--task-package <module>." if importing else ""))
-      # All five gates are always reported, and the ones after the failure say
+      # All six gates are always reported, and the ones after the failure say
       # they did not run. A gate simply missing from the list is a hole a
       # reader fills in with an assumption.
       if importing:
@@ -382,7 +571,7 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
         gates.append(_gate("constructs", False, detail=str(exc),
                            fix="The environment could not be built. The message "
                                "is the task's own."))
-      for name in ("steps", "rewards_finite", "terminations"):
+      for name in ("steps", "rewards_finite", "terminations", "trains"):
         gates.append(_skipped(name, "the environment was not built"))
       return _payload(cfg, gates, {}, {}, steps, num_envs, time.time() - started)
     except Exception as exc:                      # noqa: BLE001 - it is the answer
@@ -391,8 +580,8 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
           "constructs", False, detail=f"{type(exc).__name__}: {exc}",
           fix="Built from the task's own config, so this traceback is the "
               "task's. A term naming a body the robot does not have is the "
-              "usual cause."))
-      for name in ("steps", "rewards_finite", "terminations"):
+                  "usual cause."))
+      for name in ("steps", "rewards_finite", "terminations", "trains"):
         gates.append(_skipped(name, "the environment was not built"))
       return _payload(cfg, gates, {}, {}, steps, num_envs, time.time() - started)
 
@@ -410,11 +599,16 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
           "steps", False, detail=f"{type(exc).__name__}: {exc}",
           fix="The environment raised while stepping. Nothing after this could "
               "be measured on it."))
-      for name in ("rewards_finite", "terminations"):
+      for name in ("rewards_finite", "terminations", "trains"):
         gates.append(_skipped(name, "the environment stopped stepping"))
       return _payload(cfg, gates, built, {}, steps, num_envs, time.time() - started)
 
     gates.extend(gates_from(rolled, steps, num_envs))
+    # Last, and only now: the reward table above is what a zero policy paid,
+    # and it stays that way because nothing before this point stepped the
+    # environment with anything else.
+    gates.append(train_gate(cfg.task, vec_env, agent_cfg, cfg.device, gates,
+                            enabled=cfg.runner))
     return _payload(cfg, gates, built, rolled, steps, num_envs, time.time() - started)
   finally:
     if temporary:
@@ -480,6 +674,11 @@ def add_arguments(parser: Any) -> Any:
                       help="Import this module first, so its tasks register. Repeatable.")
   parser.add_argument("--session-dir", default="",
                       help="Keep the throwaway session here instead of a temp dir")
+  parser.add_argument("--no-runner", dest="runner", action="store_false",
+                      help="Skip the `trains` gate: do not build the RL runner "
+                           "and do not take an optimiser step. On by default, "
+                           "because it is the only gate that reads the agent "
+                           "config at all.")
   return parser
 
 
@@ -492,6 +691,7 @@ def config_from_args(args: Any) -> CheckConfig:
       device=args.device,
       task_package=list(args.task_package or []),
       session_dir=args.session_dir,
+      runner=getattr(args, "runner", True),
   )
 
 
@@ -504,8 +704,11 @@ __all__ = [
     "config_from_args",
     "dominance",
     "gates_from",
+    "load_runner",
     "rank_terms",
     "roll",
     "run_check",
     "summarise",
+    "train_gate",
+    "train_once",
 ]
