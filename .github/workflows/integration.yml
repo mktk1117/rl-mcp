@@ -118,14 +118,25 @@ jobs:
       - name: Push
         run: git push --force origin integration
 
+      # Every `${{ }}` here goes through `env:`, never into the script text.
+      # The skipped list is built out of branch names and PR titles, so it is
+      # somebody else's writing; pasted into the script it is read as shell.
+      # It already was: the backticks this step puts around a branch name came
+      # back as command substitution, and a run that skipped `check-task`
+      # reported `check-task: command not found` instead of naming the PR that
+      # went missing. A branch named for what that implies would have run.
       - name: Report
+        env:
+          TESTS: ${{ steps.tests.outcome }}
+          LINT: ${{ steps.lint.outcome }}
+          SKIPPED: ${{ steps.build.outputs.skipped }}
         run: |
           set -euo pipefail
-          if [ "${{ steps.tests.outcome }}" != "success" ] || [ "${{ steps.lint.outcome }}" != "success" ]; then
+          if [ "$TESTS" != "success" ] || [ "$LINT" != "success" ]; then
             echo "The open PRs do not pass together — \`integration\` was still pushed, but it is broken." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          if [ -n "${{ steps.build.outputs.skipped }}" ]; then
+          if [ -n "$SKIPPED" ]; then
             echo "Some PRs are missing from the branch (see above)." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
