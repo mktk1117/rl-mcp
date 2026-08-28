@@ -138,12 +138,37 @@ def _isaaclab_describe(task: str) -> dict[str, Any]:
   return {"experiment": ""}
 
 
+def _genesis_ids() -> list[str]:
+  """Genesis has no task registry, so this is always empty -- but only when
+  Genesis is actually here.
+
+  The import is what makes the difference between the two empty lists a reader
+  has to tell apart: "Genesis is installed and has nothing to register" and
+  "Genesis is not installed". Without it, a machine with no Genesis would show
+  a backend row claiming to be available with zero tasks, which is the wrong
+  half of that pair.
+  """
+  import genesis  # noqa: F401
+
+  return []
+
+
+def _genesis_describe(task: str) -> dict[str, Any]:
+  """Unreachable in practice -- nothing can name a task this backend lists."""
+  return {"experiment": ""}
+
+
 BACKENDS: tuple[dict[str, Any], ...] = (
     {"backend": "mjlab", "ids": _mjlab_ids, "describe": _mjlab_describe, "note": ""},
     {"backend": "isaaclab", "ids": _isaaclab_ids, "describe": _isaaclab_describe,
      "note": "IsaacLab tasks register into gymnasium when its app starts, and a "
              "listing must not start one -- so this sees only what something "
              "else already registered in this process."},
+    {"backend": "genesis", "ids": _genesis_ids, "describe": _genesis_describe,
+     "note": "Genesis ships example environments rather than a task registry, so "
+             "there is nothing to list: a Genesis task is a class your training "
+             "script constructs. This row is here so a Genesis user is told that, "
+             "rather than seeing only the two backends they do not have."},
 )
 
 
