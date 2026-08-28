@@ -140,10 +140,13 @@ without any of this.
 
 ## Known differences from mjlab
 
-* **No live browser view.** `rlmcp view` mirrors a MuJoCo scene into viser,
-  which a Genesis run has nothing to hand over; asking for one is refused by
-  name rather than served empty. Screenshots, clips and progress clips all work
-  once the scene has a camera. Future work.
+* **No live browser view** (`live_view`). `rlmcp view` mirrors a MuJoCo scene
+  into viser, which a Genesis run has nothing to hand over; asking for one is
+  refused by name rather than served empty. Screenshots, clips and progress
+  clips all work once the scene has a camera. Future work — this is the single
+  entry in `GENESIS_UNSUPPORTED` in
+  [tests/test_backend_conformance.py](../tests/test_backend_conformance.py),
+  and deleting it is how the capability lands.
 * **`rlmcp play` is mjlab's.** `play` rebuilds an environment from a task
   registry, and Genesis has none — the env is a class you instantiate. This is
   a pre-existing limit rather than a Genesis one: IsaacLab cannot `play` either.

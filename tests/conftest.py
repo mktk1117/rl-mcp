@@ -433,3 +433,69 @@ def flat_env() -> FakeFlatEnv:
   """A Go2Env-shaped environment: dict configs, flat buffers, and the traps
   that come with both. See tests/test_flat_env_access.py for what they are."""
   return FakeFlatEnv()
+
+
+# A Genesis environment: the flat fake, plus a scene with cameras.
+
+
+class FakeCamera:
+  """A Genesis camera, as much of one as rendering uses."""
+
+  def __init__(self, debug: bool = False, res=(8, 6), batched: bool = False):
+    self.debug = debug
+    self.res = res
+    self.pos = (2.0, 0.0, 2.5)
+    self.lookat = (0.0, 0.0, 0.5)
+    self.batched = batched
+    self.poses = []
+
+  def set_pose(self, transform=None, pos=None, lookat=None, up=None,
+               envs_idx=None):
+    if pos is not None:
+      self.pos = tuple(pos)
+    if lookat is not None:
+      self.lookat = tuple(lookat)
+    self.poses.append((self.pos, self.lookat))
+
+  def render(self, rgb=True, depth=False, segmentation=False,
+             colorize_seg=False, normal=False, antialiasing=False,
+             force_render=False):
+    width, height = self.res
+    # The frame encodes where the camera was, so a test can tell one env's
+    # picture from another's.
+    frame = np.full((height, width, 3), int(abs(self.lookat[0])) % 256,
+                    dtype=np.uint8)
+    if self.batched:
+      frame = np.stack([frame, frame])
+    return frame, None, None, None
+
+
+class FakeVisualizer:
+  def __init__(self, cameras):
+    self.cameras = list(cameras)
+
+
+class FakeScene:
+  def __init__(self, cameras=(), rendered_envs_idx=None):
+    self.visualizer = FakeVisualizer(cameras)
+    self.vis_options = type(
+        "VisOptions", (), {"rendered_envs_idx": rendered_envs_idx})()
+
+
+@pytest.fixture
+def genesis_env(flat_env):
+  """The flat fake, plus the scene and reset a Genesis env would have."""
+  flat_env.scene = FakeScene(cameras=[FakeCamera(debug=True)],
+                             rendered_envs_idx=list(range(flat_env.num_envs)))
+  flat_env.device = None
+  flat_env.reset_calls = []
+
+  def _reset_idx(mask=None):
+    flat_env.reset_calls.append(mask)
+
+  flat_env._reset_idx = _reset_idx
+  # Envs sit at spaced world origins, which is what makes per-env framing a
+  # pose change rather than an anchor negotiation.
+  for i in range(flat_env.num_envs):
+    flat_env.base_pos[i, 0] = 10.0 * i
+  return flat_env
