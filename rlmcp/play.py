@@ -69,7 +69,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -623,9 +623,14 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
 
   untrained = cfg.policy != "checkpoint"
   if untrained:
-    # No weights, so nothing to find a session or a task from. Conditions are
-    # not restored either: there is no run whose conditions these would be, and
-    # the task's own play config is the right starting point.
+    # No weights, so nothing to find a session or a task from. Nothing to
+    # replay either, and that is the same request `--no-replay` makes: run at
+    # the task's own play configuration. Saying so here rather than leaving
+    # `replay` true keeps the missing-session warning for the case it was
+    # written for -- a real checkpoint whose run is nowhere to be found. There
+    # is no checkpoint here, so nothing is missing. `--set` overrides still
+    # apply; they are the only steering a policy-free preview has.
+    cfg = replace(cfg, replay=False)
     checkpoint = None
     session_dir = None
     task = cfg.task
@@ -680,7 +685,7 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
       "trained_session": str(session_dir) if session_dir else None,
       "play_session": str(lab.session.dir),
       "conditions": {
-          "replayed": cfg.replay and not untrained,
+          "replayed": cfg.replay,
           "stage": conditions.stage or None,
           **restored,
       },
@@ -1195,8 +1200,17 @@ def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any
         flush=True,
     )
   viewer_cls = NativeMujocoViewer if cfg.mode == "native" else ViserPlayViewer
+  # One viser server, not two. The session's live view opens it -- it is the
+  # thing that picks the port, publishes the url in `status`, and closes it
+  # when the run ends -- and mjlab's viewer draws its own GUI on it. Letting
+  # the viewer open its own left the published port serving a second, smaller
+  # panel of the same environment, which is the one anybody reading `status`
+  # would have gone to. `host()` returns None on an install without viser, and
+  # then this is exactly what it was before.
+  hosted = lab.live_view.host_for_viewer() if cfg.mode == "viser" else None
+  extra = {"viser_server": hosted} if hosted is not None else {}
   try:
-    viewer = viewer_cls(vec_env, policy)
+    viewer = viewer_cls(vec_env, policy, **extra)
   except ImportError as exc:
     # viser in particular is an optional install of its own, and only says so
     # when the viewer is actually built.
