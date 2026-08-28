@@ -955,7 +955,7 @@ def build_parser() -> argparse.ArgumentParser:
       "video", help="Record a short clip of training, or set the clip schedule",
       description="With no --every, records one clip now. With --every N, "
                   "changes the automatic schedule the run is already taking "
-                  "clips on (0 turns it off) and reports it.",
+                  "clips on ('--every off' stops it) and reports it.",
   )
   p.add_argument("--seconds", type=float, default=4.0)
   p.add_argument("--env-id", type=int)
@@ -963,11 +963,48 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Pick an env by description, e.g. terrain=pyramid_stairs level=2")
   p.add_argument("--every", metavar="CADENCE",
                  help="Change the automatic cadence: 'double' (0, 50, 100, 200, "
-                      "400 ...), 'double:<first>:<cap>', a flat '200', or '0'")
+                      "400 ...), 'double:<first>:<cap>', a flat interval like "
+                      "'200', or 'off' for no clips ('none', 'never' and '0' "
+                      "mean the same)")
   p.add_argument("--budget-mb", type=float,
                  help="Disk the progress clips may use before they stop")
   p.add_argument("--schedule", action="store_true",
                  help="Report the automatic clip schedule without recording")
+
+  p = sub.add_parser(
+      "view",
+      help="Watch the run live in a browser, over viser",
+      description="A run trains with one of these already attached, so with "
+                  "no flags this reports where it is. The rest re-point it, "
+                  "stop it paying for itself, or give the port back -- none "
+                  "of which restarts or pauses the run itself.",
+  )
+  p.add_argument("--on", dest="on", action="store_true",
+                 help="Attach the view and print its URL")
+  p.add_argument("--off", dest="off", action="store_true",
+                 help="Detach the view and give the port back")
+  p.add_argument("--pause", dest="paused", action="store_true", default=None,
+                 help="Stop feeding the view without detaching it: the tab "
+                      "keeps the frame it has and the run goes back to full "
+                      "speed. The same thing the button in the tab does")
+  p.add_argument("--resume", dest="paused", action="store_false",
+                 help="Start feeding it again")
+  p.add_argument("--port", type=int,
+                 help="First port to try (default 8740; busy ports are skipped)")
+  p.add_argument("--host", help="Interface to bind (default 0.0.0.0)")
+  p.add_argument("--fps", type=float,
+                 help="Frames per second pushed while somebody is watching")
+  p.add_argument("--realtime", dest="realtime", action="store_true", default=None,
+                 help="Play a buffered window back at the speed the robot "
+                      "actually moves, with pause and a speed control in the tab")
+  p.add_argument("--live", dest="realtime", action="store_false",
+                 help="The opposite: show the current step, at the run's pace")
+  p.add_argument("--buffer-seconds", type=float,
+                 help="Sim time one realtime window holds (default 4)")
+  p.add_argument("--env-id", type=int, help="Which environment to show")
+  p.add_argument("--where", nargs="*", metavar="KEY=VALUE",
+                 help="Pick the environment by description instead, e.g. "
+                      "terrain=pyramid_stairs level=2")
 
   p = sub.add_parser(
       "play",
@@ -1490,6 +1527,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     return _call(session, "record_video", max(timeout, args.seconds * 20 + 60),
                  seconds=args.seconds, env_id=args.env_id,
                  where=_kv_pairs(args.where) or None)
+  if cmd == "view":
+    if args.off:
+      enabled = False
+    elif args.on:
+      enabled = True
+    else:
+      # Any setting on its own means "make it so": somebody asking for another
+      # environment or another rate wants to be looking at one, and refusing
+      # until they also type --on would be pedantry.
+      # --pause is not in this list on purpose: "stop paying for the view"
+      # is the one setting that must never be the thing that starts one.
+      enabled = True if (args.port is not None or args.fps is not None
+                         or args.env_id is not None or args.where
+                         or args.host is not None or args.realtime is not None
+                         or args.buffer_seconds is not None) else None
+    return _call(session, "live_view", timeout, enabled=enabled, port=args.port,
+                 host=args.host, fps=args.fps, env_id=args.env_id,
+                 realtime=args.realtime, buffer_seconds=args.buffer_seconds,
+                 paused=args.paused, where=_kv_pairs(args.where) or None)
   if cmd in ("trace", "diagnose"):
     name = "record_trace" if cmd == "trace" else "diagnose"
     return _call(session, name, max(timeout, args.seconds * 20 + 60),

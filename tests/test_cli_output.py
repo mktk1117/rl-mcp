@@ -285,6 +285,7 @@ SHAPES = {
     "plot": ENVELOPE,
     "shot": ENVELOPE,
     "video": ENVELOPE,
+    "view": ENVELOPE,
     "check": ENVELOPE,     # stands in for a trainer that does not exist yet
     "play": ENVELOPE,
     "trace": ENVELOPE,

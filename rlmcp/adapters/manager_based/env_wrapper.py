@@ -9,6 +9,7 @@ What it adds:
 
 * per-step hooks that feed traces and video capture,
 * a clip of the policy every so many iterations, filed in the run record,
+* an optional live view of the run in a browser, over viser,
 * per-iteration servicing of agent commands,
 * accumulation of mjlab's episode logs into rlmcp's telemetry,
 * an optional terrain curriculum that advances itself.
@@ -39,6 +40,26 @@ from rlmcp.core.curriculum import StageSchedule
 from rlmcp.extensions import discover as discover_extensions
 
 CurriculumArg = Union[None, str, StageSchedule, Sequence[Any]]
+
+
+def serve_a_live_view(viser: Optional[bool], session_kind: str) -> bool:
+  """Whether to serve a live view when the caller did not say either way.
+
+  A training run gets one. Unwatched it is a bound port and no work at all --
+  the tick returns before it touches anything -- and the hour into a run when
+  somebody wants to see the robot is not an hour they can go back and pass a
+  flag in. That asymmetry is the whole argument: having it on is paid for by
+  nobody, and having it off is paid for exactly when it is wanted.
+
+  A play session does not. It is already opening a viewer of its own, and a
+  second scene on a second port would be nothing but a way to end up watching
+  the wrong one.
+
+  An explicit ``viser=`` wins, in both directions.
+  """
+  if viser is not None:
+    return bool(viser)
+  return not session_kind
 
 
 class TrainingStopped(SessionStopped):
@@ -104,9 +125,19 @@ class RlMcpEnvWrapper:
       video_seconds: float = 4.0,
       video_env_id: int = 0,
       video_budget_mb: Optional[float] = None,
+      viser: Optional[bool] = None,
+      viser_port: Optional[int] = None,
+      viser_host: Optional[str] = None,
+      viser_fps: Optional[float] = None,
+      viser_env_id: int = 0,
+      viser_realtime: bool = False,
+      viser_buffer_seconds: Optional[float] = None,
   ):
     self.env = env
     self.service_every_steps = max(1, int(service_every_steps))
+
+    viser_asked_for = viser is not None
+    viser = serve_a_live_view(viser, session_kind)
 
     sim_adapter = self.build_sim_adapter(self.unwrapped, robot_name)
     session_dir = Path(session_dir) if session_dir else Path.cwd() / "rlmcp_session"
@@ -127,6 +158,14 @@ class RlMcpEnvWrapper:
         video_seconds=video_seconds,
         video_env_id=video_env_id,
         **({} if video_budget_mb is None else {"video_budget_mb": video_budget_mb}),
+        viser=viser,
+        viser_env_id=viser_env_id,
+        viser_realtime=viser_realtime,
+        **({} if viser_buffer_seconds is None
+           else {"viser_buffer_seconds": viser_buffer_seconds}),
+        **({} if viser_port is None else {"viser_port": viser_port}),
+        **({} if viser_host is None else {"viser_host": viser_host}),
+        **({} if viser_fps is None else {"viser_fps": viser_fps}),
         session_info={
             # Empty means "a training run", which is what the controller
             # already writes; only a play session needs to say otherwise.
@@ -165,12 +204,27 @@ class RlMcpEnvWrapper:
     self.startup_checks()
 
     active = self.rlmcp.extensions.names()
+    view = self.rlmcp.live_view
     print(
         f"[rlmcp] session ready: {self.rlmcp.session.dir}\n"
         f"[rlmcp] extensions: {', '.join(active) if active else 'none'}\n"
         f"[rlmcp] inspect it with: rlmcp status --session {self.rlmcp.session.dir}",
         flush=True,
     )
+    if view.running:
+      # The URL is the whole point of having asked for it, so it is said once
+      # here rather than only in a status payload somebody has to go and read.
+      print(
+          f"[rlmcp] watch it live: {view.url}  (also {view.host_url})\n"
+          f"[rlmcp] {view.prose()}; the view costs nothing while no browser is "
+          "open. Detach it with `rlmcp view --off`",
+          flush=True,
+      )
+    elif view.last_error and viser_asked_for:
+      # Only for somebody who asked. The view is on by default now, and an
+      # install without viser should not have to read a paragraph about a
+      # feature it did not request on every run it launches.
+      print(f"[rlmcp] the live view could not start: {view.last_error}", flush=True)
 
   # Construction helpers.
 

@@ -7,7 +7,7 @@ by delegating to the pieces that do the work:
   found by reflection over the environment's manager term configs rather than
   by a hand-written list. Add a family by adding a provider there.
 * :mod:`rlmcp.adapters.mjlab.state` -- reading live state: per-step sampling,
-  batch metrics, rendering.
+  batch metrics, rendering, the live browser view.
 
 Anything specific to one kind of task -- terrain for locomotion, say -- lives
 in :mod:`rlmcp.extensions` instead, so wrapping a manipulation environment
@@ -27,7 +27,7 @@ from rlmcp.adapters.base import NotSupported, SimAdapter
 from rlmcp.adapters.manager_based.access import ParameterAccess
 from rlmcp.adapters.manager_based import metrics as state_metrics
 from rlmcp.adapters.manager_based import terms as state_terms
-from rlmcp.adapters.mjlab.state import rendering
+from rlmcp.adapters.mjlab.state import live_view, rendering
 from rlmcp.adapters.manager_based.sampling import StateSampler
 from rlmcp.core.parameters.spec import ParameterSpec
 
@@ -132,6 +132,19 @@ class MjlabSimAdapter(SimAdapter):
   def renderer_ready(self) -> bool:
     """Whether a frame would reuse an existing renderer (else render() builds one)."""
     return rendering.renderer_ready(self.env)
+
+  def open_live_view(self, server: Any, realtime: bool = False,
+                     buffer_seconds: float = 4.0) -> Any:
+    """Mirror this environment into a viser server; returns the scene handle.
+
+    Costs no render context and no GPU memory: the geometry crosses once and
+    only body poses follow, which is what makes it safe to attach to a run
+    already filling a card. ``realtime`` swaps the plain push for a buffered
+    window played back through mjlab's own viewer -- see
+    :mod:`rlmcp.adapters.mjlab.state.live_view`.
+    """
+    return live_view.open_live_view(
+        self.env, server, realtime=realtime, buffer_seconds=buffer_seconds)
 
   # Episodes.
 
