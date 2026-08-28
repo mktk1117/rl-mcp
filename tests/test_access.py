@@ -1348,3 +1348,21 @@ def test_reset_envs_refuses_an_environment_that_does_not_exist():
 
   assert "9" in str(caught.value) and "0..3" in str(caught.value)
   assert env.reset_calls == []
+
+
+def test_the_do_nothing_detector_exists_on_the_manager_based_family():
+  """Both families answer "did it actually move?" with the same key.
+
+  A metric that exists on one backend and not another is a metric an agent
+  cannot rely on, and this is the one that catches a policy standing still --
+  the failure reward and episode length both endorse.
+  """
+  import inspect
+
+  from rlmcp.adapters.legged_gym_style import metrics as flat
+  from rlmcp.adapters.manager_based import metrics as managed
+
+  for module in (flat, managed):
+    assert "rlmcp/achieved_speed_mean" in inspect.getsource(module), (
+        f"{module.__name__} has no achieved-speed metric"
+    )
