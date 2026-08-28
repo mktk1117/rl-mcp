@@ -82,7 +82,7 @@ def test_version_matches_the_installed_distribution():
   except metadata.PackageNotFoundError:
     pytest.skip("rl-mcp is not installed in this environment")
   assert rlmcp.__version__ == installed
-  assert re.search(r'^version = "%s"$' % re.escape(installed),
+  assert re.search(rf'^version = "{re.escape(installed)}"$',
                    _pyproject_text(), re.M), (
       "the installed distribution disagrees with pyproject.toml; "
       "reinstall, or the version was bumped without a release"

@@ -13,25 +13,26 @@ from the live environment, never assumed from the task.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import numpy as np
 import torch
 
 from rlmcp.adapters.base import (
-    CHANNEL_ACTION,
-    CHANNEL_BASE_ANG_VEL,
-    CHANNEL_BASE_LIN_VEL,
-    CHANNEL_BASE_POS,
-    CHANNEL_COMMAND,
-    CHANNEL_FOOT_CONTACT,
-    CHANNEL_JOINT_ACC,
-    CHANNEL_JOINT_POS,
-    CHANNEL_JOINT_TORQUE,
-    CHANNEL_JOINT_VEL,
-    CHANNEL_PROJECTED_GRAVITY,
-    CHANNEL_REWARD,
-    NotSupported,
+  CHANNEL_ACTION,
+  CHANNEL_BASE_ANG_VEL,
+  CHANNEL_BASE_LIN_VEL,
+  CHANNEL_BASE_POS,
+  CHANNEL_COMMAND,
+  CHANNEL_FOOT_CONTACT,
+  CHANNEL_JOINT_ACC,
+  CHANNEL_JOINT_POS,
+  CHANNEL_JOINT_TORQUE,
+  CHANNEL_JOINT_VEL,
+  CHANNEL_PROJECTED_GRAVITY,
+  CHANNEL_REWARD,
+  NotSupported,
 )
 
 # Honest component names for a plane-velocity command, in channel order.
@@ -169,10 +170,8 @@ class StateSampler:
     add(CHANNEL_JOINT_POS, getattr(data, "joint_pos", None))
     add(CHANNEL_JOINT_VEL, getattr(data, "joint_vel", None))
     add(CHANNEL_JOINT_ACC, getattr(data, "joint_acc", None))
-    try:
+    with contextlib.suppress(Exception):
       add(CHANNEL_JOINT_TORQUE, data.actuator_force)
-    except Exception:
-      pass
     add(CHANNEL_BASE_LIN_VEL, getattr(data, "root_link_lin_vel_b", None))
     add(CHANNEL_BASE_ANG_VEL, getattr(data, "root_link_ang_vel_b", None))
     add(CHANNEL_PROJECTED_GRAVITY, getattr(data, "projected_gravity_b", None))

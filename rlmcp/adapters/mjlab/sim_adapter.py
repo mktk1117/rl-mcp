@@ -19,6 +19,7 @@ so nothing here needs a restart or a checkpoint round-trip.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Sequence
 from typing import Any
 
@@ -191,10 +192,8 @@ class MjlabSimAdapter(SimAdapter):
         # the restarted episode a clock already at the time limit.
         clock = getattr(self.env, "episode_length_buf", None)
         if clock is not None:
-          try:
+          with contextlib.suppress(Exception):
             clock[chosen] = 0
-          except Exception:
-            pass
         return {"num_reset": len(chosen), "method": name}
 
     if env_ids is None and callable(getattr(self.env, "reset", None)):

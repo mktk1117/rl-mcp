@@ -25,6 +25,7 @@ one per registrant, in the same file discipline as the session directory.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -157,7 +158,5 @@ def entries() -> list[dict[str, Any]]:
 
 
 def _discard(path: Path) -> None:
-  try:
+  with contextlib.suppress(OSError):
     path.unlink()
-  except OSError:
-    pass

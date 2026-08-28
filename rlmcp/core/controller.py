@@ -15,6 +15,7 @@ built-ins do ("watch the robot for N steps and report").
 
 from __future__ import annotations
 
+import contextlib
 import time
 import traceback
 import uuid
@@ -893,8 +894,8 @@ class RlMcp:
     seconds = float(min(max(schedule.seconds, 0.2), _MAX_VIDEO_SECONDS))
     return _ProgressVideoJob(
         env_id=schedule.env_id,
-        steps_needed=max(1, int(round(seconds / dt))),
-        fps=int(round(1.0 / dt)),
+        steps_needed=max(1, round(seconds / dt)),
+        fps=round(1.0 / dt),
         seconds=seconds,
         iteration=iteration,
     )
@@ -1334,7 +1335,7 @@ class RlMcp:
     resolved = self._resolve_env_id(env_id, where)
     dt = self._safe(self.sim.step_dt, 0.02)
     seconds = float(min(max(seconds, 0.2), _MAX_VIDEO_SECONDS))
-    steps = max(1, int(round(seconds / dt)))
+    steps = max(1, round(seconds / dt))
     return _VideoJob(
         env_id=resolved,
         steps_needed=steps,
@@ -1437,7 +1438,7 @@ class RlMcp:
     dt = self._safe(self.sim.step_dt, 0.02)
     resolved = self._resolve_env_id(env_id, where)
     seconds = float(min(max(seconds, 0.2), _MAX_TRACE_SECONDS))
-    steps = min(self._trace_capacity, max(8, int(round(seconds / dt))))
+    steps = min(self._trace_capacity, max(8, round(seconds / dt)))
     labels = self._safe(getattr(self.sim, "trace_labels", dict), {})
     # The recorder belongs to this job alone, so concurrent trace/diagnose
     # jobs (any mix of envs) are legal -- each records only its own env.
@@ -1682,10 +1683,8 @@ class RlMcp:
     self.stop_reason = reason
     self.paused = False
     if self.runner is not None:
-      try:
+      with contextlib.suppress(NotSupported):
         self.runner.request_stop()
-      except NotSupported:
-        pass
     self.session.append_event(
         "stop_requested", {"iteration": self.iteration, "reason": reason}
     )

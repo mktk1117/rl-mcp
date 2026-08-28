@@ -113,7 +113,7 @@ def test_query_filters_on_the_ancestry_and_the_text(store):
 
   assert [r.id for r in store.query(parent=root.id)] == [child.id]
   assert {r.id for r in store.query(stage="locomotion")} == {root.id, child.id}
-  assert [r.id for r in store.query(proposed_by="orchestrator")][0] not in (root.id, child.id)
+  assert next(r.id for r in store.query(proposed_by="orchestrator")) not in (root.id, child.id)
   assert [r.id for r in store.query(text="clearance")] == [child.id]
 
 

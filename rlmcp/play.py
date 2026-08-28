@@ -67,6 +67,7 @@ encoder, so ``rlmcp --help`` stays as cheap as it has always been.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import Callable
@@ -700,10 +701,8 @@ def run_play(cfg: PlayConfig) -> dict[str, Any]:
     else:
       result.update(_view(cfg, env, vec_env, policy))
   finally:
-    try:
+    with contextlib.suppress(Exception):
       vec_env.close()
-    except Exception:
-      pass
   if policy.swaps:
     # The checkpoint named at the top is the one this ran up with; say which
     # one it finished on rather than leaving that to be inferred.
@@ -1067,7 +1066,7 @@ def _record(
 
   lab = env.rlmcp
   step_dt = float(getattr(env.unwrapped, "step_dt", 0.02))
-  steps = max(1, int(round(cfg.seconds / step_dt)))
+  steps = max(1, round(cfg.seconds / step_dt))
   fps = int(cfg.fps or round(1.0 / step_dt))
 
   frames: list[Any] = []

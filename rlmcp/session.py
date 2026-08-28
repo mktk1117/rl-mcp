@@ -23,6 +23,7 @@ Layout::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -391,10 +392,8 @@ class Session:
       except OSError:
         continue  # Someone else got it.
       payload = _read_json(claimed)
-      try:
+      with contextlib.suppress(OSError):
         claimed.unlink()
-      except OSError:
-        pass
       if not isinstance(payload, dict) or "cmd" not in payload:
         continue
       try:
@@ -513,10 +512,8 @@ class Session:
     except (KeyError, TypeError):
       return None
     if consume:
-      try:
+      with contextlib.suppress(OSError):
         path.unlink()
-      except OSError:
-        pass
     return response
 
   def wait(self, req_id: str, timeout: float = 120.0, interval: float = 0.1) -> Response:

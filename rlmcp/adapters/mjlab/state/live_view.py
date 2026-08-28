@@ -38,6 +38,7 @@ and builds a player that only ever reads a buffer.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import threading
 import time
@@ -315,10 +316,8 @@ class LivePanels:
       cleanup = getattr(overlay, "cleanup", None)
       if cleanup is None:
         continue
-      try:
+      with contextlib.suppress(Exception):
         cleanup()
-      except Exception:
-        pass
     self.terms = self.debug = self.contacts = None
 
 
@@ -448,7 +447,7 @@ class MjlabReplayView:
 
     self.dt = float(getattr(env, "step_dt", 0.02)) or 0.02
     seconds = min(max(float(seconds), self.dt * 2), MAX_BUFFER_SECONDS)
-    self.capacity = max(2, int(round(seconds / self.dt)))
+    self.capacity = max(2, round(seconds / self.dt))
     self.seconds = round(self.capacity * self.dt, 3)
 
     self.env_id = int(getattr(scene, "env_idx", 0))
@@ -941,7 +940,7 @@ class ReplayPlayer:
         <strong>{where}</strong><br/>
         speed {self.get_status().speed_label}
         {'&middot; paused' if self.source.paused else ''}<br/>
-        {'recorded %.0fs ago' % behind if behind is not None else '&nbsp;'}<br/>
+        {f'recorded {behind:.0f}s ago' if behind is not None else '&nbsp;'}<br/>
         <span style="opacity:0.7;">env {self.source.env_id} &middot;
         {state['windows_recorded']} windows</span>
       </div>

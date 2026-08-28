@@ -60,7 +60,7 @@ _LAZY = {
     "create_mcp_server": "rlmcp.server.mcp_server",
 }
 
-__all__ = sorted(_LAZY) + ["__version__"]
+__all__ = [*sorted(_LAZY), "__version__"]
 
 
 def __getattr__(name: str) -> Any:

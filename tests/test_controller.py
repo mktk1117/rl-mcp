@@ -215,7 +215,7 @@ def test_refused_write_is_truthful_and_does_not_republish_schema(
   """A write the adapter refuses must say applied=false and change nothing."""
   published = []
   monkeypatch.setattr(lab.session, "publish_params",
-                      lambda schema: published.append(schema))
+                      published.append)
   monkeypatch.setattr(fake_sim, "set_parameter", lambda key, value: False)
 
   response = _run(lab, "set_parameter", key="reward.track_linear_velocity.weight",

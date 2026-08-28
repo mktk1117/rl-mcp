@@ -58,6 +58,7 @@ and the accounting.
 
 from __future__ import annotations
 
+import contextlib
 import socket
 import time
 from collections.abc import Callable
@@ -278,10 +279,8 @@ class LiveView:
     # filling any more it would show motion the run has stopped producing.
     setter = getattr(self._scene, "set_paused", None)
     if setter is not None:
-      try:
+      with contextlib.suppress(Exception):
         setter(self._paused)
-      except Exception:
-        pass
     self._label_pause_button()
     return self.describe()
 
@@ -413,10 +412,8 @@ class LiveView:
     self._scene_can_pause = False
     self._hosted = False
     if scene is not None:
-      try:
+      with contextlib.suppress(Exception):
         scene.close()
-      except Exception:
-        pass
     self._close_server(server)
     self.port = 0
     self._watchers = 0
@@ -427,10 +424,8 @@ class LiveView:
   def _close_server(server: Any) -> None:
     if server is None:
       return
-    try:
+    with contextlib.suppress(Exception):
       server.stop()
-    except Exception:
-      pass
 
   def configure(
       self,
@@ -566,10 +561,8 @@ class LiveView:
     tell = getattr(self._scene, "set_watchers", None)
     if tell is None:
       return
-    try:
+    with contextlib.suppress(Exception):
       tell(int(watchers))
-    except Exception:
-      pass
 
   def _add_pause_button(self, server: Any) -> None:
     """Put a pause in the tab, for a mode with no player to put one in.

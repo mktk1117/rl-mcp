@@ -627,7 +627,11 @@ def _describe_env(lab: Any, vec_env: Any, num_envs: int) -> dict[str, Any]:
       "num_envs": num_envs,
       "step_dt": _try(lambda: float(lab.sim.step_dt())),
       "actions": _try(lambda: int(vec_env.num_actions)),
-      "max_episode_length_s": _try(lambda: lab.sim.max_episode_length()),
+      # noqa, and not a style question: the lambda is what puts the attribute
+      # lookup inside _try's guard. Unwrapped, it is evaluated eagerly at the
+      # call and an adapter that lacks the attribute raises instead of
+      # reporting "unknown".
+      "max_episode_length_s": _try(lambda: lab.sim.max_episode_length()),  # noqa: PLW0108
       "joints": _try(lambda: len(lab.sim.joint_names() or []), 0),
   }
 

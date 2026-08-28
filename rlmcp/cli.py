@@ -232,10 +232,8 @@ def _stdout_reserved_for_the_payload():
   """
   global _PAYLOAD_STDOUT
   reserved = sys.stdout
-  try:
+  with contextlib.suppress(Exception):
     reserved.flush()
-  except Exception:
-    pass
   try:
     # The duplicate has to answer for the stream it stands in for, encoding
     # included: `os.fdopen` would otherwise take the *locale's* encoding, and
@@ -262,10 +260,8 @@ def _stdout_reserved_for_the_payload():
     _PAYLOAD_STDOUT = None
     sys.stdout = reserved
     if kept is not None:
-      try:
+      with contextlib.suppress(Exception):
         kept.flush()
-      except Exception:
-        pass
       os.dup2(kept.fileno(), 1)
       kept.close()
 

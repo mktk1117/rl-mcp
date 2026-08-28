@@ -9,6 +9,7 @@ silently doing nothing.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -137,10 +138,8 @@ class RslRlRunnerAdapter(RunnerAdapter):
     if alg is not None:
       if getattr(alg, "learning_rate", None) is not None:
         out["Loss/learning_rate"] = float(alg.learning_rate)
-      try:
+      with contextlib.suppress(Exception):
         out["Policy/mean_std"] = float(alg.get_policy().output_std.mean().item())
-      except Exception:
-        pass
     logger = getattr(self.runner, "logger", None)
     if logger is not None:
       rewards = list(getattr(logger, "rewbuffer", []) or [])

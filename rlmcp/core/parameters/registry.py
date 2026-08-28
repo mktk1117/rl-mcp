@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -111,9 +112,7 @@ class ParameterRegistry:
     for key, spec in self._specs.items():
       # Update live value
       if key in self._getters:
-        try:
+        with contextlib.suppress(Exception):
           spec.current_value = self._getters[key]()
-        except Exception:
-          pass
       schema[key] = spec.to_dict()
     return schema

@@ -7,6 +7,7 @@ each. Anything that would need a per-step copy belongs in a trace instead.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -17,10 +18,8 @@ from rlmcp.adapters.manager_based.sampling import first_command, is_velocity_com
 
 def _try(out: dict[str, float], fn: Callable[[], None]) -> None:
   """Run one metric, skipping it if this environment cannot provide it."""
-  try:
+  with contextlib.suppress(Exception):
     fn()
-  except Exception:
-    pass
 
 
 def summary_metrics(env: Any, robot_name: str) -> dict[str, float]:
