@@ -1089,8 +1089,17 @@ def _view(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any
         flush=True,
     )
   viewer_cls = NativeMujocoViewer if cfg.mode == "native" else ViserPlayViewer
+  # One viser server, not two. The session's live view opens it -- it is the
+  # thing that picks the port, publishes the url in `status`, and closes it
+  # when the run ends -- and mjlab's viewer draws its own GUI on it. Letting
+  # the viewer open its own left the published port serving a second, smaller
+  # panel of the same environment, which is the one anybody reading `status`
+  # would have gone to. `host()` returns None on an install without viser, and
+  # then this is exactly what it was before.
+  hosted = lab.live_view.host_for_viewer() if cfg.mode == "viser" else None
+  extra = {"viser_server": hosted} if hosted is not None else {}
   try:
-    viewer = viewer_cls(vec_env, policy)
+    viewer = viewer_cls(vec_env, policy, **extra)
   except ImportError as exc:
     # viser in particular is an optional install of its own, and only says so
     # when the viewer is actually built.
