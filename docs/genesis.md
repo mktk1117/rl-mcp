@@ -1,8 +1,10 @@
 # Driving a Genesis run
 
 > **Status: in progress on `genesis-backend`.** The design below is pinned
-> against Genesis's own `examples/locomotion/go2_env.py`, read at
-> 2026-08-27. Nothing here ships until the tests named at the bottom pass.
+> against Genesis source read on 2026-08-27: `examples/locomotion/go2_env.py`
+> for the environment shape, `genesis/engine/scene.py` and
+> `genesis/vis/visualizer.py` for the camera and viewer constraints. Nothing
+> here ships until the tests named at the bottom pass.
 
 rlmcp watches and steers Genesis the same way it does mjlab and IsaacLab: one
 line in the training script, then a live run you can query, tune and record
@@ -75,20 +77,53 @@ It is private, it takes a boolean mask of shape `(num_envs,)`, and `None` means
 every environment. `reset_envs` converts the id list the controller hands it —
 including whatever `--where` resolved to — into that mask.
 
-### There is no camera unless the script made one
+### Frames need a camera, and that is decided before the scene is built
 
-Genesis cameras are added to the scene *before* `scene.build()`, so `wrap()`
-cannot create one. A run without one says so at wrap time rather than at the
-first `shot`:
+Genesis has two visual paths and only one of them is a frame source.
+
+The **viewer** (`gs.Scene(show_viewer=True, viewer_options=...)`) is an
+interactive window. It needs a display — Genesis raises "No display detected"
+without one — and it draws rather than returning pixels, so `shot` and `video`
+cannot come from it.
+
+**Cameras** are the offscreen path: `scene.add_camera(...)` returns a camera
+whose `render()` hands back arrays, headless, over ssh. That is what rlmcp
+records through, and it has to already exist:
 
 ```python
 cam = scene.add_camera(res=(640, 480), pos=(2.0, 0.0, 2.5),
-                       lookat=(0.0, 0.0, 0.5), GUI=False)
+                       lookat=(0.0, 0.0, 0.5), GUI=False, debug=True)
 scene.build(n_envs=num_envs)
 ```
 
+`add_camera` carries `@gs.assert_unbuilt`, and `Go2Env.__init__` builds the
+scene before it returns, so by the time `wrap()` runs the door is shut. rlmcp
+cannot make one for you, which is why a run without one is told at wrap time
+rather than at the first `shot`.
+
+**Use `debug=True`.** Genesis documents debug cameras as ones that record the
+simulation "without being part of the 'sensors'" and without interfering with
+what the robots perceive — which is what an observing camera should be. A plain
+camera joins the robot's sensor set, and a camera that changes what the policy
+sees is not an observation of the run.
+
+**Watching one environment among thousands** needs `rendered_envs_idx` too. It
+defaults to `[0]`, and it is also fixed before the build, so a run that intends
+to look at env 7 has to say so at construction:
+
+```python
+vis_options=gs.options.VisOptions(rendered_envs_idx=[0, 7])
+```
+
+The startup check reports both — whether there is a camera, and which
+environments it can be pointed at — because a `shot --env-id 7` that silently
+answers with env 0 is a picture that looks like an answer and is not one.
+Per-env framing itself is easier here than on IsaacLab: cameras have
+`follow_entity()` and parallel envs sit at spaced world origins, so it is a
+pose change rather than a fight with a viewport controller.
+
 Everything else — parameters, metrics, traces, curricula, records — works
-without it.
+without any of this.
 
 ## What lands where
 
