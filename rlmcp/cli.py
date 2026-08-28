@@ -237,7 +237,14 @@ def _stdout_reserved_for_the_payload():
   except Exception:
     pass
   try:
-    kept = os.fdopen(os.dup(1), "w")
+    # The duplicate has to answer for the stream it stands in for, encoding
+    # included: `os.fdopen` would otherwise take the *locale's* encoding, and
+    # under an ascii locale with `PYTHONIOENCODING=utf-8` a markdown ledger
+    # with a note in it would raise where a plain `print` had worked. JSON is
+    # escaped to ascii and never noticed; `_emit_text` is not.
+    kept = os.fdopen(os.dup(1), "w",
+                     encoding=getattr(reserved, "encoding", None) or "utf-8",
+                     errors=getattr(reserved, "errors", None) or "strict")
     os.dup2(2, 1)
   except (OSError, ValueError):
     # Nothing to shuffle -- stdout closed, or an embedder holding something

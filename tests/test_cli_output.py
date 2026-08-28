@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -539,3 +540,37 @@ def test_train_and_serve_keep_the_stdout_they_were_handed(capfd, monkeypatch):
 
     assert cli.main([name, "--anything"]) == 0
     assert "handed over" in capfd.readouterr().out
+
+
+def test_the_reserved_stdout_answers_for_the_stream_it_stands_in_for(tmp_path):
+  """The duplicate is opened by hand, so it takes the locale's encoding rather
+  than the one stdout was actually configured with. Under an ascii locale with
+  `PYTHONIOENCODING=utf-8` that turned a markdown ledger with a note in it into
+  a UnicodeEncodeError -- on output a plain `print` had no trouble with.
+
+  A subprocess because the locale has to be wrong before the interpreter
+  starts; `json.dumps` escapes to ascii and would never have shown this.
+  """
+  import subprocess
+
+  script = tmp_path / "emit.py"
+  script.write_text(
+      "import sys\n"
+      "from rlmcp import cli\n"
+      "print('baseline: \\u65e5\\u672c\\u8a9e')\n"
+      "with cli._stdout_reserved_for_the_payload():\n"
+      "  cli._emit_text('payload: \\u65e5\\u672c\\u8a9e')\n",
+      encoding="utf-8")
+
+  root = Path(__file__).resolve().parent.parent
+  done = subprocess.run(
+      [sys.executable, str(script)],
+      capture_output=True,
+      # This checkout, not whatever `rlmcp` the interpreter has installed.
+      env={**os.environ, "PYTHONPATH": str(root), "LC_ALL": "C", "LANG": "C",
+           "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+           "PYTHONIOENCODING": "utf-8"},
+  )
+
+  assert done.returncode == 0, done.stderr.decode("utf-8", "replace")
+  assert "payload: 日本語" in done.stdout.decode("utf-8")
