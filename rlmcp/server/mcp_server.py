@@ -33,7 +33,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # The decorator-based server class moved between SDK generations: it is
 # ``MCPServer`` in mcp>=2, ``FastMCP`` in mcp 1.x, and the standalone ``fastmcp``
@@ -46,10 +46,12 @@ SDK_MISSING = (
 )
 
 try:
-  from mcp.server.mcpserver import Image, MCPServer as _Server
+  from mcp.server.mcpserver import Image
+  from mcp.server.mcpserver import MCPServer as _Server
 except ImportError:
   try:
-    from mcp.server.fastmcp import FastMCP as _Server, Image
+    from mcp.server.fastmcp import FastMCP as _Server
+    from mcp.server.fastmcp import Image
   except ImportError:
     try:
       from fastmcp import FastMCP as _Server  # type: ignore
@@ -81,10 +83,10 @@ class _SessionHandle:
   through the ``switch_session`` tool.
   """
 
-  def __init__(self, session_dir: Optional[str], root: Optional[str]):
+  def __init__(self, session_dir: str | None, root: str | None):
     self.explicit = session_dir
     self.root = root or "."
-    self._pinned: Optional[Session] = None
+    self._pinned: Session | None = None
 
   def get(self) -> Session:
     if self._pinned is None:
@@ -124,7 +126,7 @@ def _session_key(session: Session) -> str:
   return f"{parent}/{session.dir.name}" if parent else session.dir.name
 
 
-def _dead_error(session: Session, live: Dict[str, Any], cmd: str) -> Dict[str, Any]:
+def _dead_error(session: Session, live: dict[str, Any], cmd: str) -> dict[str, Any]:
   """What a live-command tool answers once the pinned trainer is gone."""
   out = {
       "ok": False,
@@ -147,7 +149,7 @@ def _dead_error(session: Session, live: Dict[str, Any], cmd: str) -> Dict[str, A
   return out
 
 
-def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT, **args: Any) -> Dict[str, Any]:
+def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT, **args: Any) -> dict[str, Any]:
   """Send ``cmd`` to the pinned trainer; refuse up front when it is dead.
 
   "Dead" here is :meth:`Session.liveness`, not the bare pid: a pid that exists
@@ -175,7 +177,7 @@ def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT, **
 # process (parameter edits, rendering, checkpoints) refuse.
 
 
-def _offline_metric_names(session: Session, contains: Optional[str] = None) -> List[str]:
+def _offline_metric_names(session: Session, contains: str | None = None) -> list[str]:
   rows = session.metrics(last_n=1)
   names = sorted({k for row in rows for k in row if k not in ("iteration", "t")})
   if contains:
@@ -184,12 +186,12 @@ def _offline_metric_names(session: Session, contains: Optional[str] = None) -> L
 
 
 def _offline_metrics_payload(
-    session: Session, names: Optional[List[str]], last_n: int
-) -> Dict[str, Any]:
+    session: Session, names: list[str] | None, last_n: int
+) -> dict[str, Any]:
   from rlmcp.cli import _default_metric_names, _offline_series
 
   chosen = list(names) if names else _default_metric_names(session)
-  payload: Dict[str, Any] = {
+  payload: dict[str, Any] = {
       "ok": True,
       "session": _session_key(session),
       "live": False,
@@ -211,11 +213,11 @@ def _offline_metrics_payload(
 
 def _offline_plot_payload(
     session: Session,
-    names: Optional[List[str]],
+    names: list[str] | None,
     last_n: int,
     smooth: int,
-    title: Optional[str] = None,
-) -> Dict[str, Any]:
+    title: str | None = None,
+) -> dict[str, Any]:
   from rlmcp.cli import _default_metric_names, _offline_series
 
   try:
@@ -259,8 +261,8 @@ def _offline_plot_payload(
 
 
 def _offline_parameters_payload(
-    session: Session, category: Optional[str], contains: Optional[str]
-) -> Dict[str, Any]:
+    session: Session, category: str | None, contains: str | None
+) -> dict[str, Any]:
   schema = session.params()
   items = {
       k: v
@@ -278,7 +280,7 @@ def _offline_parameters_payload(
   }
 
 
-def _status_payload(handle: _SessionHandle) -> Dict[str, Any]:
+def _status_payload(handle: _SessionHandle) -> dict[str, Any]:
   session = handle.get()
   live = session.liveness_info()
   return {
@@ -293,7 +295,7 @@ def _status_payload(handle: _SessionHandle) -> Dict[str, Any]:
   }
 
 
-def _events_payload(session: Session, last_n: int) -> Dict[str, Any]:
+def _events_payload(session: Session, last_n: int) -> dict[str, Any]:
   rows = session.events(last_n=last_n)
   return {
       "ok": True,
@@ -303,7 +305,7 @@ def _events_payload(session: Session, last_n: int) -> Dict[str, Any]:
   }
 
 
-def _artifacts_payload(session: Session) -> Dict[str, Any]:
+def _artifacts_payload(session: Session) -> dict[str, Any]:
   rows = []
   if session.artifacts.exists():
     for path in session.artifacts.iterdir():
@@ -327,8 +329,8 @@ def _artifacts_payload(session: Session) -> Dict[str, Any]:
   }
 
 
-def _sessions_payload(handle: _SessionHandle) -> List[Dict[str, Any]]:
-  pinned: Optional[str] = None
+def _sessions_payload(handle: _SessionHandle) -> list[dict[str, Any]]:
+  pinned: str | None = None
   if handle._pinned is not None:
     pinned = str(handle._pinned.dir)
   out = []
@@ -348,7 +350,7 @@ def _sessions_payload(handle: _SessionHandle) -> List[Dict[str, Any]]:
   return out
 
 
-def _switch_payload(handle: _SessionHandle, target: str) -> Dict[str, Any]:
+def _switch_payload(handle: _SessionHandle, target: str) -> dict[str, Any]:
   try:
     session = handle.switch(target)
   except (FileNotFoundError, RuntimeError) as exc:
@@ -369,7 +371,7 @@ def _switch_payload(handle: _SessionHandle, target: str) -> Dict[str, Any]:
 # live/offline routing is plain to read (and testable without an MCP client).
 
 
-def _list_metrics_impl(handle: _SessionHandle, contains: Optional[str]) -> Dict[str, Any]:
+def _list_metrics_impl(handle: _SessionHandle, contains: str | None) -> dict[str, Any]:
   session = handle.get()
   if session.liveness() == "dead":
     names = _offline_metric_names(session, contains=contains)
@@ -379,8 +381,8 @@ def _list_metrics_impl(handle: _SessionHandle, contains: Optional[str]) -> Dict[
 
 
 def _get_metrics_impl(
-    handle: _SessionHandle, names: Optional[List[str]], last_n: int
-) -> Dict[str, Any]:
+    handle: _SessionHandle, names: list[str] | None, last_n: int
+) -> dict[str, Any]:
   session = handle.get()
   if session.liveness() == "dead":
     return _offline_metrics_payload(session, names, last_n)
@@ -389,10 +391,10 @@ def _get_metrics_impl(
 
 def _plot_metrics_impl(
     handle: _SessionHandle,
-    names: Optional[List[str]],
+    names: list[str] | None,
     last_n: int,
     smooth: int,
-    title: Optional[str],
+    title: str | None,
 ) -> Any:
   session = handle.get()
   if session.liveness() == "dead":
@@ -404,8 +406,8 @@ def _plot_metrics_impl(
 
 
 def _list_parameters_impl(
-    handle: _SessionHandle, category: Optional[str], contains: Optional[str]
-) -> Dict[str, Any]:
+    handle: _SessionHandle, category: str | None, contains: str | None
+) -> dict[str, Any]:
   session = handle.get()
   if session.liveness() == "dead":
     return _offline_parameters_payload(session, category, contains)
@@ -431,7 +433,7 @@ def _image_format(suffix: str) -> str:
 
 def _prepare_image(
     path: Path, byte_limit: int = IMAGE_BYTE_LIMIT, max_dim: int = IMAGE_MAX_DIM
-) -> Tuple[Optional[bytes], str, Optional[str]]:
+) -> tuple[bytes | None, str, str | None]:
   """Read an image, re-encoding it when it would blow the reply budget.
 
   Returns ``(data, format, note)``. Files at or under ``byte_limit`` pass
@@ -477,7 +479,7 @@ def _prepare_image(
   )
 
 
-def _image_result(payload: Dict[str, Any], key: str = "image_path") -> Any:
+def _image_result(payload: dict[str, Any], key: str = "image_path") -> Any:
   """Attach the picture to a payload without dropping the numbers around it.
 
   Returns ``[payload, Image]``; every supported SDK generation converts that
@@ -501,7 +503,7 @@ def _image_result(payload: Dict[str, Any], key: str = "image_path") -> Any:
   return [payload, Image(data=data, format=fmt)]
 
 
-def _open_records(root: Optional[str]):
+def _open_records(root: str | None):
   """Open the record store this server writes feedback into.
 
   Resolution is the CLI's: the server's ``--records-root``, then
@@ -515,10 +517,10 @@ def _open_records(root: Optional[str]):
 
 
 def create_mcp_server(
-    session_dir: Optional[str] = None,
-    root: Optional[str] = None,
+    session_dir: str | None = None,
+    root: str | None = None,
     name: str = "rlmcp",
-    records_root: Optional[str] = None,
+    records_root: str | None = None,
 ) -> MCPServer:
   """Build the MCP server exposing one pinned training session.
 
@@ -557,7 +559,7 @@ def create_mcp_server(
   # Session selection.
 
   @mcp.tool()
-  def list_sessions() -> List[Dict[str, Any]]:
+  def list_sessions() -> list[dict[str, Any]]:
     """List rlmcp sessions under the server's root, newest first.
 
     Each row carries started_at, a running/stalled/dead state, and whether it
@@ -566,7 +568,7 @@ def create_mcp_server(
     return _sessions_payload(handle)
 
   @mcp.tool()
-  def switch_session(target: str = "newest") -> Dict[str, Any]:
+  def switch_session(target: str = "newest") -> dict[str, Any]:
     """Re-point every later tool call at a different session -- the only way
     this server ever changes runs.
 
@@ -588,7 +590,7 @@ def create_mcp_server(
   # Status and telemetry.
 
   @mcp.tool()
-  def get_training_status() -> Dict[str, Any]:
+  def get_training_status() -> dict[str, Any]:
     """Iteration, pause state, curriculum stage, headline metrics, liveness.
 
     Reads the trainer's published heartbeat, so it answers even while the
@@ -598,7 +600,7 @@ def create_mcp_server(
     return _status_payload(handle)
 
   @mcp.tool()
-  def list_metrics(contains: Optional[str] = None) -> Dict[str, Any]:
+  def list_metrics(contains: str | None = None) -> dict[str, Any]:
     """List every metric name recorded so far, optionally filtered by substring.
 
     Answers from metrics.jsonl when the trainer is dead.
@@ -607,8 +609,8 @@ def create_mcp_server(
 
   @mcp.tool()
   def get_metrics(
-      names: Optional[List[str]] = None, last_n: int = 30
-  ) -> Dict[str, Any]:
+      names: list[str] | None = None, last_n: int = 30
+  ) -> dict[str, Any]:
     """Recent values plus a trend summary for the named metrics.
 
     Args:
@@ -622,10 +624,10 @@ def create_mcp_server(
 
   @mcp.tool()
   def plot_metrics(
-      names: Optional[List[str]] = None,
+      names: list[str] | None = None,
       last_n: int = 400,
       smooth: int = 5,
-      title: Optional[str] = None,
+      title: str | None = None,
   ) -> Any:
     """Plot metric curves and return the chart as an image.
 
@@ -638,8 +640,8 @@ def create_mcp_server(
 
   @mcp.tool()
   def list_parameters(
-      category: Optional[str] = None, contains: Optional[str] = None
-  ) -> Dict[str, Any]:
+      category: str | None = None, contains: str | None = None
+  ) -> dict[str, Any]:
     """List tunable parameters with live values, bounds and descriptions.
 
     Categories: reward, termination, domain_randomization, curriculum, action, rl.
@@ -648,7 +650,7 @@ def create_mcp_server(
     return _list_parameters_impl(handle, category, contains)
 
   @mcp.tool()
-  def set_parameter(key: str, value: Any, rationale: str) -> Dict[str, Any]:
+  def set_parameter(key: str, value: Any, rationale: str) -> dict[str, Any]:
     """Change a reward weight, randomization range or PPO hyperparameter live.
 
     Args:
@@ -660,16 +662,16 @@ def create_mcp_server(
     return _call(handle, "set_parameter", key=key, value=value, rationale=rationale)
 
   @mcp.tool()
-  def reset_parameters(keys: Optional[List[str]] = None) -> Dict[str, Any]:
+  def reset_parameters(keys: list[str] | None = None) -> dict[str, Any]:
     """Restore parameters to the values they had when training started."""
     return _call(handle, "reset_parameters", keys=keys)
 
   @mcp.tool()
   def reset_environments(
-      env_ids: Optional[List[int]] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_ids: list[int] | None = None,
+      where: dict[str, Any] | None = None,
       rationale: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Start fresh episodes in some or all environments.
 
     Episodes, not parameter values -- ``reset_parameters`` is the other one.
@@ -690,8 +692,8 @@ def create_mcp_server(
 
   @mcp.tool()
   def take_screenshot(
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
   ) -> Any:
     """Render one frame of a training environment.
 
@@ -707,9 +709,9 @@ def create_mcp_server(
   @mcp.tool()
   def record_video(
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Record a clip of the policy as it trains and return the video file path.
 
     Frames are captured during normal rollout steps, so the clip shows real
@@ -722,11 +724,11 @@ def create_mcp_server(
 
   @mcp.tool()
   def set_progress_video(
-      every: Optional[str] = None,
-      seconds: Optional[float] = None,
-      env_id: Optional[int] = None,
-      budget_mb: Optional[float] = None,
-  ) -> Dict[str, Any]:
+      every: str | None = None,
+      seconds: float | None = None,
+      env_id: int | None = None,
+      budget_mb: float | None = None,
+  ) -> dict[str, Any]:
     """Read or change the run's automatic clip schedule.
 
     A run films itself at iteration 0 and at gaps that double after that --
@@ -748,14 +750,14 @@ def create_mcp_server(
 
   @mcp.tool()
   def live_view(
-      enabled: Optional[bool] = None,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-      realtime: Optional[bool] = None,
-      fps: Optional[float] = None,
-      port: Optional[int] = None,
-      paused: Optional[bool] = None,
-  ) -> Dict[str, Any]:
+      enabled: bool | None = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+      realtime: bool | None = None,
+      fps: float | None = None,
+      port: int | None = None,
+      paused: bool | None = None,
+  ) -> dict[str, Any]:
     """Attach a live browser view to the run, re-point it, or detach it.
 
     The view is a 3-D scene served over viser and fed from the training loop,
@@ -793,9 +795,9 @@ def create_mcp_server(
   @mcp.tool()
   def diagnose_motion(
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Record per-step joint signals and report smoothness, tracking, effort and gait.
 
     Returns jerk and high-frequency chatter per joint (which joints are buzzing),
@@ -810,9 +812,9 @@ def create_mcp_server(
   @mcp.tool()
   def record_trace(
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Record joint positions/velocities/torques for one env and save them as .npz."""
     return _call(
         handle, "record_trace", timeout=max(DEFAULT_TIMEOUT, seconds * 20 + 90),
@@ -821,9 +823,9 @@ def create_mcp_server(
 
   @mcp.tool()
   def plot_joint_trace(
-      channels: Optional[List[str]] = None,
-      components: Optional[List[str]] = None,
-      title: Optional[str] = None,
+      channels: list[str] | None = None,
+      components: list[str] | None = None,
+      title: str | None = None,
   ) -> Any:
     """Plot the last recorded trace as an image.
 
@@ -838,7 +840,7 @@ def create_mcp_server(
   # Extension commands and curriculum.
 
   @mcp.tool()
-  def list_commands() -> Dict[str, Any]:
+  def list_commands() -> dict[str, Any]:
     """Every command this run accepts, with a one-line description each.
 
     Beyond the built-in tools, a run exposes whatever its environment supports
@@ -849,7 +851,7 @@ def create_mcp_server(
     return _call(handle, "help")
 
   @mcp.tool()
-  def run_command(cmd: str, args: Optional[Dict[str, Any]] = None) -> Any:
+  def run_command(cmd: str, args: dict[str, Any] | None = None) -> Any:
     """Run any command this run accepts, including extension commands.
 
     Args:
@@ -860,49 +862,49 @@ def create_mcp_server(
     return _image_result(result)
 
   @mcp.tool()
-  def curriculum_status() -> Dict[str, Any]:
+  def curriculum_status() -> dict[str, Any]:
     """Current curriculum stage and how close it is to its promotion conditions."""
     return _call(handle, "curriculum_status")
 
   @mcp.tool()
-  def curriculum_advance(reason: str = "manual") -> Dict[str, Any]:
+  def curriculum_advance(reason: str = "manual") -> dict[str, Any]:
     """Promote to the next curriculum stage immediately."""
     return _call(handle, "curriculum_advance", reason=reason)
 
   @mcp.tool()
-  def curriculum_goto(stage: str, reason: str = "manual") -> Dict[str, Any]:
+  def curriculum_goto(stage: str, reason: str = "manual") -> dict[str, Any]:
     """Jump to a named curriculum stage, forward or backward."""
     return _call(handle, "curriculum_goto", stage=stage, reason=reason)
 
   @mcp.tool()
-  def curriculum_auto(enabled: bool = True) -> Dict[str, Any]:
+  def curriculum_auto(enabled: bool = True) -> dict[str, Any]:
     """Turn automatic stage promotion on or off."""
     return _call(handle, "curriculum_auto", enabled=enabled)
 
   # Lifecycle.
 
   @mcp.tool()
-  def pause_training() -> Dict[str, Any]:
+  def pause_training() -> dict[str, Any]:
     """Pause training between iterations; other tools keep working while paused."""
     return _call(handle, "pause")
 
   @mcp.tool()
-  def resume_training() -> Dict[str, Any]:
+  def resume_training() -> dict[str, Any]:
     """Resume a paused run."""
     return _call(handle, "resume")
 
   @mcp.tool()
-  def save_checkpoint(tag: str = "", note: str = "") -> Dict[str, Any]:
+  def save_checkpoint(tag: str = "", note: str = "") -> dict[str, Any]:
     """Save policy weights plus curriculum and terrain state under a tag."""
     return _call(handle, "save_checkpoint", timeout=600.0, tag=tag, note=note)
 
   @mcp.tool()
-  def list_checkpoints() -> Dict[str, Any]:
+  def list_checkpoints() -> dict[str, Any]:
     """List checkpoints saved through rlmcp in this session."""
     return _call(handle, "list_checkpoints")
 
   @mcp.tool()
-  def rollback_to_checkpoint(path: str) -> Dict[str, Any]:
+  def rollback_to_checkpoint(path: str) -> dict[str, Any]:
     """Roll back weights, parameters and curriculum state to a saved checkpoint."""
     return _call(handle, "load_checkpoint", timeout=600.0, path=path)
 
@@ -912,7 +914,7 @@ def create_mcp_server(
       kind: str = "steer",
       author: str = "user",
       interpretation: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Record what a human just said about this run, stamped with the iteration.
 
     Call this whenever the user steers, corrects, rejects or approves what the
@@ -933,7 +935,7 @@ def create_mcp_server(
       interpretation: str = "",
       response: str = "",
       changed: bool = True,
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Attach a remark to a run record, live trainer or not.
 
     ``record_feedback`` is for a run that is still going; this is for one that
@@ -962,7 +964,7 @@ def create_mcp_server(
       index: int,
       response: str,
       changed: bool = True,
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Record what was done about one remark on a run record.
 
     ``changed=False`` is a real answer: "looked into it, nothing needed
@@ -981,11 +983,11 @@ def create_mcp_server(
 
   @mcp.tool()
   def get_feedback_timeline(
-      kind: Optional[str] = None,
-      author: Optional[str] = None,
+      kind: str | None = None,
+      author: str | None = None,
       outstanding: bool = False,
-      limit: Optional[int] = None,
-  ) -> Dict[str, Any]:
+      limit: int | None = None,
+  ) -> dict[str, Any]:
     """Every remark across the records, oldest first, with what came of it.
 
     ``outstanding=True`` narrows it to instructions nobody has recorded a
@@ -996,7 +998,7 @@ def create_mcp_server(
     return {"count": len(rows), "feedback": rows}
 
   @mcp.tool()
-  def set_record_headline(record_id: str, text: str = "") -> Dict[str, Any]:
+  def set_record_headline(record_id: str, text: str = "") -> dict[str, Any]:
     """Set the one-sentence summary a tree or a listing shows for a run.
 
     An empty ``text`` clears it, falling back to the first sentence of the
@@ -1017,12 +1019,12 @@ def create_mcp_server(
             "derived": not updated.headline}
 
   @mcp.tool()
-  def add_note(text: str) -> Dict[str, Any]:
+  def add_note(text: str) -> dict[str, Any]:
     """Record a note in the session event log, next to parameter changes."""
     return _call(handle, "note", text=text)
 
   @mcp.tool()
-  def get_events(last_n: int = 25) -> Dict[str, Any]:
+  def get_events(last_n: int = 25) -> dict[str, Any]:
     """Recent session events: parameter edits, stage changes, checkpoints, notes.
 
     Reads the event log on disk, so it answers for dead runs too.
@@ -1030,7 +1032,7 @@ def create_mcp_server(
     return _events_payload(handle.get(), last_n)
 
   @mcp.tool()
-  def list_artifacts() -> Dict[str, Any]:
+  def list_artifacts() -> dict[str, Any]:
     """Files this run produced -- plots, videos, traces -- newest first.
 
     Purely a disk read; a post-mortem can pull every picture the run left
@@ -1039,7 +1041,7 @@ def create_mcp_server(
     return _artifacts_payload(handle.get())
 
   @mcp.tool()
-  def stop_training(reason: str = "") -> Dict[str, Any]:
+  def stop_training(reason: str = "") -> dict[str, Any]:
     """Ask the training loop to stop cleanly at the next iteration boundary."""
     return _call(handle, "stop_training", reason=reason)
 
@@ -1063,7 +1065,7 @@ def create_mcp_server(
   return mcp
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
   if MCPServer is None:
     print(SDK_MISSING, file=sys.stderr)
     return 1

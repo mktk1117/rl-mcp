@@ -14,14 +14,15 @@ them to the session's artifact directory.
 from __future__ import annotations
 
 import io
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import matplotlib
 
 matplotlib.use("Agg")
 
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
 
 _LINE = "#1f77b4"
 _ACCENT = "#d62728"
@@ -54,10 +55,10 @@ def _grid_shape(n: int, max_cols: int = 2) -> tuple[int, int]:
 
 
 def plot_metric_series(
-    series: Dict[str, Sequence[tuple[float, float]]],
-    title: Optional[str] = None,
+    series: dict[str, Sequence[tuple[float, float]]],
+    title: str | None = None,
     smooth_window: int = 1,
-    markers: Optional[Sequence[tuple[float, str]]] = None,
+    markers: Sequence[tuple[float, str]] | None = None,
 ) -> bytes:
   """Plot ``{metric_name: [(iteration, value), ...]}`` as a panel grid.
 
@@ -124,11 +125,11 @@ def plot_metric_series(
 
 
 def plot_trace(
-    data: Dict[str, np.ndarray],
-    labels: Optional[Dict[str, List[str]]] = None,
-    channels: Optional[Sequence[str]] = None,
-    components: Optional[Sequence[str]] = None,
-    title: Optional[str] = None,
+    data: dict[str, np.ndarray],
+    labels: dict[str, list[str]] | None = None,
+    channels: Sequence[str] | None = None,
+    components: Sequence[str] | None = None,
+    title: str | None = None,
     max_components: int = 8,
 ) -> bytes:
   """Plot per-step trace channels, one panel per channel.
@@ -209,7 +210,7 @@ def plot_trace(
     plt.close(fig)  # Idempotent after _finish; frees the figure on exceptions.
 
 
-def plot_terrain_status(status: Dict[str, Any], title: Optional[str] = None) -> bytes:
+def plot_terrain_status(status: dict[str, Any], title: str | None = None) -> bytes:
   """Bar chart of environments per terrain and their mean difficulty level."""
   per_terrain = status.get("per_terrain") or []
   if not per_terrain:
@@ -255,8 +256,8 @@ class TelemetryPlotter:
   def render_plots_png(
       self,
       metric_names: Sequence[str],
-      last_n: Optional[int] = 200,
-      title: Optional[str] = None,
+      last_n: int | None = 200,
+      title: str | None = None,
       smooth_window: int = 1,
   ) -> bytes:
     names = list(metric_names) or self.buffer.list_metrics()[:4]

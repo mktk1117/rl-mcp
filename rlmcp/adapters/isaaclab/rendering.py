@@ -25,7 +25,8 @@ a picture that looks like an answer and is not one.
 
 from __future__ import annotations
 
-from typing import Any, Callable, NamedTuple, Optional, Sequence, Tuple
+from collections.abc import Callable, Sequence
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -49,8 +50,8 @@ class _Anchor(NamedTuple):
 
   origin_type: str
   env_index: int
-  asset_name: Optional[str] = None
-  body_name: Optional[str] = None
+  asset_name: str | None = None
+  body_name: str | None = None
 
 
 def renderer_ready(env: Any) -> bool:
@@ -58,7 +59,7 @@ def renderer_ready(env: Any) -> bool:
   return str(getattr(env, "render_mode", "") or "") == "rgb_array"
 
 
-def _offsets(env: Any) -> Tuple[Sequence[float], Sequence[float]]:
+def _offsets(env: Any) -> tuple[Sequence[float], Sequence[float]]:
   """Where the camera sits relative to whatever it is following.
 
   These are ``cfg.viewer.eye`` and ``lookat``, read the way IsaacLab reads them
@@ -70,8 +71,8 @@ def _offsets(env: Any) -> Tuple[Sequence[float], Sequence[float]]:
           tuple(getattr(viewer, "lookat", None) or _LOOKAT))
 
 
-def _robot_root(env: Any, robot_name: Optional[str],
-                env_index: int) -> Optional[np.ndarray]:
+def _robot_root(env: Any, robot_name: str | None,
+                env_index: int) -> np.ndarray | None:
   """Where that env's robot is, in world coordinates."""
   if not robot_name:
     return None
@@ -83,7 +84,7 @@ def _robot_root(env: Any, robot_name: Optional[str],
     if hasattr(row, "detach"):
       row = row.detach().cpu().numpy()
     return np.asarray(row, dtype=float).reshape(3)
-  except Exception:  # noqa: BLE001 -- a camera that will not move is not fatal.
+  except Exception:
     return None
 
 
@@ -124,13 +125,13 @@ def _apply(controller: Any, anchor: _Anchor) -> bool:
     return False
   try:
     method(*argv)
-  except Exception:  # noqa: BLE001
+  except Exception:
     return False
   return True
 
 
 def _aim_viewport(env: Any, env_index: int,
-                  robot_name: Optional[str]) -> Optional[Restore]:
+                  robot_name: str | None) -> Restore | None:
   controller = getattr(env, "viewport_camera_controller", None)
   viewer = getattr(getattr(env, "cfg", None), "viewer", None)
   if controller is None or viewer is None:
@@ -171,7 +172,7 @@ def _place_camera(capture: Any, eye: Sequence[float],
   if callable(update):
     try:
       update(tuple(eye), tuple(lookat))
-    except Exception:  # noqa: BLE001
+    except Exception:
       return False
   else:
     try:
@@ -181,7 +182,7 @@ def _place_camera(capture: Any, eye: Sequence[float],
     try:
       ViewportManager.set_camera_view(cfg.camera_prim_path, eye=list(eye),
                                       target=list(lookat))
-    except Exception:  # noqa: BLE001
+    except Exception:
       return False
   cfg.eye = tuple(eye)
   cfg.lookat = tuple(lookat)
@@ -189,7 +190,7 @@ def _place_camera(capture: Any, eye: Sequence[float],
 
 
 def _aim_recorder(env: Any, env_index: int,
-                  robot_name: Optional[str]) -> Optional[Restore]:
+                  robot_name: str | None) -> Restore | None:
   capture = getattr(getattr(env, "video_recorder", None), "_capture", None)
   cfg = getattr(capture, "cfg", None)
   if cfg is None or not hasattr(cfg, "eye") or not hasattr(cfg, "lookat"):
@@ -210,7 +211,7 @@ def _aim_recorder(env: Any, env_index: int,
 
 
 def _aim(env: Any, env_index: int,
-         robot_name: Optional[str]) -> Optional[Restore]:
+         robot_name: str | None) -> Restore | None:
   """Point whichever camera makes the frames at one environment.
 
   The recorder goes first: when a run has both, the recorder is the one whose
@@ -224,7 +225,7 @@ def _aim(env: Any, env_index: int,
 
 
 def render(env: Any, env_id: int = 0,
-           robot_name: Optional[str] = None) -> np.ndarray:
+           robot_name: str | None = None) -> np.ndarray:
   """One environment as RGB, with the camera put back where it was."""
   if not renderer_ready(env):
     raise NotSupported(

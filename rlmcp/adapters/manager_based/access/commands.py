@@ -8,13 +8,14 @@ within a step. The write hook rewrites that table too, and reports that it did.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from rlmcp.adapters.manager_based.access import paths
 from rlmcp.adapters.manager_based.access.base import (
-    AccessProvider,
-    Term,
-    constructor_cfg_reads,
+  AccessProvider,
+  Term,
+  constructor_cfg_reads,
 )
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
 
@@ -31,9 +32,9 @@ class CommandAccess(AccessProvider):
     manager = self.manager
     return manager is not None and bool(getattr(manager, "active_terms", None))
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     manager = self.manager
-    out: List[Term] = []
+    out: list[Term] = []
     for name in getattr(manager, "active_terms", []) or []:
       try:
         instance = manager.get_term(name)
@@ -78,10 +79,10 @@ class CommandAccess(AccessProvider):
 
   # Curriculum ownership.
 
-  def curriculum_stages(self, command: str) -> List[tuple]:
+  def curriculum_stages(self, command: str) -> list[tuple]:
     """Curriculum terms that rewrite this command's ranges on every reset."""
     manager = getattr(self.env, "curriculum_manager", None)
-    out: List[tuple] = []
+    out: list[tuple] = []
     for name in getattr(manager, "active_terms", []) or []:
       try:
         params = getattr(manager.get_term_cfg(name), "params", None) or {}
@@ -98,9 +99,9 @@ class CommandAccess(AccessProvider):
 
   def claim_from_curriculum(
       self, command: str, field: str, bounds: tuple
-  ) -> List[str]:
+  ) -> list[str]:
     """Rewrite any curriculum stage table that owns ``field``. Returns term names."""
-    conflicts: List[str] = []
+    conflicts: list[str] = []
     for name, stages in self.curriculum_stages(command):
       if not any(field in stage for stage in stages):
         continue
@@ -111,7 +112,7 @@ class CommandAccess(AccessProvider):
 
   def after_set(
       self, term: Term, parts: Sequence[str], value: Any
-  ) -> Optional[Dict[str, Any]]:
+  ) -> dict[str, Any] | None:
     if len(parts) < 2 or parts[0] != "ranges":
       return None
     field = parts[-1]

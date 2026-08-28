@@ -12,14 +12,14 @@ from conftest import FakeSimAdapter
 
 from rlmcp.adapters.base import SimAdapter
 from rlmcp.core.controller import RlMcp
-from rlmcp.core.parameters.spec import Liveness
 from rlmcp.core.curriculum import (
-    METRIC_EPISODE_LENGTH_FRAC,
-    Action,
-    Condition,
-    CurriculumStage,
-    StageSchedule,
+  METRIC_EPISODE_LENGTH_FRAC,
+  Action,
+  Condition,
+  CurriculumStage,
+  StageSchedule,
 )
+from rlmcp.core.parameters.spec import Liveness
 from rlmcp.session import Session
 
 METRIC_TERRAIN_LEVEL_FRAC = "rlmcp/terrain_level_frac"

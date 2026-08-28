@@ -13,7 +13,8 @@ so nothing here needs a restart or a checkpoint round-trip.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -29,12 +30,12 @@ from rlmcp.core.parameters.spec import ParameterSpec
 class IsaacLabSimAdapter(SimAdapter):
   """Live control surface over one IsaacLab ``ManagerBasedRLEnv``."""
 
-  def __init__(self, env: Any, robot_name: Optional[str] = None):
+  def __init__(self, env: Any, robot_name: str | None = None):
     self.env = env
     self.robot_name = robot_name or self._resolve_robot_name(env)
     self.parameters = ParameterAccess(env)
     self.sampler = StateSampler(env, self.robot_name)
-    self._last_set_notes: Dict[str, Any] = {}
+    self._last_set_notes: dict[str, Any] = {}
 
   @staticmethod
   def _resolve_robot_name(env: Any) -> str:
@@ -70,16 +71,16 @@ class IsaacLabSimAdapter(SimAdapter):
   def step_dt(self) -> float:
     return float(self.env.step_dt)
 
-  def joint_names(self) -> List[str]:
+  def joint_names(self) -> list[str]:
     return list(self.robot.joint_names)
 
-  def max_episode_length(self) -> Optional[float]:
+  def max_episode_length(self) -> float | None:
     value = getattr(self.env, "max_episode_length", None)
     return float(value) if value else None
 
   # Parameters.
 
-  def discover_parameters(self) -> List[ParameterSpec]:
+  def discover_parameters(self) -> list[ParameterSpec]:
     return self.parameters.discover()
 
   def get_parameter(self, key: str) -> Any:
@@ -90,33 +91,33 @@ class IsaacLabSimAdapter(SimAdapter):
     self._last_set_notes = self.parameters.set(key, value)
     return True
 
-  def last_set_notes(self) -> Dict[str, Any]:
+  def last_set_notes(self) -> dict[str, Any]:
     return dict(self._last_set_notes)
 
-  def parameter_domains(self) -> List[str]:
+  def parameter_domains(self) -> list[str]:
     return self.parameters.domains()
 
   # State sampling and metrics.
 
-  def sample_state(self, env_id: int = 0) -> Dict[str, np.ndarray]:
+  def sample_state(self, env_id: int = 0) -> dict[str, np.ndarray]:
     return self.sampler.sample(env_id)
 
-  def trace_labels(self) -> Dict[str, List[str]]:
+  def trace_labels(self) -> dict[str, list[str]]:
     return self.sampler.labels()
 
-  def summary_metrics(self) -> Dict[str, float]:
+  def summary_metrics(self) -> dict[str, float]:
     return state_metrics.summary_metrics(self.env, self.robot_name)
 
   # Manager terms. The same two managers, read by the same shared module: an
   # IsaacLab task's reward is a sum of named terms exactly as mjlab's is.
 
-  def reward_terms(self) -> Dict[str, float]:
+  def reward_terms(self) -> dict[str, float]:
     found = state_terms.reward_terms(self.env)
     if not found:
       raise NotSupported("reward_terms")
     return found
 
-  def termination_terms(self) -> Dict[str, float]:
+  def termination_terms(self) -> dict[str, float]:
     return state_terms.termination_terms(self.env)
 
   # Rendering.
@@ -129,7 +130,7 @@ class IsaacLabSimAdapter(SimAdapter):
 
   # Episodes.
 
-  def reset_envs(self, env_ids: Optional[Sequence[int]] = None) -> Dict[str, Any]:
+  def reset_envs(self, env_ids: Sequence[int] | None = None) -> dict[str, Any]:
     """Start fresh episodes through the path a termination takes.
 
     ``_reset_idx`` is what IsaacLab's own ``step`` calls for whichever
@@ -158,7 +159,7 @@ class IsaacLabSimAdapter(SimAdapter):
       if clock is not None:
         try:
           clock[chosen] = 0
-        except Exception:  # noqa: BLE001 -- the reset happened; the clock is a nicety.
+        except Exception:
           pass
       return {"num_reset": len(chosen), "method": "_reset_idx"}
 
@@ -173,9 +174,9 @@ class IsaacLabSimAdapter(SimAdapter):
 
   # Env state, for checkpointing the curriculum alongside the policy.
 
-  def get_env_state(self) -> Dict[str, Any]:
+  def get_env_state(self) -> dict[str, Any]:
     return {"common_step_counter": int(getattr(self.env, "common_step_counter", 0))}
 
-  def set_env_state(self, state: Dict[str, Any]) -> None:
+  def set_env_state(self, state: dict[str, Any]) -> None:
     if "common_step_counter" in state:
       self.env.common_step_counter = int(state["common_step_counter"])

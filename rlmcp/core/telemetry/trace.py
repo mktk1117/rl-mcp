@@ -13,7 +13,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -29,14 +29,14 @@ class TraceRecorder:
     self.capacity = int(capacity)
     self.dt = float(dt)
     self._lock = threading.Lock()
-    self._channels: Dict[str, np.ndarray] = {}
-    self._labels: Dict[str, List[str]] = {}
+    self._channels: dict[str, np.ndarray] = {}
+    self._labels: dict[str, list[str]] = {}
     self._count = 0  # Total records ever written.
-    self._env_id: Optional[int] = None
+    self._env_id: int | None = None
     self._armed = False
-    self._stop_after: Optional[int] = None
-    self._started_at: Optional[float] = None
-    self.meta: Dict[str, Any] = {}
+    self._stop_after: int | None = None
+    self._started_at: float | None = None
+    self.meta: dict[str, Any] = {}
 
   # Arming.
 
@@ -45,7 +45,7 @@ class TraceRecorder:
     return self._armed
 
   @property
-  def env_id(self) -> Optional[int]:
+  def env_id(self) -> int | None:
     return self._env_id
 
   @property
@@ -55,9 +55,9 @@ class TraceRecorder:
   def arm(
       self,
       env_id: int,
-      num_steps: Optional[int] = None,
-      labels: Optional[Dict[str, List[str]]] = None,
-      meta: Optional[Dict[str, Any]] = None,
+      num_steps: int | None = None,
+      labels: dict[str, list[str]] | None = None,
+      meta: dict[str, Any] | None = None,
   ) -> None:
     """Start recording ``env_id``, clearing anything held from a prior trace."""
     with self._lock:
@@ -76,7 +76,7 @@ class TraceRecorder:
 
   # Recording.
 
-  def record(self, sample: Dict[str, np.ndarray]) -> bool:
+  def record(self, sample: dict[str, np.ndarray]) -> bool:
     """Append one step. Returns True while the trace is still collecting."""
     with self._lock:
       if not self._armed:
@@ -99,11 +99,11 @@ class TraceRecorder:
 
   # Reading.
 
-  def channels(self) -> List[str]:
+  def channels(self) -> list[str]:
     with self._lock:
       return sorted(self._channels)
 
-  def labels(self, channel: str) -> List[str]:
+  def labels(self, channel: str) -> list[str]:
     """Human-readable component names, e.g. joint names for ``joint_pos``."""
     with self._lock:
       if channel in self._labels:
@@ -112,13 +112,13 @@ class TraceRecorder:
       width = buf.shape[1] if buf is not None else 0
       return [f"{channel}[{i}]" for i in range(width)]
 
-  def snapshot(self) -> Dict[str, np.ndarray]:
+  def snapshot(self) -> dict[str, np.ndarray]:
     """Return every channel in chronological order."""
     with self._lock:
       n = min(self._count, self.capacity)
       if n == 0:
         return {}
-      out: Dict[str, np.ndarray] = {}
+      out: dict[str, np.ndarray] = {}
       for name, buf in self._channels.items():
         if self._count <= self.capacity:
           out[name] = buf[:n].copy()
@@ -139,7 +139,7 @@ class TraceRecorder:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = self.snapshot()
-    payload: Dict[str, Any] = dict(data)
+    payload: dict[str, Any] = dict(data)
     for name in list(data):
       if name == "time":
         continue
@@ -148,7 +148,7 @@ class TraceRecorder:
     np.savez_compressed(path, **payload)
     return path
 
-  def info(self) -> Dict[str, Any]:
+  def info(self) -> dict[str, Any]:
     with self._lock:
       return {
           "armed": self._armed,
@@ -163,7 +163,7 @@ class TraceRecorder:
       }
 
 
-def _decode_labels(value: np.ndarray) -> List[str]:
+def _decode_labels(value: np.ndarray) -> list[str]:
   """Labels from either format: 0-d JSON string, or a legacy 1-d array."""
   if value.ndim == 0:
     try:
@@ -173,7 +173,7 @@ def _decode_labels(value: np.ndarray) -> List[str]:
   return [str(x) for x in value]
 
 
-def _decode_meta(value: np.ndarray) -> Dict[str, Any]:
+def _decode_meta(value: np.ndarray) -> dict[str, Any]:
   """Metadata from either format: 0-d JSON string, or legacy ``k=v`` items.
 
   The legacy format stringified every value, so it yields ``{"iteration":
@@ -185,7 +185,7 @@ def _decode_meta(value: np.ndarray) -> Dict[str, Any]:
       return dict(loaded) if isinstance(loaded, dict) else {}
     except (ValueError, TypeError):
       return {}
-  meta: Dict[str, Any] = {}
+  meta: dict[str, Any] = {}
   for item in value:
     text = str(item)
     if "=" in text:
@@ -194,7 +194,7 @@ def _decode_meta(value: np.ndarray) -> Dict[str, Any]:
   return meta
 
 
-def load_npz(path: Path | str, allow_legacy: bool = False) -> Dict[str, Any]:
+def load_npz(path: Path | str, allow_legacy: bool = False) -> dict[str, Any]:
   """Load a trace written by :meth:`TraceRecorder.save_npz`.
 
   Args:
@@ -205,9 +205,9 @@ def load_npz(path: Path | str, allow_legacy: bool = False) -> Dict[str, Any]:
       only for a legacy file whose origin you trust.
   """
   raw = np.load(path, allow_pickle=allow_legacy)
-  data: Dict[str, np.ndarray] = {}
-  labels: Dict[str, List[str]] = {}
-  meta: Dict[str, Any] = {}
+  data: dict[str, np.ndarray] = {}
+  labels: dict[str, list[str]] = {}
+  meta: dict[str, Any] = {}
   try:
     for key in raw.files:
       try:

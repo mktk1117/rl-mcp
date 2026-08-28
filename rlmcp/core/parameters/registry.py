@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
+
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory, ParameterSpec
 
 
@@ -10,15 +12,15 @@ class ParameterRegistry:
   """Maintains the active schema and dispatch table for dynamic parameters."""
 
   def __init__(self):
-    self._specs: Dict[str, ParameterSpec] = {}
-    self._setters: Dict[str, Callable[[Any], bool]] = {}
-    self._getters: Dict[str, Callable[[], Any]] = {}
+    self._specs: dict[str, ParameterSpec] = {}
+    self._setters: dict[str, Callable[[Any], bool]] = {}
+    self._getters: dict[str, Callable[[], Any]] = {}
 
   def register(
       self,
       spec: ParameterSpec,
-      setter: Optional[Callable[[Any], bool]] = None,
-      getter: Optional[Callable[[], Any]] = None,
+      setter: Callable[[Any], bool] | None = None,
+      getter: Callable[[], Any] | None = None,
   ) -> None:
     """Registers a parameter spec and its getter/setter callbacks."""
     self._specs[spec.key] = spec
@@ -27,7 +29,7 @@ class ParameterRegistry:
     if getter:
       self._getters[spec.key] = getter
 
-  def get_spec(self, key: str) -> Optional[ParameterSpec]:
+  def get_spec(self, key: str) -> ParameterSpec | None:
     """Retrieves spec for a given parameter key."""
     return self._specs.get(key)
 
@@ -75,26 +77,25 @@ class ParameterRegistry:
       if success:
         spec.current_value = value
       return success
-    else:
-      spec.current_value = value
-      return True
+    spec.current_value = value
+    return True
 
   def get_all_specs(
-      self, category: Optional[ParameterCategory] = None
-  ) -> List[ParameterSpec]:
+      self, category: ParameterCategory | None = None
+  ) -> list[ParameterSpec]:
     """Returns all registered parameter specs, optionally filtered by category."""
     if category is None:
       return list(self._specs.values())
     return [s for s in self._specs.values() if s.category == category]
 
-  def get_snapshot(self) -> Dict[str, Any]:
+  def get_snapshot(self) -> dict[str, Any]:
     """Returns a flat dictionary snapshot of all current parameter values."""
     snapshot = {}
     for key in self._specs:
       snapshot[key] = self.get_value(key)
     return snapshot
 
-  def compute_diff(self, baseline_snapshot: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+  def compute_diff(self, baseline_snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Computes difference between current values and a baseline snapshot."""
     diff = {}
     current = self.get_snapshot()
@@ -104,7 +105,7 @@ class ParameterRegistry:
         diff[key] = {"old": base_val, "new": curr_val}
     return diff
 
-  def export_schema_json(self) -> Dict[str, Any]:
+  def export_schema_json(self) -> dict[str, Any]:
     """Exports structured schema suitable for LLM context / MCP resource."""
     schema = {}
     for key, spec in self._specs.items():

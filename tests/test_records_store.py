@@ -17,13 +17,12 @@ import time
 import pytest
 
 from rlmcp.records.filestore import FileStore
-from rlmcp.records.record import (FEEDBACK_KINDS, Falsifier, Feedback,
-                                  RunRecord, Weights)
+from rlmcp.records.record import FEEDBACK_KINDS, Falsifier, Feedback, RunRecord, Weights
 from rlmcp.records.store import (
-    ConflictError,
-    SlotUnavailable,
-    StoreError,
-    next_display_id,
+  ConflictError,
+  SlotUnavailable,
+  StoreError,
+  next_display_id,
 )
 from rlmcp.records.validate import check_verdict_change
 

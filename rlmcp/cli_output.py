@@ -35,8 +35,9 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 # Suffixes worth putting in front of a person. Deliberately narrow: a
 # checkpoint's ``path`` is a .pt and a close-out's ``report`` is a .md, and
@@ -51,7 +52,7 @@ MEDIA_SUFFIXES = STILL_SUFFIXES | MOTION_SUFFIXES | PAGE_SUFFIXES
 # mode
 # --------------------------------------------------------------------------
 
-def resolve_mode(explicit: Optional[str] = None) -> str:
+def resolve_mode(explicit: str | None = None) -> str:
   """``"json"`` or ``"text"``; a pipe gets JSON, a terminal gets text."""
   forced = explicit or os.environ.get("RLMCP_OUTPUT")
   if forced in ("json", "text"):
@@ -62,7 +63,7 @@ def resolve_mode(explicit: Optional[str] = None) -> str:
     return "json"
 
 
-def resolve_open(explicit: Optional[str] = None) -> str:
+def resolve_open(explicit: str | None = None) -> str:
   """``"auto"`` | ``"never"`` | ``"always"`` -- whether to show artifacts."""
   choice = explicit or os.environ.get("RLMCP_OPEN")
   return choice if choice in ("auto", "never", "always") else "auto"
@@ -160,17 +161,17 @@ def _is_scalar(value: Any) -> bool:
 # tables
 # --------------------------------------------------------------------------
 
-def _columns(rows: Sequence[Dict[str, Any]]) -> List[str]:
+def _columns(rows: Sequence[dict[str, Any]]) -> list[str]:
   """Union of keys, in the order they first appear."""
-  seen: Dict[str, None] = {}
+  seen: dict[str, None] = {}
   for row in rows:
     for key in row:
       seen.setdefault(key, None)
   return list(seen)
 
 
-def render_table(rows: Sequence[Dict[str, Any]], indent: str = "",
-                 max_width: Optional[int] = None) -> Optional[List[str]]:
+def render_table(rows: Sequence[dict[str, Any]], indent: str = "",
+                 max_width: int | None = None) -> list[str] | None:
   """A list of flat dicts as aligned columns, numbers right-aligned.
 
   Returns None when the columns cannot fit ``max_width``. A record's
@@ -196,7 +197,7 @@ def render_table(rows: Sequence[Dict[str, Any]], indent: str = "",
       for c in columns
   ]
 
-  def line(values: List[str], header: bool = False) -> str:
+  def line(values: list[str], header: bool = False) -> str:
     parts = []
     for i, text in enumerate(values):
       parts.append(text.rjust(widths[i]) if numeric[i] and not header
@@ -212,7 +213,7 @@ def render_table(rows: Sequence[Dict[str, Any]], indent: str = "",
   return out
 
 
-def render_rows(rows: Sequence[Sequence[Any]], indent: str = "") -> List[str]:
+def render_rows(rows: Sequence[Sequence[Any]], indent: str = "") -> list[str]:
   """Equal-shaped rows of scalars as aligned columns, with no header."""
   cells = [[format_scalar(v) for v in row] for row in rows]
   span = max(len(r) for r in cells)
@@ -263,7 +264,7 @@ def _is_scalar_list(value: Any) -> bool:
 # the generic renderer
 # --------------------------------------------------------------------------
 
-def _wrap(text: str, room: int, indent: str = "") -> List[str]:
+def _wrap(text: str, room: int, indent: str = "") -> list[str]:
   """Wrap on whitespace only.
 
   textwrap's defaults split on hyphens and chop over-long words, which turns a
@@ -278,7 +279,7 @@ def _wrap(text: str, room: int, indent: str = "") -> List[str]:
 
 
 def render_block(value: Any, indent: str = "", key: str = "",
-                 width: Optional[int] = None) -> List[str]:
+                 width: int | None = None) -> list[str]:
   """Any JSON value as indented lines. Wraps long text; never drops it."""
   width = width or _width()
   ink = _Ink(_use_color())
@@ -301,7 +302,7 @@ def render_block(value: Any, indent: str = "", key: str = "",
       # Rows of the same shape: metric series are [iteration, value] pairs, and
       # a record's metrics are [name, value]. One line each, columns aligned.
       return render_rows(value, indent)
-    out: List[str] = []
+    out: list[str] = []
     for i, item in enumerate(value):
       out.append(indent + ink.dim(f"[{i}]"))
       out.extend(render_block(item, indent + "  ", width=width))
@@ -336,7 +337,7 @@ def render_block(value: Any, indent: str = "", key: str = "",
   return [indent + str(value)]
 
 
-def render_generic(payload: Any, width: Optional[int] = None) -> str:
+def render_generic(payload: Any, width: int | None = None) -> str:
   """The fallback: unwrap the ok/result/error envelope, then print the value.
 
   Every ``_call`` result wears that envelope, including the ones from
@@ -367,7 +368,7 @@ def render_generic(payload: Any, width: Optional[int] = None) -> str:
   return "\n".join(render_block(payload, "", width=width))
 
 
-_RENDERERS: Dict[str, Callable[[Any], str]] = {}
+_RENDERERS: dict[str, Callable[[Any], str]] = {}
 
 
 def register(command: str) -> Callable[[Callable[[Any], str]], Callable[[Any], str]]:
@@ -380,7 +381,7 @@ def register(command: str) -> Callable[[Callable[[Any], str]], Callable[[Any], s
   return decorate
 
 
-def render(payload: Any, command: Optional[str] = None) -> str:
+def render(payload: Any, command: str | None = None) -> str:
   fn = _RENDERERS.get(command or "")
   return fn(payload) if fn else render_generic(payload)
 
@@ -389,14 +390,14 @@ def render(payload: Any, command: Optional[str] = None) -> str:
 # showing artifacts
 # --------------------------------------------------------------------------
 
-def find_artifacts(payload: Any) -> List[Path]:
+def find_artifacts(payload: Any) -> list[Path]:
   """Media files named anywhere in a result, in the order they appear.
 
   Keyed on the suffix rather than the key name: the controller already writes
   ``image_path`` / ``video_path`` / ``path``, but an extension is free to
   invent its own key and should still get its picture shown.
   """
-  found: List[Path] = []
+  found: list[Path] = []
 
   def walk(value: Any) -> None:
     if isinstance(value, dict):
@@ -458,7 +459,7 @@ def _kitty_show(path: Path) -> bool:
   return True
 
 
-def _spawn(argv: List[str]) -> bool:
+def _spawn(argv: list[str]) -> bool:
   """Launch a viewer without waiting on it, and without it holding the shell."""
   try:
     subprocess.Popen(
@@ -473,7 +474,7 @@ def _spawn(argv: List[str]) -> bool:
   return True
 
 
-def show(path: Path) -> Optional[str]:
+def show(path: Path) -> str | None:
   """Put one artifact in front of a person; returns how, or None if it didn't.
 
   A ladder, best first: inline in the terminal if it can draw, then a
@@ -517,7 +518,7 @@ OPEN_LIMIT = 8
 
 
 def show_artifacts(payload: Any, policy: str = "auto"
-                   ) -> Tuple[List[Tuple[Path, str]], List[Path]]:
+                   ) -> tuple[list[tuple[Path, str]], list[Path]]:
   """Show the artifacts a result names.
 
   Returns ``(shown, held_back)`` -- the second list is what the cap or a
@@ -531,8 +532,8 @@ def show_artifacts(payload: Any, policy: str = "auto"
   if len(found) > limit:
     return [], found
 
-  shown: List[Tuple[Path, str]] = []
-  held: List[Path] = []
+  shown: list[tuple[Path, str]] = []
+  held: list[Path] = []
   for path in found:
     how = show(path)
     (shown.append((path, how)) if how else held.append(path))

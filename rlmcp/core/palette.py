@@ -14,7 +14,7 @@ extraction of what is actually in a scene lives in the adapter.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Sequence, Tuple
+from collections.abc import Iterable, Sequence
 
 RGBA = Sequence[float]
 
@@ -27,7 +27,7 @@ DEFAULT_MIN_DISTANCE = 0.25
 
 # Hues that read clearly against the usual robot greys and terrain blues, and
 # against each other. Reserve these for overlays and keep objects out of them.
-MARKER_PALETTE: Tuple[Tuple[float, float, float, float], ...] = (
+MARKER_PALETTE: tuple[tuple[float, float, float, float], ...] = (
   (0.85, 0.20, 0.95, 0.75),  # magenta
   (0.10, 0.90, 0.85, 0.75),  # cyan
   (1.00, 0.45, 0.00, 0.75),  # orange
@@ -49,17 +49,17 @@ def rgba_distance(a: RGBA, b: RGBA) -> float:
 
 
 def find_collisions(
-  markers: Dict[str, RGBA],
-  scene: Dict[str, RGBA],
+  markers: dict[str, RGBA],
+  scene: dict[str, RGBA],
   min_distance: float = DEFAULT_MIN_DISTANCE,
-) -> List[dict]:
+) -> list[dict]:
   """Marker/scene colour pairs a viewer would confuse.
 
   Returns one entry per offending pair, nearest first, each naming both sides
   and a replacement drawn from :data:`MARKER_PALETTE` that clears every colour
   in the scene.
   """
-  out: List[dict] = []
+  out: list[dict] = []
   for marker_name, marker_rgba in markers.items():
     for scene_name, scene_rgba in scene.items():
       distance = rgba_distance(marker_rgba, scene_rgba)
@@ -80,7 +80,7 @@ def find_collisions(
 
 def suggest_distinct(
   scene: Iterable[RGBA], min_distance: float = DEFAULT_MIN_DISTANCE
-) -> Tuple[float, float, float, float]:
+) -> tuple[float, float, float, float]:
   """A marker colour from the reserved palette that clears everything in scene.
 
   Falls back to whichever palette entry is furthest from the nearest scene

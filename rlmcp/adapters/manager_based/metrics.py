@@ -7,14 +7,15 @@ each. Anything that would need a per-step copy belongs in a trace instead.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from collections.abc import Callable
+from typing import Any
 
 import torch
 
 from rlmcp.adapters.manager_based.sampling import first_command, is_velocity_command
 
 
-def _try(out: Dict[str, float], fn: Callable[[], None]) -> None:
+def _try(out: dict[str, float], fn: Callable[[], None]) -> None:
   """Run one metric, skipping it if this environment cannot provide it."""
   try:
     fn()
@@ -22,9 +23,9 @@ def _try(out: Dict[str, float], fn: Callable[[], None]) -> None:
     pass
 
 
-def summary_metrics(env: Any, robot_name: str) -> Dict[str, float]:
+def summary_metrics(env: Any, robot_name: str) -> dict[str, float]:
   """Cheap scalars describing the current batch, prefixed ``rlmcp/``."""
-  out: Dict[str, float] = {}
+  out: dict[str, float] = {}
   data = env.scene[robot_name].data
 
   def joint_motion() -> None:

@@ -30,7 +30,7 @@ from rlmcp.adapters.manager_based.access.rewards import RewardAccess
 from rlmcp.adapters.manager_based.access.terminations import TerminationAccess
 from rlmcp.core.parameters.spec import Liveness, ParameterSpec
 
-PROVIDER_TYPES: List[type] = [
+PROVIDER_TYPES: list[type] = [
     RewardAccess,
     TerminationAccess,
     EventAccess,
@@ -39,38 +39,38 @@ PROVIDER_TYPES: List[type] = [
 ]
 
 __all__ = [
-    "AccessProvider",
-    "ActionAccess",
-    "CommandAccess",
-    "EventAccess",
-    "ParameterAccess",
-    "PROVIDER_TYPES",
-    "RewardAccess",
-    "Synthetic",
-    "TerminationAccess",
-    "Term",
-    "paths",
+  "PROVIDER_TYPES",
+  "AccessProvider",
+  "ActionAccess",
+  "CommandAccess",
+  "EventAccess",
+  "ParameterAccess",
+  "RewardAccess",
+  "Synthetic",
+  "Term",
+  "TerminationAccess",
+  "paths",
 ]
 
 
 class ParameterAccess:
   """The environment's tunable surface, discovered rather than declared."""
 
-  def __init__(self, env: Any, provider_types: Optional[List[type]] = None):
+  def __init__(self, env: Any, provider_types: list[type] | None = None):
     self.env = env
     self.registry = ProviderRegistry()
     for provider_type in provider_types or PROVIDER_TYPES:
       self.registry.add(provider_type(env))
-    self._synthetic: Dict[str, Synthetic] = {}
+    self._synthetic: dict[str, Synthetic] = {}
     for provider in self.registry:
       for item in provider.synthetic():
         self._synthetic[item.key] = item
 
   # Discovery.
 
-  def discover(self) -> List[ParameterSpec]:
+  def discover(self) -> list[ParameterSpec]:
     """Every tunable leaf reachable from every provider's terms."""
-    specs: List[ParameterSpec] = []
+    specs: list[ParameterSpec] = []
     for provider in self.registry:
       for term in provider.terms():
         for parts, value in paths.walk_leaves(term.root, skip_keys=provider.skip_keys):
@@ -111,7 +111,7 @@ class ParameterAccess:
 
   # Resolution.
 
-  def _split(self, key: str) -> Tuple[AccessProvider, Term, List[str]]:
+  def _split(self, key: str) -> tuple[AccessProvider, Term, list[str]]:
     """Key -> (provider, term, remaining path).
 
     Matching happens on split segments rather than on the raw string, because a
@@ -153,7 +153,7 @@ class ParameterAccess:
     value = paths.resolve(term.root, parts).read()
     return list(value) if paths.is_range(value) else value
 
-  def set(self, key: str, value: Any) -> Dict[str, Any]:
+  def set(self, key: str, value: Any) -> dict[str, Any]:
     """Write a parameter. Returns notes from the provider's write hook, if any.
 
     Refuses writes that cannot take effect this run (liveness 'at_startup' or
@@ -211,7 +211,7 @@ class ParameterAccess:
     return notes
 
   @staticmethod
-  def _notify_class_term(term: Term, parts: List[str], value: Any) -> None:
+  def _notify_class_term(term: Term, parts: list[str], value: Any) -> None:
     """Give class-based terms a chance to rebuild anything they cached.
 
     Most mjlab terms are plain functions reading ``params`` every step and need
@@ -243,8 +243,8 @@ class ParameterAccess:
 
   # Introspection helpers used by the adapter.
 
-  def domains(self) -> List[str]:
+  def domains(self) -> list[str]:
     return self.registry.domains()
 
-  def provider(self, domain: str) -> Optional[AccessProvider]:
+  def provider(self, domain: str) -> AccessProvider | None:
     return self.registry.get(domain)

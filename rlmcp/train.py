@@ -24,7 +24,6 @@ import sys
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
 
 
 def _prog_name(subcommand: str) -> str:
@@ -38,7 +37,7 @@ def _prog_name(subcommand: str) -> str:
   return invoked if invoked.startswith("rlmcp-") else subcommand
 
 
-def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(prog=_prog_name("rlmcp train"),
                                    description=__doc__.splitlines()[0])
   parser.add_argument("task", help="Registered mjlab task id")
@@ -136,7 +135,7 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
   return parser.parse_args(argv)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
   args = _parse_args(argv)
 
   # Checked before anything expensive starts: a mistyped cadence should cost a

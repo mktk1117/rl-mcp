@@ -25,7 +25,8 @@ from typing import Any
 # to drift (0.2.0 here against 0.3.0 in pyproject.toml), and the version a bug
 # report quotes should be the one that was installed.
 try:
-  from importlib.metadata import PackageNotFoundError, version as _dist_version
+  from importlib.metadata import PackageNotFoundError
+  from importlib.metadata import version as _dist_version
 
   __version__ = _dist_version("rl-mcp")
 except PackageNotFoundError:  # A source tree that was never installed.

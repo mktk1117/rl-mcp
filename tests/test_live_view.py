@@ -12,7 +12,7 @@ it, which is also the seam a second transport would be written against.
 from __future__ import annotations
 
 import socket
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 from conftest import FakeSimAdapter
@@ -26,8 +26,8 @@ from rlmcp.session import Session
 class FakeScene:
   """What a backend returns from ``open_live_view``: update(env_id), close()."""
 
-  def __init__(self, fail_with: Optional[Exception] = None):
-    self.updates: List[int] = []
+  def __init__(self, fail_with: Exception | None = None):
+    self.updates: list[int] = []
     self.closed = False
     self.fail_with = fail_with
 
@@ -62,8 +62,8 @@ class FakeButton:
 
 class FakeGui:
   def __init__(self):
-    self.panels: List[FakeMarkdown] = []
-    self.buttons: List[FakeButton] = []
+    self.panels: list[FakeMarkdown] = []
+    self.buttons: list[FakeButton] = []
 
   def add_markdown(self, content: str) -> FakeMarkdown:
     panel = FakeMarkdown(content)
@@ -85,7 +85,7 @@ class FakeServer:
     self.stopped = False
     self.gui = FakeGui()
 
-  def get_clients(self) -> Dict[int, Any]:
+  def get_clients(self) -> dict[int, Any]:
     return {i: object() for i in range(self.watchers)}
 
   def stop(self) -> None:
@@ -100,11 +100,11 @@ class ViewableSim(FakeSimAdapter):
   go of it in ``close``.
   """
 
-  def __init__(self, scene: Optional[FakeScene] = None, **kwargs):
+  def __init__(self, scene: FakeScene | None = None, **kwargs):
     super().__init__(**kwargs)
     self.scene = scene or FakeScene()
-    self.opened: List[Any] = []
-    self.modes: List[Dict[str, Any]] = []
+    self.opened: list[Any] = []
+    self.modes: list[dict[str, Any]] = []
 
   def open_live_view(self, server: Any, realtime: bool = False,
                      buffer_seconds: float = 4.0) -> FakeScene:
@@ -114,9 +114,9 @@ class ViewableSim(FakeSimAdapter):
 
 
 @pytest.fixture
-def servers(monkeypatch) -> List[FakeServer]:
+def servers(monkeypatch) -> list[FakeServer]:
   """Every server LiveView opens during a test, in order."""
-  made: List[FakeServer] = []
+  made: list[FakeServer] = []
 
   def factory(host: str, port: int, label: str) -> FakeServer:
     server = FakeServer(host, port, label)
@@ -554,7 +554,7 @@ class PausableScene(FakeScene):
   def __init__(self):
     super().__init__()
     self.paused = False
-    self.watchers: List[int] = []
+    self.watchers: list[int] = []
 
   def set_paused(self, paused: bool) -> None:
     self.paused = bool(paused)

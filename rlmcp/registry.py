@@ -31,7 +31,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 SCHEMA_VERSION = 1
 
@@ -58,10 +58,10 @@ def state_dir() -> Path:
 def register(
     kind: str,
     *,
-    session_dir: Optional[Path | str] = None,
-    root: Optional[Path | str] = None,
-    session_kind: Optional[str] = None,
-) -> Optional[Path]:
+    session_dir: Path | str | None = None,
+    root: Path | str | None = None,
+    session_kind: str | None = None,
+) -> Path | None:
   """Record that ``kind`` exists and what it is looking at. Never raises.
 
   Returns the file written, or ``None`` when it could not be -- an unwritable
@@ -70,7 +70,7 @@ def register(
   try:
     directory = state_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "kind": kind,
         "pid": os.getpid(),
@@ -109,7 +109,7 @@ def _pid_alive(pid: Any) -> bool:
   return True
 
 
-def entries() -> List[Dict[str, Any]]:
+def entries() -> list[dict[str, Any]]:
   """Every registration, newest first, pruned as it is read. Never raises.
 
   An entry earns its keep by still pointing at something: a session directory
@@ -126,7 +126,7 @@ def entries() -> List[Dict[str, Any]]:
     )
   except OSError:
     return []
-  out: List[Dict[str, Any]] = []
+  out: list[dict[str, Any]] = []
   for index, path in enumerate(files):
     try:
       payload = json.loads(path.read_text())

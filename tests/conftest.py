@@ -9,7 +9,7 @@ defaults) and emit trace channels under the shared ``CHANNEL_*`` vocabulary.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import pytest
@@ -36,7 +36,7 @@ class FakeSimAdapter(SimAdapter):
 
   def __init__(self, num_envs: int = 12):
     self._num_envs = num_envs
-    self._params: Dict[str, Any] = {
+    self._params: dict[str, Any] = {
         "reward.track_linear_velocity.weight": 2.0,
         "reward.action_rate_l2.weight": -0.1,
         "command.twist.ranges.lin_vel_x": [-1.0, 1.0],
@@ -46,10 +46,10 @@ class FakeSimAdapter(SimAdapter):
     self.level_ceiling = NUM_LEVELS
     self.enabled = ["flat"]
     self.step_count = 0
-    self.command_range_calls: List[Dict[str, Any]] = []
-    self.resets: List[List[int]] = []
+    self.command_range_calls: list[dict[str, Any]] = []
+    self.resets: list[list[int]] = []
 
-  def discover_parameters(self) -> List[ParameterSpec]:
+  def discover_parameters(self) -> list[ParameterSpec]:
     specs = []
     for key, value in self._params.items():
       is_range = isinstance(value, list)
@@ -91,10 +91,10 @@ class FakeSimAdapter(SimAdapter):
   def max_episode_length(self) -> float:
     return 100.0
 
-  def joint_names(self) -> List[str]:
+  def joint_names(self) -> list[str]:
     return ["left_knee", "right_knee"]
 
-  def sample_state(self, env_id: int = 0) -> Dict[str, np.ndarray]:
+  def sample_state(self, env_id: int = 0) -> dict[str, np.ndarray]:
     # Keys are the trace vocabulary from rlmcp.adapters.base; the command is
     # a plane-velocity twist, which is what CHANNEL_COMMAND means.
     self.step_count += 1
@@ -108,7 +108,7 @@ class FakeSimAdapter(SimAdapter):
         CHANNEL_BASE_ANG_VEL: np.array([0.0, 0.0, 0.05], dtype=np.float32),
     }
 
-  def trace_labels(self) -> Dict[str, List[str]]:
+  def trace_labels(self) -> dict[str, list[str]]:
     # One label per component of every channel sample_state emits.
     return {
         CHANNEL_JOINT_POS: self.joint_names(),
@@ -119,7 +119,7 @@ class FakeSimAdapter(SimAdapter):
         CHANNEL_BASE_ANG_VEL: ["wx", "wy", "wz"],
     }
 
-  def summary_metrics(self) -> Dict[str, float]:
+  def summary_metrics(self) -> dict[str, float]:
     return {
         "rlmcp/terrain_level_mean": float(self.terrain_levels.mean()),
         "rlmcp/terrain_level_frac": float(
@@ -127,7 +127,7 @@ class FakeSimAdapter(SimAdapter):
         ),
     }
 
-  def reset_envs(self, env_ids=None) -> Dict[str, Any]:
+  def reset_envs(self, env_ids=None) -> dict[str, Any]:
     # Optional capability: a backend without one leaves this to the base class,
     # which raises NotSupported. Records what it was asked to restart so a test
     # can see that a --where query narrowed it.
@@ -146,8 +146,8 @@ class FakeSimAdapter(SimAdapter):
   # Terrain state, driven by FakeTerrainExtension below. Not part of the
   # SimAdapter contract -- that is the point of the extension mechanism.
 
-  def set_terrain(self, terrains=None, weights=None, max_level=None) -> Dict[str, Any]:
-    changed: Dict[str, Any] = {}
+  def set_terrain(self, terrains=None, weights=None, max_level=None) -> dict[str, Any]:
+    changed: dict[str, Any] = {}
     if max_level is not None:
       self.level_ceiling = int(max_level)
       self.terrain_levels = np.clip(self.terrain_levels, 0, self.level_ceiling - 1)
@@ -164,7 +164,7 @@ class FakeSimAdapter(SimAdapter):
       changed["terrains"] = list(self.enabled)
     return changed
 
-  def env_ids_on(self, terrain=None, level=None) -> List[int]:
+  def env_ids_on(self, terrain=None, level=None) -> list[int]:
     mask = np.ones(self._num_envs, dtype=bool)
     if terrain is not None:
       if terrain not in TERRAINS:
@@ -174,10 +174,10 @@ class FakeSimAdapter(SimAdapter):
       mask &= self.terrain_levels == int(level)
     return [int(i) for i in np.nonzero(mask)[0]]
 
-  def get_env_state(self) -> Dict[str, Any]:
+  def get_env_state(self) -> dict[str, Any]:
     return {"step": self.step_count}
 
-  def set_env_state(self, state: Dict[str, Any]) -> None:
+  def set_env_state(self, state: dict[str, Any]) -> None:
     self.step_count = int(state.get("step", 0))
 
 
@@ -203,7 +203,7 @@ class FakeTerrainExtension(Extension):
         "set_terrain": self.cmd_set_terrain,
     }
 
-  def metrics(self) -> Dict[str, float]:
+  def metrics(self) -> dict[str, float]:
     ceiling = max(1, self.sim.level_ceiling - 1)
     return {
         "rlmcp/terrain_level_mean": float(self.sim.terrain_levels.mean()),
@@ -217,30 +217,30 @@ class FakeTerrainExtension(Extension):
       return None
     return self.sim.env_ids_on(terrain=terrain, level=level)
 
-  def selectors(self) -> Dict[str, Dict[str, Any]]:
+  def selectors(self) -> dict[str, dict[str, Any]]:
     return {
         "terrain": {"label": "terrain", "values": list(self.sim.enabled)},
         "level": {"label": "difficulty level",
                   "values": list(range(self.sim.level_ceiling))},
     }
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     return {"active_terrains": list(self.sim.enabled),
             "level_ceiling": self.sim.level_ceiling}
 
-  def snapshot(self) -> Dict[str, Any]:
+  def snapshot(self) -> dict[str, Any]:
     return {"enabled": list(self.sim.enabled), "ceiling": self.sim.level_ceiling}
 
-  def restore(self, state: Dict[str, Any]) -> None:
+  def restore(self, state: dict[str, Any]) -> None:
     self.sim.set_terrain(terrains=state["enabled"], max_level=state["ceiling"])
 
-  def cmd_terrain_status(self) -> Dict[str, Any]:
+  def cmd_terrain_status(self) -> dict[str, Any]:
     """Per-terrain environment counts."""
     return {"active_terrains": list(self.sim.enabled),
             "level_ceiling": self.sim.level_ceiling}
 
   def cmd_set_terrain(self, terrains=None, weights=None, max_level=None,
-                      rationale: str = "") -> Dict[str, Any]:
+                      rationale: str = "") -> dict[str, Any]:
     """Choose which terrains spawn environments and cap how hard they get."""
     return {"changed": self.sim.set_terrain(terrains, weights, max_level)}
 
@@ -251,12 +251,12 @@ class FakeRunnerAdapter(RunnerAdapter):
   def __init__(self):
     self.hyper = {"learning_rate": 1e-3, "entropy_coef": 0.01}
     self.iteration = 0
-    self.saved: List[str] = []
-    self.loaded: List[str] = []
+    self.saved: list[str] = []
+    self.loaded: list[str] = []
     self.stop_called = False
-    self.checkpoint_infos: Dict[str, Any] = {}
+    self.checkpoint_infos: dict[str, Any] = {}
 
-  def discover_hyperparameters(self) -> List[ParameterSpec]:
+  def discover_hyperparameters(self) -> list[ParameterSpec]:
     return [
         ParameterSpec(
             key=f"rl.{name}",
@@ -286,10 +286,10 @@ class FakeRunnerAdapter(RunnerAdapter):
   def current_iteration(self) -> int:
     return self.iteration
 
-  def runner_metrics(self) -> Dict[str, float]:
+  def runner_metrics(self) -> dict[str, float]:
     return {"Train/mean_reward": 1.0, "Train/mean_episode_length": 80.0}
 
-  def save_checkpoint(self, path: str, infos: Optional[Dict[str, Any]] = None) -> str:
+  def save_checkpoint(self, path: str, infos: dict[str, Any] | None = None) -> str:
     from pathlib import Path
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -304,7 +304,7 @@ class FakeRunnerAdapter(RunnerAdapter):
     }
     return path
 
-  def load_checkpoint(self, path: str) -> Dict[str, Any]:
+  def load_checkpoint(self, path: str) -> dict[str, Any]:
     # Like the real runner's load: hand back the stored infos verbatim.
     self.loaded.append(path)
     return self.checkpoint_infos

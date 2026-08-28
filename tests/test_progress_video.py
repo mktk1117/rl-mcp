@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import contextlib
 import io
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,9 +13,9 @@ from conftest import FakeSimAdapter
 from rlmcp.adapters.base import NotSupported
 from rlmcp.core.controller import RlMcp
 from rlmcp.core.progress_video import (
-    Cadence,
-    CadenceError,
-    ProgressVideoSchedule,
+  Cadence,
+  CadenceError,
+  ProgressVideoSchedule,
 )
 from rlmcp.records.filestore import FileStore
 from rlmcp.records.link import RecordLink
@@ -401,9 +400,8 @@ def test_every_spelling_of_off_turns_clips_off(spec):
 def _help_text(parse: Any, argv: list) -> str:
   """What argparse prints for --help, without exiting the test."""
   buffer = io.StringIO()
-  with contextlib.redirect_stdout(buffer):
-    with pytest.raises(SystemExit):
-      parse(argv)
+  with contextlib.redirect_stdout(buffer), pytest.raises(SystemExit):
+    parse(argv)
   return buffer.getvalue()
 
 

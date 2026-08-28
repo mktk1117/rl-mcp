@@ -13,7 +13,7 @@ from the live environment, never assumed from the task.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -38,7 +38,7 @@ from rlmcp.adapters.base import (
 _VELOCITY_COMMAND_LABELS = ["cmd_vx", "cmd_vy", "cmd_wz"]
 
 
-def first_command(env: Any) -> Optional[Tuple[str, Any, torch.Tensor]]:
+def first_command(env: Any) -> tuple[str, Any, torch.Tensor] | None:
   """The first command term that yields a tensor: ``(name, term, command)``.
 
   Terms are checked in manager order, and a term whose command is ``None`` is
@@ -80,7 +80,7 @@ class StateSampler:
     self.env = env
     self.robot_name = robot_name
     self._contact_candidates = self._rank_contact_sensors(env)
-    self._contact_sensor_name: Optional[str] = None
+    self._contact_sensor_name: str | None = None
     self._contact_resolved = False
 
   @property
@@ -90,7 +90,7 @@ class StateSampler:
   # Contact sensor resolution.
 
   @staticmethod
-  def _rank_contact_sensors(env: Any) -> List[str]:
+  def _rank_contact_sensors(env: Any) -> list[str]:
     """Order sensors by how likely they are to be the foot-contact sensor.
 
     Names alone are ambiguous -- a G1 scene has both ``feet_ground_contact``
@@ -115,7 +115,7 @@ class StateSampler:
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [name for _, name in scored]
 
-  def contact_found(self) -> Optional[torch.Tensor]:
+  def contact_found(self) -> torch.Tensor | None:
     """Foot contact flags, resolving (once) which sensor actually provides them."""
     if self._contact_resolved:
       candidates = [self._contact_sensor_name] if self._contact_sensor_name else []
@@ -138,7 +138,7 @@ class StateSampler:
 
   # Command resolution, shared between data and labels so they cannot diverge.
 
-  def _resolve_command(self) -> Optional[Tuple[str, torch.Tensor, List[str]]]:
+  def _resolve_command(self) -> tuple[str, torch.Tensor, list[str]] | None:
     """``(channel, tensor, labels)`` for the first command term, if any.
 
     A plane-velocity command records as ``CHANNEL_COMMAND`` with its true
@@ -156,12 +156,12 @@ class StateSampler:
 
   # Sampling.
 
-  def sample(self, env_id: int = 0) -> Dict[str, np.ndarray]:
+  def sample(self, env_id: int = 0) -> dict[str, np.ndarray]:
     env_id = int(max(0, min(env_id, int(self.env.num_envs) - 1)))
     data = self.robot.data
-    pieces: List[Tuple[str, torch.Tensor]] = []
+    pieces: list[tuple[str, torch.Tensor]] = []
 
-    def add(name: str, tensor: Optional[torch.Tensor]) -> None:
+    def add(name: str, tensor: torch.Tensor | None) -> None:
       if tensor is None:
         return
       pieces.append((name, tensor[env_id].reshape(-1).float()))
@@ -205,7 +205,7 @@ class StateSampler:
       )
 
     flat = torch.cat([tensor for _, tensor in pieces]).detach().cpu().numpy()
-    out: Dict[str, np.ndarray] = {}
+    out: dict[str, np.ndarray] = {}
     offset = 0
     for name, tensor in pieces:
       width = tensor.shape[0]
@@ -215,7 +215,7 @@ class StateSampler:
 
   # Labels.
 
-  def _action_labels(self) -> Optional[List[str]]:
+  def _action_labels(self) -> list[str] | None:
     """Per-component action names, walked from the manager's own terms.
 
     The policy's action vector is the manager's terms concatenated in order,
@@ -228,7 +228,7 @@ class StateSampler:
     if manager is None:
       return None
     try:
-      labels: List[str] = []
+      labels: list[str] = []
       for term_name in getattr(manager, "active_terms", []) or []:
         term = manager.get_term(term_name)
         width = int(term.action_dim)
@@ -249,7 +249,7 @@ class StateSampler:
       return None
     return [f"act_{i}" for i in range(int(action.shape[-1]))]
 
-  def labels(self) -> Dict[str, List[str]]:
+  def labels(self) -> dict[str, list[str]]:
     """Component names for the channels :meth:`sample` produces."""
     joints = list(self.robot.joint_names)
     labels = {
@@ -276,7 +276,7 @@ class StateSampler:
       labels[CHANNEL_FOOT_CONTACT] = self._contact_labels(width)
     return labels
 
-  def _contact_labels(self, width: int) -> List[str]:
+  def _contact_labels(self, width: int) -> list[str]:
     """Per-column contact names, derived from the sensor rather than assumed.
 
     mjlab's ContactSensor names its columns (``primary_names``, one per

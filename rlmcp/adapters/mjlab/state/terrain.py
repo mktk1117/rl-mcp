@@ -15,7 +15,8 @@ also the only point at which moving them is safe.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import torch
@@ -35,7 +36,7 @@ class TerrainControl:
 
   # Grid.
 
-  def grid(self) -> Tuple[Any, List[str], int, int]:
+  def grid(self) -> tuple[Any, list[str], int, int]:
     """(terrain entity, terrain names, num_rows, num_cols)."""
     terrain = self.terrain
     if terrain is None or getattr(terrain, "terrain_origins", None) is None:
@@ -52,13 +53,13 @@ class TerrainControl:
       names = [f"col_{i}" for i in range(num_cols)]
     return terrain, names, int(num_rows), int(num_cols)
 
-  def names(self) -> List[str]:
+  def names(self) -> list[str]:
     _, names, _, _ = self.grid()
     return names
 
   # Reading.
 
-  def status(self) -> Dict[str, Any]:
+  def status(self) -> dict[str, Any]:
     terrain, names, num_rows, num_cols = self.grid()
     types = terrain.terrain_types.detach().cpu().numpy()
     levels = terrain.terrain_levels.detach().cpu().numpy()
@@ -68,7 +69,7 @@ class TerrainControl:
     for i, name in enumerate(names):
       mask = types == i
       count = int(mask.sum())
-      entry: Dict[str, Any] = {"terrain": name, "column": i, "num_envs": count}
+      entry: dict[str, Any] = {"terrain": name, "column": i, "num_envs": count}
       if count:
         entry["level_mean"] = round(float(levels[mask].mean()), 3)
         entry["level_max"] = int(levels[mask].max())
@@ -87,7 +88,7 @@ class TerrainControl:
         "per_terrain": per_terrain,
     }
 
-  def metrics(self) -> Dict[str, float]:
+  def metrics(self) -> dict[str, float]:
     """Terrain progress as ``rlmcp/`` scalars, for curriculum promotion rules."""
     try:
       terrain, _, num_rows, _ = self.grid()
@@ -104,8 +105,8 @@ class TerrainControl:
     }
 
   def env_ids_on(
-      self, terrain: Optional[str] = None, level: Optional[int] = None
-  ) -> List[int]:
+      self, terrain: str | None = None, level: int | None = None
+  ) -> list[int]:
     """Environment indices currently spawned on a given terrain / level."""
     entity, names, _, _ = self.grid()
     types = entity.terrain_types.detach().cpu().numpy()
@@ -123,14 +124,14 @@ class TerrainControl:
 
   def configure(
       self,
-      terrains: Optional[Sequence[str]] = None,
-      weights: Optional[Dict[str, float]] = None,
-      max_level: Optional[int] = None,
-  ) -> Dict[str, Any]:
+      terrains: Sequence[str] | None = None,
+      weights: dict[str, float] | None = None,
+      max_level: int | None = None,
+  ) -> dict[str, Any]:
     """Restrict which terrains and difficulty levels environments may occupy."""
     terrain, names, num_rows, _ = self.grid()
     device = terrain.terrain_levels.device
-    changed: Dict[str, Any] = {}
+    changed: dict[str, Any] = {}
 
     if max_level is not None:
       ceiling = int(max(1, min(int(max_level), num_rows)))
@@ -172,7 +173,7 @@ class TerrainControl:
       self,
       columns: Sequence[int],
       names: Sequence[str],
-      weights: Optional[Dict[str, float]],
+      weights: dict[str, float] | None,
   ) -> np.ndarray:
     """Split the environments across ``columns`` by weight, exactly."""
     weight_values = np.array(
@@ -199,7 +200,7 @@ class TerrainControl:
 
   # Checkpointing.
 
-  def snapshot(self) -> Dict[str, Any]:
+  def snapshot(self) -> dict[str, Any]:
     terrain = self.terrain
     if terrain is None or getattr(terrain, "terrain_origins", None) is None:
       return {}
@@ -209,7 +210,7 @@ class TerrainControl:
         "max_terrain_level": int(getattr(terrain, "max_terrain_level", 0)),
     }
 
-  def restore(self, state: Dict[str, Any]) -> None:
+  def restore(self, state: dict[str, Any]) -> None:
     terrain = self.terrain
     if terrain is None or getattr(terrain, "terrain_origins", None) is None:
       return

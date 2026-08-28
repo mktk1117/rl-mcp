@@ -45,13 +45,13 @@ args = parser.parse_args()
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
 
-import gymnasium as gym  # noqa: E402
-from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
-from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg  # noqa: E402
-from rsl_rl.runners import OnPolicyRunner  # noqa: E402
+import gymnasium as gym
+from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
+from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
+from rsl_rl.runners import OnPolicyRunner
 
-import rlmcp.adapters.isaaclab as rlmcp_isaaclab  # noqa: E402
-from rlmcp.adapters.isaaclab import TrainingStopped  # noqa: E402
+import rlmcp.adapters.isaaclab as rlmcp_isaaclab
+from rlmcp.adapters.isaaclab import TrainingStopped
 
 
 def _migrate_agent_cfg(agent_cfg):
@@ -126,7 +126,7 @@ def main() -> int:
   final = log_dir / f"model_final_{runner.current_learning_iteration}.pt"
   try:
     runner.save(str(final))
-  except Exception as exc:  # noqa: BLE001 -- an unsaved policy is worth saying
+  except Exception as exc:
     print(f"[rlmcp] final save failed: {exc}")
   env.rlmcp.session.append_event("train_exit", {"reason": reason,
                                                 "final_checkpoint": str(final)})

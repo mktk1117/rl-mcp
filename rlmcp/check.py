@@ -61,7 +61,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 DEFAULT_STEPS = 150
 """Enough to leave the reset transient and see a short episode end.
@@ -95,7 +95,7 @@ class CheckConfig:
   device: str = "cpu"
   """CPU by default. This is a correctness check on a handful of environments,
   and it must not queue behind -- or evict -- a training run on the card."""
-  task_package: List[str] = field(default_factory=list)
+  task_package: list[str] = field(default_factory=list)
   session_dir: str = ""
   """Where the throwaway session goes. Empty means a temporary directory that
   is removed afterwards; nothing about a check belongs in the records."""
@@ -121,11 +121,11 @@ class CheckConfig:
 # which fix applies to which problem rather than leave that to be inferred.
 
 
-def _gate(name: str, ok: bool, detail: str = "", fix: str = "", **extra: Any) -> Dict[str, Any]:
+def _gate(name: str, ok: bool, detail: str = "", fix: str = "", **extra: Any) -> dict[str, Any]:
   return {"gate": name, "ok": ok, "detail": detail, "fix": fix, **extra}
 
 
-def _skipped(name: str, because: str) -> Dict[str, Any]:
+def _skipped(name: str, because: str) -> dict[str, Any]:
   """A gate that did not run, which is not a gate that passed.
 
   Reporting it as a pass is how a broken env comes back with four ticks and
@@ -141,7 +141,7 @@ def _finite(value: Any) -> bool:
     return False
 
 
-def summarise(gates: List[Dict[str, Any]]) -> Dict[str, Any]:
+def summarise(gates: list[dict[str, Any]]) -> dict[str, Any]:
   """Pass/fail for the whole check, and the first thing that went wrong."""
   failed = [g for g in gates if g["ok"] is False]
   skipped = [g for g in gates if g["ok"] is None]
@@ -156,7 +156,7 @@ def summarise(gates: List[Dict[str, Any]]) -> Dict[str, Any]:
   }
 
 
-def rank_terms(totals: Dict[str, float], steps: int) -> List[Dict[str, Any]]:
+def rank_terms(totals: dict[str, float], steps: int) -> list[dict[str, Any]]:
   """Reward terms, largest contribution first, with each one's share.
 
   Sorted by magnitude rather than by value: a penalty large enough to swamp
@@ -173,7 +173,7 @@ def rank_terms(totals: Dict[str, float], steps: int) -> List[Dict[str, Any]]:
   return rows
 
 
-def dominance(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def dominance(rows: list[dict[str, Any]]) -> dict[str, Any]:
   """How lopsided the reward is, in the form the failure actually takes.
 
   Not a verdict -- a task with one dominant term may be exactly right. It is
@@ -192,7 +192,7 @@ def dominance(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 # ── the rollout ───────────────────────────────────────────────────────────
 
 
-def roll(vec_env: Any, adapter: Any, policy: Any, steps: int) -> Dict[str, Any]:
+def roll(vec_env: Any, adapter: Any, policy: Any, steps: int) -> dict[str, Any]:
   """Step the environment and collect what the gates need.
 
   Deliberately tolerant of an environment that answers half of this: a task
@@ -202,9 +202,9 @@ def roll(vec_env: Any, adapter: Any, policy: Any, steps: int) -> Dict[str, Any]:
   """
   import torch
 
-  reward_totals: Dict[str, float] = {}
-  termination_hits: Dict[str, float] = {}
-  nonfinite: List[str] = []
+  reward_totals: dict[str, float] = {}
+  termination_hits: dict[str, float] = {}
+  nonfinite: list[str] = []
   total_reward = 0.0
   dones = 0
   completed = 0
@@ -257,7 +257,7 @@ def roll(vec_env: Any, adapter: Any, policy: Any, steps: int) -> Dict[str, Any]:
           nonfinite.append(f"reward.{name} at step {completed}")
           continue
         reward_totals[name] = reward_totals.get(name, 0.0) + float(value)
-    except Exception as exc:                      # noqa: BLE001 - reported below
+    except Exception as exc:
       terms_refused = terms_refused or f"{type(exc).__name__}: {exc}"
 
     try:
@@ -265,7 +265,7 @@ def roll(vec_env: Any, adapter: Any, policy: Any, steps: int) -> Dict[str, Any]:
       terminations_seen = True
       for name, value in fired.items():
         termination_hits[name] = termination_hits.get(name, 0.0) + float(value)
-    except Exception as exc:                      # noqa: BLE001 - reported below
+    except Exception as exc:
       terminations_refused = terminations_refused or f"{type(exc).__name__}: {exc}"
 
   return {
@@ -283,9 +283,9 @@ def roll(vec_env: Any, adapter: Any, policy: Any, steps: int) -> Dict[str, Any]:
   }
 
 
-def gates_from(rolled: Dict[str, Any], steps: int, num_envs: int) -> List[Dict[str, Any]]:
+def gates_from(rolled: dict[str, Any], steps: int, num_envs: int) -> list[dict[str, Any]]:
   """The three gates that can only be answered by having stepped."""
-  gates: List[Dict[str, Any]] = []
+  gates: list[dict[str, Any]] = []
 
   completed = rolled["completed"]
   gates.append(_gate(
@@ -380,7 +380,7 @@ def load_runner(task: str) -> Any:
 
 
 def train_once(runner_cls: Any, vec_env: Any, agent_cfg: Any,
-               device: str) -> Dict[str, Any]:
+               device: str) -> dict[str, Any]:
   """Construct the runner and take one iteration: a rollout and an update.
 
   Constructing it is not enough, and that is not a guess. The failure this
@@ -459,7 +459,7 @@ TRAINS_FIX = (
 
 
 def train_gate(task: str, vec_env: Any, agent_cfg: Any, device: str,
-               earlier: List[Dict[str, Any]], enabled: bool = True) -> Dict[str, Any]:
+               earlier: list[dict[str, Any]], enabled: bool = True) -> dict[str, Any]:
   """Answer ``trains``: would a training run get past iteration 0?
 
   A pass means training *starts* and takes a step. It is not a forecast that
@@ -490,7 +490,7 @@ def train_gate(task: str, vec_env: Any, agent_cfg: Any, device: str,
     except ImportError as exc:
       return _skipped("trains", f"no RL runner available here: {exc}")
     info = train_once(runner_cls, vec_env, agent_cfg, device)
-  except Exception as exc:                        # noqa: BLE001 - it is the answer
+  except Exception as exc:
     where = _raised_in(exc)
     return _gate(
         "trains", False,
@@ -511,7 +511,7 @@ def train_gate(task: str, vec_env: Any, agent_cfg: Any, device: str,
 # ── the command ───────────────────────────────────────────────────────────
 
 
-def run_check(cfg: CheckConfig) -> Dict[str, Any]:
+def run_check(cfg: CheckConfig) -> dict[str, Any]:
   """Build the task, roll it, and answer the six questions.
 
   The build is ``play``'s, unchanged: the same registry lookup, the same
@@ -545,9 +545,9 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
       quiet=True,
   )
 
-  gates: List[Dict[str, Any]] = []
-  built: Dict[str, Any] = {}
-  rolled: Dict[str, Any] = {}
+  gates: list[dict[str, Any]] = []
+  built: dict[str, Any] = {}
+  rolled: dict[str, Any] = {}
   started = time.time()
 
   try:
@@ -574,7 +574,7 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
       for name in ("steps", "rewards_finite", "terminations", "trains"):
         gates.append(_skipped(name, "the environment was not built"))
       return _payload(cfg, gates, {}, {}, steps, num_envs, time.time() - started)
-    except Exception as exc:                      # noqa: BLE001 - it is the answer
+    except Exception as exc:
       gates.append(_gate("imports", True))
       gates.append(_gate(
           "constructs", False, detail=f"{type(exc).__name__}: {exc}",
@@ -594,7 +594,7 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
     policy = untrained_policy(play_cfg, vec_env)
     try:
       rolled = roll(vec_env, lab.sim, policy, steps)
-    except Exception as exc:                      # noqa: BLE001 - it is the answer
+    except Exception as exc:
       gates.append(_gate(
           "steps", False, detail=f"{type(exc).__name__}: {exc}",
           fix="The environment raised while stepping. Nothing after this could "
@@ -615,7 +615,7 @@ def run_check(cfg: CheckConfig) -> Dict[str, Any]:
       shutil.rmtree(temporary, ignore_errors=True)
 
 
-def _describe_env(lab: Any, vec_env: Any, num_envs: int) -> Dict[str, Any]:
+def _describe_env(lab: Any, vec_env: Any, num_envs: int) -> dict[str, Any]:
   """The shape of what was built, which is worth seeing even when it passes."""
   def _try(fn, default=None):
     try:
@@ -632,9 +632,9 @@ def _describe_env(lab: Any, vec_env: Any, num_envs: int) -> Dict[str, Any]:
   }
 
 
-def _payload(cfg: CheckConfig, gates: List[Dict[str, Any]], built: Dict[str, Any],
-             rolled: Dict[str, Any], steps: int, num_envs: int,
-             seconds: float) -> Dict[str, Any]:
+def _payload(cfg: CheckConfig, gates: list[dict[str, Any]], built: dict[str, Any],
+             rolled: dict[str, Any], steps: int, num_envs: int,
+             seconds: float) -> dict[str, Any]:
   rewards = rank_terms(rolled.get("reward_totals", {}), rolled.get("completed", 0))
   terminations = [
       {"term": name, "per_step": total / max(1, rolled.get("completed", 1))}
@@ -696,19 +696,19 @@ def config_from_args(args: Any) -> CheckConfig:
 
 
 __all__ = [
-    "CheckConfig",
-    "CheckError",
-    "DEFAULT_ENVS",
-    "DEFAULT_STEPS",
-    "add_arguments",
-    "config_from_args",
-    "dominance",
-    "gates_from",
-    "load_runner",
-    "rank_terms",
-    "roll",
-    "run_check",
-    "summarise",
-    "train_gate",
-    "train_once",
+  "DEFAULT_ENVS",
+  "DEFAULT_STEPS",
+  "CheckConfig",
+  "CheckError",
+  "add_arguments",
+  "config_from_args",
+  "dominance",
+  "gates_from",
+  "load_runner",
+  "rank_terms",
+  "roll",
+  "run_check",
+  "summarise",
+  "train_gate",
+  "train_once",
 ]

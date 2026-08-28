@@ -15,10 +15,9 @@ constructor runs.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any
 
 import pytest
-
 from test_access import FakeEnv
 
 from rlmcp.core.curriculum import CurriculumStage, StageSchedule
@@ -31,7 +30,7 @@ class _Robot:
 
 class _Scene(dict):
   @property
-  def entities(self) -> Dict[str, Any]:
+  def entities(self) -> dict[str, Any]:
     return self
 
 

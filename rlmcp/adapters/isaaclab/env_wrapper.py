@@ -15,7 +15,7 @@ Usage, after IsaacLab's app is launched::
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from rlmcp.adapters.isaaclab.sim_adapter import IsaacLabSimAdapter
 from rlmcp.adapters.manager_based.env_wrapper import (
@@ -27,7 +27,7 @@ from rlmcp.adapters.manager_based.env_wrapper import TrainingStopped
 class RlMcpEnvWrapper(_ManagerBasedWrapper):
   """Transparent wrapper over an IsaacLab ``ManagerBasedRLEnv``."""
 
-  def build_sim_adapter(self, env: Any, robot_name: Optional[str]) -> Any:
+  def build_sim_adapter(self, env: Any, robot_name: str | None) -> Any:
     return IsaacLabSimAdapter(env, robot_name=robot_name)
 
   def startup_checks(self) -> None:

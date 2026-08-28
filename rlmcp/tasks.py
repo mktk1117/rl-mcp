@@ -35,20 +35,21 @@ as cheap as it has always been.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, List, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from rlmcp.play import TASK_PACKAGES_ENV
 
 __all__ = [
-    "TASK_PACKAGES_ENV",
-    "BACKENDS",
-    "import_packages",
-    "packages_to_import",
-    "registered",
+  "BACKENDS",
+  "TASK_PACKAGES_ENV",
+  "import_packages",
+  "packages_to_import",
+  "registered",
 ]
 
 
-def packages_to_import(explicit: List[str] | Tuple[str, ...] = ()) -> List[str]:
+def packages_to_import(explicit: list[str] | tuple[str, ...] = ()) -> list[str]:
   """Packages to import before asking, in the order they were given.
 
   ``--task-package`` first, then ``$RLMCP_TASK_PACKAGES``, deduplicated. The
@@ -64,7 +65,7 @@ def packages_to_import(explicit: List[str] | Tuple[str, ...] = ()) -> List[str]:
   return found
 
 
-def import_packages(names: List[str]) -> List[Dict[str, Any]]:
+def import_packages(names: list[str]) -> list[dict[str, Any]]:
   """Import each package, and report what happened to each one.
 
   A package that will not import is the single most common reason a task id is
@@ -74,11 +75,11 @@ def import_packages(names: List[str]) -> List[Dict[str, Any]]:
   """
   import importlib
 
-  report: List[Dict[str, Any]] = []
+  report: list[dict[str, Any]] = []
   for name in names:
     try:
       importlib.import_module(name)
-    except Exception as exc:                      # noqa: BLE001 - reported, not raised
+    except Exception as exc:
       report.append({"module": name, "imported": False, "error": f"{type(exc).__name__}: {exc}"})
     else:
       report.append({"module": name, "imported": True, "error": ""})
@@ -94,13 +95,13 @@ def import_packages(names: List[str]) -> List[Dict[str, Any]]:
 # and nothing above this line learns its name.
 
 
-def _mjlab_ids() -> List[str]:
+def _mjlab_ids() -> list[str]:
   from mjlab.tasks.registry import list_tasks
 
   return list(list_tasks())
 
 
-def _mjlab_describe(task: str) -> Dict[str, Any]:
+def _mjlab_describe(task: str) -> dict[str, Any]:
   """What the registry can say without constructing anything.
 
   Deliberately one field. The configs are already built -- mjlab registers
@@ -116,7 +117,7 @@ def _mjlab_describe(task: str) -> Dict[str, Any]:
   return {"experiment": str(getattr(entry.rl_cfg, "experiment_name", "") or "")}
 
 
-def _isaaclab_ids() -> List[str]:
+def _isaaclab_ids() -> list[str]:
   """IsaacLab registers into gymnasium, and only once its app is running.
 
   Listing them means having started the simulation app, which a listing must
@@ -130,14 +131,14 @@ def _isaaclab_ids() -> List[str]:
                 if spec.startswith(("Isaac-", "Isaaclab-")))
 
 
-def _isaaclab_describe(task: str) -> Dict[str, Any]:
+def _isaaclab_describe(task: str) -> dict[str, Any]:
   """IsaacLab keeps the log directory in its agent config, not in the registry,
   and reading that means loading the config -- so the honest answer is that
   this backend does not say."""
   return {"experiment": ""}
 
 
-BACKENDS: Tuple[Dict[str, Any], ...] = (
+BACKENDS: tuple[dict[str, Any], ...] = (
     {"backend": "mjlab", "ids": _mjlab_ids, "describe": _mjlab_describe, "note": ""},
     {"backend": "isaaclab", "ids": _isaaclab_ids, "describe": _isaaclab_describe,
      "note": "IsaacLab tasks register into gymnasium when its app starts, and a "
@@ -146,17 +147,17 @@ BACKENDS: Tuple[Dict[str, Any], ...] = (
 )
 
 
-def _ids_or_reason(lister: Callable[[], List[str]]) -> Tuple[List[str], str]:
+def _ids_or_reason(lister: Callable[[], list[str]]) -> tuple[list[str], str]:
   try:
     return list(lister()), ""
   except ImportError as exc:
     return [], f"not installed here ({exc})"
-  except Exception as exc:                        # noqa: BLE001 - reported, not raised
+  except Exception as exc:
     return [], f"{type(exc).__name__}: {exc}"
 
 
-def registered(packages: List[str] | Tuple[str, ...] = (),
-               contains: str = "") -> Dict[str, Any]:
+def registered(packages: list[str] | tuple[str, ...] = (),
+               contains: str = "") -> dict[str, Any]:
   """Every task id this environment can drive, and where each one came from.
 
   ``packages`` are imported first, in order, and each task is attributed to the
@@ -169,8 +170,8 @@ def registered(packages: List[str] | Tuple[str, ...] = (),
 
   # Snapshot per backend before importing anything, so what is already there is
   # attributable to the backend rather than to us.
-  owner: Dict[Tuple[str, str], str] = {}
-  seen: Dict[str, set] = {}
+  owner: dict[tuple[str, str], str] = {}
+  seen: dict[str, set] = {}
   for spec in BACKENDS:
     ids, _reason = _ids_or_reason(spec["ids"])
     seen[spec["backend"]] = set(ids)
@@ -187,8 +188,8 @@ def registered(packages: List[str] | Tuple[str, ...] = (),
         owner[(name, task)] = entry["module"]
       seen[name] |= fresh
 
-  rows: List[Dict[str, Any]] = []
-  backends: List[Dict[str, Any]] = []
+  rows: list[dict[str, Any]] = []
+  backends: list[dict[str, Any]] = []
   needle = contains.lower()
   for spec in BACKENDS:
     name = spec["backend"]
@@ -206,7 +207,7 @@ def registered(packages: List[str] | Tuple[str, ...] = (),
       row = {"task": task, "backend": name, "package": owner.get((name, task), "")}
       try:
         row.update(spec["describe"](task))
-      except Exception as exc:                    # noqa: BLE001 - one bad entry is not the list
+      except Exception as exc:
         row["error"] = f"{type(exc).__name__}: {exc}"
       rows.append(row)
 

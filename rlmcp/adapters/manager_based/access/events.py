@@ -8,7 +8,8 @@ which the longest-prefix term lookup handles without special casing.
 
 from __future__ import annotations
 
-from typing import Any, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from rlmcp.adapters.manager_based.access import paths
 from rlmcp.adapters.manager_based.access.base import AccessProvider, Term
@@ -23,9 +24,9 @@ class EventAccess(AccessProvider):
   # How the interval clock is measured, not how strong the randomization is.
   skip_keys = paths.SKIP_KEYS | {"is_global_time"}
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     manager = self.manager
-    out: List[Term] = []
+    out: list[Term] = []
     for mode, names in (getattr(manager, "active_terms", {}) or {}).items():
       mode_name = getattr(mode, "value", str(mode))
       for name in names:

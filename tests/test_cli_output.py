@@ -19,7 +19,6 @@ import pytest
 from rlmcp import cli, cli_output
 from rlmcp.session import Response, Session
 
-
 # Mode resolution: a pipe is an agent, a terminal is a person.
 
 

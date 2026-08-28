@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, List, Tuple
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,7 +13,6 @@ from rlmcp.cli import main as cli_main
 from rlmcp.core.telemetry import plotter
 from rlmcp.core.telemetry.buffer import TelemetryBuffer
 from rlmcp.core.telemetry.trace import TraceRecorder, load_npz
-
 
 # TelemetryBuffer: rows are maintained, not rebuilt.
 
@@ -84,7 +83,7 @@ def test_out_of_order_iterations_keep_rows_sorted():
 
 
 def test_non_floatable_values_are_reported_once_per_key():
-  drops: List[Tuple[str, Any]] = []
+  drops: list[tuple[str, Any]] = []
   buf = TelemetryBuffer(maxlen=10, on_drop=lambda k, v: drops.append((k, v)))
 
   buf.push(1, {"good": 1.0, "bad": "verbal note"})
@@ -178,7 +177,7 @@ def test_legacy_pickled_trace_is_refused_by_default(tmp_path):
       path,
       joint_pos=np.zeros((4, 2), dtype=np.float32),
       time=np.arange(4, dtype=np.float32) * 0.02,
-      **{"__labels__joint_pos": np.array(["hip", "knee"], dtype=object)},
+      __labels__joint_pos=np.array(["hip", "knee"], dtype=object),
       __meta__=np.array(["iteration=7", "where=stairs"], dtype=object),
   )
 
@@ -199,7 +198,7 @@ def _legacy_trace(tmp_path) -> Any:
       path,
       joint_pos=np.zeros((16, 2), dtype=np.float32),
       time=np.arange(16, dtype=np.float32) * 0.02,
-      **{"__labels__joint_pos": np.array(["hip", "knee"], dtype=object)},
+      __labels__joint_pos=np.array(["hip", "knee"], dtype=object),
       __meta__=np.array(["iteration=7"], dtype=object),
   )
   return path

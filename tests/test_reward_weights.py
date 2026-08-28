@@ -8,7 +8,7 @@ new guess replaces it.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -19,7 +19,7 @@ from rlmcp.core.parameters.registry import ParameterRegistry
 @dataclasses.dataclass
 class _RewardCfg:
   weight: float
-  func: Optional[Any] = None
+  func: Any | None = None
 
 
 class _RewardManager:

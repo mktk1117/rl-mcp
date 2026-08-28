@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -26,9 +26,8 @@ pytest.importorskip("mcp", reason="the MCP server needs the optional 'mcp' packa
 
 from rlmcp.server.mcp_server import create_mcp_server
 
-
 # Arguments that make a tool well-formed. Anything absent takes none.
-_ARGS: Dict[str, Dict[str, Any]] = {
+_ARGS: dict[str, dict[str, Any]] = {
     "switch_session": {"session_dir": "/nonexistent/session"},
     "get_metrics": {"names": ["Train/mean_reward"]},
     "plot_metrics": {"names": ["Train/mean_reward"]},
@@ -70,7 +69,7 @@ def server(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def tool_names(server) -> List[str]:
+def tool_names(server) -> list[str]:
   return sorted(t.name for t in asyncio.run(server.list_tools()))
 
 
@@ -131,11 +130,11 @@ def _rot_in(exc: BaseException) -> BaseException | None:
 
 def test_every_registered_tool_is_callable(server, tool_names):
   """Walk the whole registry: each tool resolves and answers."""
-  broken: List[str] = []
+  broken: list[str] = []
   for name in tool_names:
     try:
       _call(server, name)
-    except Exception as exc:  # noqa: BLE001 -- the point is to classify it
+    except Exception as exc:
       rot = _rot_in(exc)
       if rot is not None:
         broken.append(f"{name}: {rot!r}")
