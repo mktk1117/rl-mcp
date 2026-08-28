@@ -55,20 +55,31 @@ def observing_camera(env: Any) -> Optional[Any]:
 
 
 def rendered_envs(env: Any) -> Optional[Sequence[int]]:
-  """Which environments the renderer draws, when the scene will say.
+  """Which environments the renderer actually draws.
 
-  Genesis defaults this to ``[0]``, and it is fixed before the build like the
-  camera is. A run that means to look at env 7 has to have said so at
-  construction, and being told that up front beats being handed a picture of
-  env 0 with env 7 written under it. ``None`` means the scene did not say,
-  which is not the same as "every env" and is reported as not knowing.
+  Asked of the visualizer's *context*, because that is what the renderer reads
+  (``ctx.rendered_envs_idx``, in Genesis's own rasterizer and pyrender paths).
+  ``VisOptions.rendered_envs_idx`` is only the value that was requested at
+  construction: it defaults to ``None`` meaning "all of them", and a script
+  that sets the context directly leaves the two disagreeing.
+
+  Reading the options instead of the context is not a harmless approximation.
+  It produced a *false refusal* on a real run -- `shot --env-id 2` was turned
+  away with "this scene draws [0]" while the renderer was cheerfully drawing
+  four environments -- which is the same class of mistake as answering with the
+  wrong env, just in the other direction.
+
+  ``None`` means nothing restricts the choice, so no environment is refused.
   """
   scene = getattr(env, "scene", None)
-  for holder in (scene, getattr(scene, "vis_options", None)):
-    options = getattr(holder, "vis_options", holder)
-    found = getattr(options, "rendered_envs_idx", None)
+  visualizer = getattr(scene, "visualizer", None) or getattr(
+      scene, "_visualizer", None)
+  context = getattr(visualizer, "context", None) or getattr(
+      visualizer, "_context", None)
+  for holder in (context, getattr(scene, "vis_options", None)):
+    found = getattr(holder, "rendered_envs_idx", None)
     if found is not None:
-      return list(found)
+      return [int(i) for i in found]
   return None
 
 
@@ -93,9 +104,14 @@ def render(env: Any, env_id: int = 0, follow: bool = True) -> np.ndarray:
 
   The camera is moved onto the robot in the environment asked for and put back
   afterwards, so a screenshot does not quietly re-aim a camera the training
-  script set up deliberately. Parallel environments sit at spaced world
-  origins, so "point at env 7" is an ordinary pose change here rather than the
-  anchor negotiation IsaacLab needs.
+  script set up deliberately.
+
+  Whether that isolates one robot depends on the task. Genesis's own Go2Env
+  builds every parallel environment at the same ``base_init_pos``, so the
+  copies are superimposed and aiming at env 7 frames the same pile as aiming
+  at env 0 -- the way to look at one robot there is to have the renderer draw
+  one, with ``rendered_envs_idx``. A task that spaces its environments apart
+  gets what the argument promises.
   """
   refusal = can_render(env, env_id)
   if refusal:

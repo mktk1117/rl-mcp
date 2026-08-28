@@ -247,3 +247,24 @@ def test_action_rate_is_reported_when_the_env_does_keep_the_previous_action(
   genesis_env.last_actions = torch.full_like(genesis_env.actions, 0.1)
   metrics = GenesisSimAdapter(genesis_env).summary_metrics()
   assert metrics["rlmcp/action_rate_rms"] == pytest.approx(0.3)
+
+
+def test_the_drawn_env_list_comes_from_what_the_renderer_reads(genesis_env):
+  """VisOptions holds what was asked for; the context holds what is drawn.
+
+  On a real run those disagreed -- the options said [0] while the renderer was
+  drawing four -- and `shot --env-id 2` was refused for an environment that
+  was on screen. A false refusal is the same class of mistake as answering
+  with the wrong env, in the other direction.
+  """
+  genesis_env.scene = FakeScene(cameras=[FakeCamera(debug=True)],
+                                rendered_envs_idx=[0, 1, 2, 3],
+                                options_say=[0])
+  assert GenesisSimAdapter(genesis_env).render(env_id=2).ndim == 3
+
+
+def test_no_restriction_recorded_means_no_env_is_refused(genesis_env):
+  """rendered_envs_idx defaults to None, which means all of them."""
+  genesis_env.scene = FakeScene(cameras=[FakeCamera(debug=True)],
+                                rendered_envs_idx=None)
+  assert GenesisSimAdapter(genesis_env).render(env_id=3).ndim == 3

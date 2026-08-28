@@ -1,10 +1,10 @@
 # Driving a Genesis run
 
-> **Status: in progress on `genesis-backend`.** The design below is pinned
-> against Genesis source read on 2026-08-27: `examples/locomotion/go2_env.py`
-> for the environment shape, `genesis/engine/scene.py` and
-> `genesis/vis/visualizer.py` for the camera and viewer constraints. Nothing
-> here ships until the tests named at the bottom pass.
+> **Status: verified on a real run.** genesis-world 1.3.3, Genesis's own
+> `examples/locomotion/go2_env.py` trained on an RTX 3090 with rlmcp wrapped
+> around it, every command driven from another shell. Four bugs came out of
+> that run that no test against a fake could have found; they are fixed and
+> each has a regression. See *What the real run changed*, below.
 
 rlmcp watches and steers Genesis the same way it does mjlab and IsaacLab: one
 line in the training script, then a live run you can query, tune and record
@@ -108,8 +108,8 @@ camera joins the robot's sensor set, and a camera that changes what the policy
 sees is not an observation of the run.
 
 **Watching one environment among thousands** needs `rendered_envs_idx` too. It
-defaults to `[0]`, and it is also fixed before the build, so a run that intends
-to look at env 7 has to say so at construction:
+defaults to `None`, meaning all of them, and it is fixed before the build, so a
+run that means to draw a particular set has to say so at construction:
 
 ```python
 vis_options=gs.options.VisOptions(rendered_envs_idx=[0, 7])
@@ -117,10 +117,17 @@ vis_options=gs.options.VisOptions(rendered_envs_idx=[0, 7])
 
 The startup check reports both — whether there is a camera, and which
 environments it can be pointed at — because a `shot --env-id 7` that silently
-answers with env 0 is a picture that looks like an answer and is not one.
-Per-env framing itself is easier here than on IsaacLab: cameras have
-`follow_entity()` and parallel envs sit at spaced world origins, so it is a
-pose change rather than a fight with a viewport controller.
+answers with env 0 is a picture that looks like an answer and is not one. That
+list is read from the visualizer's **context**, not from `VisOptions`: the
+options hold what was asked for, the context holds what is drawn, and on a real
+run they disagreed.
+
+**One caveat on `--env-id`, and it is the task's, not rlmcp's.** Go2Env builds
+every parallel environment at the same `base_init_pos`, so the copies are
+superimposed — a frame shows a pile of robots and aiming at env 7 frames the
+same pile as aiming at env 0. To look at one robot on a task like that, have
+the renderer draw one. A task that spaces its environments apart gets what
+`--env-id` promises.
 
 Everything else — parameters, metrics, traces, curricula, records — works
 without any of this.
@@ -137,6 +144,36 @@ without any of this.
 | `episode_length_s` | baked into `max_episode_length` at init | refused |
 | a reward term that was not in `reward_scales` at init | never bound in `reward_functions` | cannot be added |
 | the PPO knobs, checkpoints, `stop` | the rsl_rl runner, through `attach_runner` | live |
+
+## What the real run changed
+
+Four things were wrong, and every one of them passed against a fake:
+
+* **`reset-envs` failed outright.** rsl_rl collects rollouts inside
+  `torch.inference_mode()`, which makes the environment's buffers *inference
+  tensors*; Genesis's reset writes them in place, and torch refuses that from
+  outside inference mode — which is exactly where rlmcp services commands. The
+  reset now runs inside inference mode.
+* **`rlmcp/action_rate_rms` was always exactly 0.** Go2Env ends `step()` with
+  `last_actions.copy_(actions)`, so at the iteration boundary the two buffers
+  are identical. That is not "the policy is smooth", it is "the question cannot
+  be asked here" — and it read as a perfectly smooth policy on a robot that was
+  visibly buzzing. The metric is omitted when the environment has already
+  synced them; per-step action rate is still measured by `trace` and `diagnose`.
+* **`shot --env-id 2` was falsely refused** for an environment the renderer was
+  drawing, because the check read `VisOptions` instead of the visualizer
+  context. See above.
+* **`diagnose` gave advice in mjlab's vocabulary**, telling the operator to
+  "raise `action_rate_l2` or lower `action.joint_pos.scale_gain`" — keys that do
+  not exist on Genesis, where they are `reward.action_rate.weight` and
+  `action.scale`. The advice now names the lever rather than one backend's key.
+
+What did hold up: 30 parameters discovered from the stock Go2 config with
+nothing described to rlmcp; reward weights reading back as the numbers the
+config was written with rather than their `dt`-scaled values; and a write to
+`command.lin_vel_x` moving the measured `commanded_speed_mean` from 0.5 to
+1.18, which is the `commands_limits` write-through doing exactly what it was
+built for.
 
 ## Known differences from mjlab
 

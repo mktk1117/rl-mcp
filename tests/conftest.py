@@ -476,10 +476,21 @@ class FakeVisualizer:
 
 
 class FakeScene:
-  def __init__(self, cameras=(), rendered_envs_idx=None):
+  """Genesis keeps the drawn-env list in two places that can disagree.
+
+  ``vis_options`` is what the script asked for; the visualizer's ``context`` is
+  what the renderer reads. ``options_say`` lets a test set them apart, which is
+  how a real run turned `shot --env-id 2` away from an env it was drawing.
+  """
+
+  def __init__(self, cameras=(), rendered_envs_idx=None, options_say=None):
     self.visualizer = FakeVisualizer(cameras)
+    self.visualizer.context = type(
+        "Context", (), {"rendered_envs_idx": rendered_envs_idx})()
     self.vis_options = type(
-        "VisOptions", (), {"rendered_envs_idx": rendered_envs_idx})()
+        "VisOptions", (),
+        {"rendered_envs_idx": options_say if options_say is not None
+         else rendered_envs_idx})()
 
 
 @pytest.fixture
