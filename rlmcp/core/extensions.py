@@ -35,8 +35,9 @@ is visible without taking the run down.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only.
   from rlmcp.core.telemetry.buffer import TelemetryBuffer
@@ -66,10 +67,10 @@ class ExtensionContext:
   """
 
   write_artifact: Callable[..., Any]
-  telemetry: "TelemetryBuffer"
-  append_event: Callable[[str, Dict[str, Any]], None]
-  submit_job: Callable[[Any], Dict[str, Any]]
-  pending_jobs: Callable[[], List[Dict[str, Any]]]
+  telemetry: TelemetryBuffer
+  append_event: Callable[[str, dict[str, Any]], None]
+  submit_job: Callable[[Any], dict[str, Any]]
+  pending_jobs: Callable[[], list[dict[str, Any]]]
 
 
 class Extension:
@@ -83,7 +84,7 @@ class Extension:
 
   def __init__(self, env: Any):
     self.env = env
-    self.context: Optional[ExtensionContext] = None
+    self.context: ExtensionContext | None = None
 
   def available(self) -> bool:
     """Whether this environment supports the capability at all."""
@@ -99,17 +100,17 @@ class Extension:
     """
     self.context = context
 
-  def on_iteration(self, iteration: int, metrics: Dict[str, float]) -> None:
+  def on_iteration(self, iteration: int, metrics: dict[str, float]) -> None:
     """Called once per learning iteration with the merged metrics."""
-    return None
+    return
 
   def close(self) -> None:
     """Called once when the run shuts down; release what you hold."""
-    return None
+    return
 
   # Hooks.
 
-  def commands(self) -> Dict[str, Callable[..., Any]]:
+  def commands(self) -> dict[str, Callable[..., Any]]:
     """``{command_name: handler}``, merged into the controller's dispatch table.
 
     Handler docstrings become the tool descriptions an agent reads, so write
@@ -119,11 +120,11 @@ class Extension:
     """
     return {}
 
-  def metrics(self) -> Dict[str, float]:
+  def metrics(self) -> dict[str, float]:
     """Extra scalars for this iteration, conventionally prefixed ``rlmcp/``."""
     return {}
 
-  def select_envs(self, **criteria: Any) -> Optional[List[int]]:
+  def select_envs(self, **criteria: Any) -> list[int] | None:
     """Environment indices matching ``criteria``, or None if not understood.
 
     Returning None means "this is not my vocabulary" and lets another extension
@@ -131,7 +132,7 @@ class Extension:
     """
     return None
 
-  def selectors(self) -> Dict[str, Dict[str, Any]]:
+  def selectors(self) -> dict[str, dict[str, Any]]:
     """The ``where`` vocabulary this extension understands, and today's values.
 
     :meth:`select_envs` *accepts* criteria; this says which criteria exist and
@@ -150,17 +151,17 @@ class Extension:
     """
     return {}
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     """Short summary for the status payload."""
     return {}
 
-  def snapshot(self) -> Dict[str, Any]:
+  def snapshot(self) -> dict[str, Any]:
     """State to persist with a checkpoint."""
     return {}
 
-  def restore(self, state: Dict[str, Any]) -> None:
+  def restore(self, state: dict[str, Any]) -> None:
     """Restore what :meth:`snapshot` saved."""
-    return None
+    return
 
 
 class ExtensionRegistry:
@@ -173,10 +174,10 @@ class ExtensionRegistry:
   is skipped rather than allowed to take the run down.
   """
 
-  def __init__(self, extensions: Optional[List[Extension]] = None):
-    self._extensions: List[Extension] = []
-    self._error_sink: Optional[Callable[[str, str, str], None]] = None
-    self._reported: Set[Tuple[str, str]] = set()
+  def __init__(self, extensions: list[Extension] | None = None):
+    self._extensions: list[Extension] = []
+    self._error_sink: Callable[[str, str, str], None] | None = None
+    self._reported: set[tuple[str, str]] = set()
     for extension in extensions or []:
       self.add(extension)
 
@@ -193,9 +194,10 @@ class ExtensionRegistry:
     if self._error_sink is not None:
       try:
         self._error_sink(extension_name, hook, message)
-        return
       except Exception:
         pass  # A broken sink must not mask the original failure.
+      else:
+        return
     warnings.warn(
         f"rlmcp extension '{extension_name}' failed in {hook}: {message}",
         RuntimeWarning,
@@ -212,7 +214,7 @@ class ExtensionRegistry:
     self._extensions.append(extension)
     return True
 
-  def names(self) -> List[str]:
+  def names(self) -> list[str]:
     return [e.name for e in self._extensions]
 
   def __iter__(self):
@@ -234,7 +236,7 @@ class ExtensionRegistry:
     for extension in self._extensions:
       self.bind(extension, context)
 
-  def on_iteration(self, iteration: int, metrics: Dict[str, float]) -> None:
+  def on_iteration(self, iteration: int, metrics: dict[str, float]) -> None:
     for extension in self._extensions:
       try:
         extension.on_iteration(iteration, metrics)
@@ -250,15 +252,15 @@ class ExtensionRegistry:
 
   # Aggregated hooks.
 
-  def commands(self) -> Dict[str, Callable[..., Any]]:
+  def commands(self) -> dict[str, Callable[..., Any]]:
     """Every extension's commands, first registration wins on a name clash.
 
     A clash is reported (once) naming both extensions, so a shadowed command
     is a logged fact rather than a silent surprise. The same first-wins rule
     governs :meth:`~rlmcp.core.controller.RlMcp.add_extension`.
     """
-    out: Dict[str, Callable[..., Any]] = {}
-    owners: Dict[str, str] = {}
+    out: dict[str, Callable[..., Any]] = {}
+    owners: dict[str, str] = {}
     for extension in self._extensions:
       try:
         contributed = extension.commands()
@@ -279,8 +281,8 @@ class ExtensionRegistry:
         owners[name] = extension.name
     return out
 
-  def metrics(self) -> Dict[str, float]:
-    out: Dict[str, float] = {}
+  def metrics(self) -> dict[str, float]:
+    out: dict[str, float] = {}
     for extension in self._extensions:
       try:
         out.update(extension.metrics())
@@ -289,7 +291,7 @@ class ExtensionRegistry:
         continue
     return out
 
-  def select_envs(self, **criteria: Any) -> Optional[List[int]]:
+  def select_envs(self, **criteria: Any) -> list[int] | None:
     """Ask each extension in turn; the first that understands wins."""
     for extension in self._extensions:
       try:
@@ -300,7 +302,7 @@ class ExtensionRegistry:
         return result
     return None
 
-  def selectors(self) -> Dict[str, Dict[str, Any]]:
+  def selectors(self) -> dict[str, dict[str, Any]]:
     """Every advertised criterion, keyed as ``select_envs`` takes them.
 
     First registration wins a key, which is the same rule :meth:`select_envs`
@@ -309,7 +311,7 @@ class ExtensionRegistry:
     caller can report where a criterion came from rather than treating the
     whole vocabulary as anonymous.
     """
-    out: Dict[str, Dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     for extension in self._extensions:
       try:
         published = extension.selectors() or {}
@@ -322,8 +324,8 @@ class ExtensionRegistry:
         out[key] = {**spec, "extension": extension.name}
     return out
 
-  def describe(self) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+  def describe(self) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for extension in self._extensions:
       try:
         summary = extension.describe()
@@ -334,8 +336,8 @@ class ExtensionRegistry:
         out[extension.name] = summary
     return out
 
-  def snapshot(self) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+  def snapshot(self) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for extension in self._extensions:
       try:
         state = extension.snapshot()
@@ -346,7 +348,7 @@ class ExtensionRegistry:
         out[extension.name] = state
     return out
 
-  def restore(self, state: Dict[str, Any]) -> Dict[str, bool]:
+  def restore(self, state: dict[str, Any]) -> dict[str, bool]:
     """Restore each extension's payload; return per-extension success.
 
     The returned dict has an entry per registered extension that *had* a
@@ -354,7 +356,7 @@ class ExtensionRegistry:
     (reported once, run continues). ``cmd_load_checkpoint`` counts the Trues,
     so a checkpoint whose state failed to apply is never reported as restored.
     """
-    results: Dict[str, bool] = {}
+    results: dict[str, bool] = {}
     for extension in self._extensions:
       payload = (state or {}).get(extension.name)
       if not payload:

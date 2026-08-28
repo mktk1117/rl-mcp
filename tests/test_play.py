@@ -16,7 +16,7 @@ import json
 import sys
 import types
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, ClassVar
 
 import pytest
 
@@ -693,8 +693,8 @@ def test_the_session_lists_what_else_could_be_loaded(play_lab, tmp_path):
 def test_a_requested_stop_is_reported_as_a_result_not_as_an_exception(play_lab):
   """`rlmcp stop` against a play session has to end like closing the window:
   the loop unwinds, and what comes back describes the stop."""
-  from rlmcp.play import _stop_state
   from rlmcp.core.controller import SessionStopped
+  from rlmcp.play import _stop_state
 
   assert _stop_state(play_lab) == ""
 
@@ -854,7 +854,7 @@ def test_the_policy_choice_round_trips_through_the_command_line():
 class _RecordingViewer:
   """A stand-in for mjlab's viewer that remembers how it was built."""
 
-  seen: Dict[str, Any] = {}
+  seen: ClassVar[dict[str, Any]] = {}
 
   def __init__(self, vec_env, policy, **kwargs):
     _RecordingViewer.seen = dict(kwargs)

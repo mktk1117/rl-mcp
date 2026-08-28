@@ -12,7 +12,6 @@ from __future__ import annotations
 import ast
 import importlib
 from pathlib import Path
-from typing import List, Tuple
 
 import pytest
 
@@ -21,17 +20,17 @@ EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "train_g1_rough_
 _HEAVY = ("torch", "mjlab")
 
 
-def rlmcp_imports(path: Path) -> List[Tuple[str, List[str]]]:
+def rlmcp_imports(path: Path) -> list[tuple[str, list[str]]]:
   """Every rlmcp import in ``path``, as ``(module, imported names)`` pairs."""
-  out: List[Tuple[str, List[str]]] = []
+  out: list[tuple[str, list[str]]] = []
   for node in ast.walk(ast.parse(path.read_text())):
     if isinstance(node, ast.Import):
       for alias in node.names:
         if alias.name == "rlmcp" or alias.name.startswith("rlmcp."):
           out.append((alias.name, []))
-    elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-      if node.module == "rlmcp" or node.module.startswith("rlmcp."):
-        out.append((node.module, [alias.name for alias in node.names]))
+    elif (isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+          and (node.module == "rlmcp" or node.module.startswith("rlmcp."))):
+      out.append((node.module, [alias.name for alias in node.names]))
   return out
 
 
@@ -55,7 +54,7 @@ def test_the_example_still_imports_rlmcp():
 
 
 @pytest.mark.parametrize("module, names", IMPORTS, ids=[m for m, _ in IMPORTS])
-def test_example_rlmcp_imports_resolve(module: str, names: List[str]):
+def test_example_rlmcp_imports_resolve(module: str, names: list[str]):
   """Each ``import rlmcp...`` line in the example names things that exist."""
   mod = _import(module)
   for name in names:

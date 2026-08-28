@@ -27,7 +27,7 @@ reads as "constantly", which is the opposite of what it does.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 DEFAULT_FIRST = 50
 """The first clip after the untrained baseline; every gap after it doubles."""
@@ -54,7 +54,7 @@ class CadenceError(ValueError):
   """
 
 
-def _flat(every: int) -> Optional["Cadence"]:
+def _flat(every: int) -> Cadence | None:
   """A flat interval, or None for zero. A negative one is a typo, not "off":
   reading it as "no clips" would be the silent reinterpretation this parser
   exists to prevent."""
@@ -71,14 +71,14 @@ class Cadence:
   """
 
   def __init__(self, first: int = DEFAULT_FIRST,
-               max_every: Optional[int] = DEFAULT_MAX_EVERY):
+               max_every: int | None = DEFAULT_MAX_EVERY):
     if int(first) <= 0:
       raise CadenceError(f"A clip cadence needs a positive gap, not {first}.")
     self.first = int(first)
     self.max_every = None if not max_every else max(int(max_every), self.first)
 
   @staticmethod
-  def parse(spec: Any) -> Optional["Cadence"]:
+  def parse(spec: Any) -> Cadence | None:
     """Read a cadence from ``"double[:first[:cap]]"``, a number, or None.
 
     ``None`` in means the default; ``None`` out means "no clips"
@@ -155,7 +155,7 @@ class ProgressVideoSchedule:
 
   def __init__(self, every: Any = None, seconds: float = 4.0, env_id: int = 0,
                budget_mb: float = DEFAULT_BUDGET_MB):
-    self.cadence: Optional[Cadence] = Cadence.parse(every)
+    self.cadence: Cadence | None = Cadence.parse(every)
     self.seconds = float(seconds)
     self.env_id = int(env_id)
     self.budget_mb = max(0.0, float(budget_mb))
@@ -164,14 +164,14 @@ class ProgressVideoSchedule:
     self.count = 0
     self.skipped = 0
     self.bytes = 0
-    self.last_iteration: Optional[int] = None
+    self.last_iteration: int | None = None
     self.last_path = ""
     self.last_error = ""
     self.stopped_because = ""
     self.seen_iteration = 0
 
-  def configure(self, every: Any = None, seconds: Optional[float] = None,
-                env_id: Optional[int] = None, budget_mb: Optional[float] = None,
+  def configure(self, every: Any = None, seconds: float | None = None,
+                env_id: int | None = None, budget_mb: float | None = None,
                 iteration: int = 0) -> None:
     """Change the schedule mid-run. A new cadence takes effect here, not after
     the current gap expires: somebody asking for every 50 means starting now."""
@@ -230,7 +230,7 @@ class ProgressVideoSchedule:
     self.last_iteration = int(iteration)
     self.last_error = str(error)
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     """The status-payload view: what is scheduled and how it is going."""
     return {
         "enabled": self.active,

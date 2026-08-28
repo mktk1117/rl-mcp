@@ -13,6 +13,7 @@ that never takes a screenshot pays nothing.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import numpy as np
@@ -111,9 +112,7 @@ def release(env: Any) -> bool:
   renderer = getattr(env, _ATTR, None)
   if renderer is None:
     return False
-  try:
+  with contextlib.suppress(Exception):
     renderer.close()
-  except Exception:
-    pass
   setattr(env, _ATTR, None)
   return True

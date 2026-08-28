@@ -15,11 +15,13 @@ built-ins do ("watch the robot for N steps and report").
 
 from __future__ import annotations
 
+import contextlib
 import time
 import traceback
 import uuid
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -28,18 +30,18 @@ from rlmcp.core import diagnostics as diag
 from rlmcp.core.curriculum import StageSchedule
 from rlmcp.core.extensions import Extension, ExtensionContext, ExtensionRegistry
 from rlmcp.core.live_view import (
-    DEFAULT_BUFFER_SECONDS,
-    DEFAULT_FPS,
-    DEFAULT_HOST,
-    DEFAULT_PORT,
-    LiveView,
+  DEFAULT_BUFFER_SECONDS,
+  DEFAULT_FPS,
+  DEFAULT_HOST,
+  DEFAULT_PORT,
+  LiveView,
 )
 from rlmcp.core.parameters.registry import ParameterRegistry
 from rlmcp.core.progress_video import DEFAULT_BUDGET_MB, ProgressVideoSchedule
-from rlmcp.records.clips import PROGRESS_STEM
-from rlmcp.core.telemetry.buffer import TelemetryBuffer
 from rlmcp.core.telemetry import plotter
+from rlmcp.core.telemetry.buffer import TelemetryBuffer
 from rlmcp.core.telemetry.trace import TraceRecorder
+from rlmcp.records.clips import PROGRESS_STEM
 from rlmcp.session import Request, Response, Session
 
 _MAX_VIDEO_SECONDS = 20.0
@@ -117,8 +119,8 @@ class DeferredJob:
     self.steps_remaining = max(1, int(steps_needed))
     self.timeout_s = float(timeout_s)
     self.started_at = time.time()
-    self.error: Optional[str] = None
-    self.cancelled: Optional[str] = None
+    self.error: str | None = None
+    self.cancelled: str | None = None
     # True for jobs submitted through the ExtensionContext with no request
     # waiting: their outcome goes to the session event log, not the outbox.
     self.session_event_only = False
@@ -140,7 +142,7 @@ class DeferredJob:
     """Mark cancelled; the controller answers the requester and drops the job."""
     self.cancelled = reason
 
-  def feed(self, lab: "RlMcp") -> None:
+  def feed(self, lab: RlMcp) -> None:
     """Collect one step's worth of data; called once per environment step.
 
     Implementations pull what they need from ``lab`` -- ``lab.sim.render`` for
@@ -150,11 +152,11 @@ class DeferredJob:
     """
     raise NotImplementedError
 
-  def complete(self, lab: "RlMcp") -> Dict[str, Any]:
+  def complete(self, lab: RlMcp) -> dict[str, Any]:
     """Produce the response payload; called once at a service boundary."""
     raise NotImplementedError
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     """Status-payload description of this in-flight job."""
     return {
         "req_id": self.req_id,
@@ -177,9 +179,9 @@ class _VideoJob(DeferredJob):
       steps_needed: int,
       fps: int,
       seconds: float,
-      where: Optional[Dict[str, Any]],
+      where: dict[str, Any] | None,
       stem: str = "clip",
-      label_iteration: Optional[int] = None,
+      label_iteration: int | None = None,
   ):
     super().__init__(env_id=env_id, steps_needed=steps_needed)
     self.fps = int(fps)
@@ -191,13 +193,13 @@ class _VideoJob(DeferredJob):
     # after the iteration it was asked for is what makes a directory of them
     # sort into the order they were taken.
     self.label_iteration = label_iteration
-    self.frames: List[np.ndarray] = []
+    self.frames: list[np.ndarray] = []
 
-  def feed(self, lab: "RlMcp") -> None:
+  def feed(self, lab: RlMcp) -> None:
     self.frames.append(lab.sim.render(self.env_id))
     self.steps_remaining -= 1
 
-  def complete(self, lab: "RlMcp") -> Dict[str, Any]:
+  def complete(self, lab: RlMcp) -> dict[str, Any]:
     if self.error and not self.frames:
       raise RuntimeError(self.error)
     if not self.frames:
@@ -258,7 +260,7 @@ class _ProgressVideoJob(_VideoJob):
     )
     self.iteration = int(iteration)
 
-  def complete(self, lab: "RlMcp") -> Dict[str, Any]:
+  def complete(self, lab: RlMcp) -> dict[str, Any]:
     try:
       result = super().complete(lab)
     except Exception as exc:
@@ -310,7 +312,7 @@ class _TraceJob(DeferredJob):
       steps_needed: int,
       recorder: TraceRecorder,
       plot: bool,
-      where: Optional[Dict[str, Any]],
+      where: dict[str, Any] | None,
       seconds: float,
   ):
     super().__init__(env_id=env_id, steps_needed=steps_needed)
@@ -320,7 +322,7 @@ class _TraceJob(DeferredJob):
     self.where = where
     self.seconds = float(seconds)
 
-  def feed(self, lab: "RlMcp") -> None:
+  def feed(self, lab: RlMcp) -> None:
     # Contract (rlmcp.adapters.base): sample_state with nothing to offer
     # RAISES NotSupported, which surfaces truthfully as this job's error. A
     # falsy-but-present sample means "nothing this step": skip the recording,
@@ -330,7 +332,7 @@ class _TraceJob(DeferredJob):
       self.recorder.record(sample)
     self.steps_remaining -= 1
 
-  def complete(self, lab: "RlMcp") -> Dict[str, Any]:
+  def complete(self, lab: RlMcp) -> dict[str, Any]:
     self.recorder.disarm()
     data = self.recorder.snapshot()
     if not data:
@@ -344,7 +346,7 @@ class _TraceJob(DeferredJob):
 
     npz_path = self.recorder.save_npz(
         lab._artifact(f"trace_env{self.env_id}", ".npz"))
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "trace_path": str(npz_path),
         "env_id": self.env_id,
         "where": self.where,
@@ -371,7 +373,7 @@ class _TraceJob(DeferredJob):
     )
     return result
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     out = super().describe()
     out["records"] = self.recorder.num_records
     return out
@@ -383,13 +385,13 @@ class RlMcp:
   def __init__(
       self,
       sim_adapter: SimAdapter,
-      runner_adapter: Optional[RunnerAdapter] = None,
+      runner_adapter: RunnerAdapter | None = None,
       session_dir: Path | str = "./rlmcp_session",
-      curriculum: Optional[StageSchedule] = None,
-      session_info: Optional[Dict[str, Any]] = None,
+      curriculum: StageSchedule | None = None,
+      session_info: dict[str, Any] | None = None,
       trace_capacity: int = 6000,
-      extensions: Optional[Sequence[Extension]] = None,
-      records: Optional[Any] = None,
+      extensions: Sequence[Extension] | None = None,
+      records: Any | None = None,
       video_every: Any = None,
       video_seconds: float = 4.0,
       video_env_id: int = 0,
@@ -426,9 +428,9 @@ class RlMcp:
 
     # Ceiling on steps per trace job; each job allocates its own recorder.
     self._trace_capacity = int(trace_capacity)
-    self.last_trace: Dict[str, np.ndarray] = {}
-    self.last_trace_labels: Dict[str, List[str]] = {}
-    self.last_trace_report: Dict[str, Any] = {}
+    self.last_trace: dict[str, np.ndarray] = {}
+    self.last_trace_labels: dict[str, list[str]] = {}
+    self.last_trace_report: dict[str, Any] = {}
 
     self.paused = False
     self.step_once_requested = False
@@ -454,10 +456,10 @@ class RlMcp:
     if self.live_view.running:
       self.session.append_event("live_view_started", self.live_view.describe())
 
-    self._jobs: List[DeferredJob] = []
-    self._falsifier_fired: Optional[int] = None
-    self._handlers: Dict[str, Callable[..., Any]] = {}
-    self._handler_owner: Dict[str, str] = {}
+    self._jobs: list[DeferredJob] = []
+    self._falsifier_fired: int | None = None
+    self._handlers: dict[str, Callable[..., Any]] = {}
+    self._handler_owner: dict[str, str] = {}
     # Extension hook failures become session events, once per (extension, hook).
     self.extensions.set_error_sink(self._on_extension_error)
     self._register_handlers()
@@ -605,8 +607,8 @@ class RlMcp:
 
   def service(
       self,
-      iteration: Optional[int] = None,
-      metrics: Optional[Dict[str, float]] = None,
+      iteration: int | None = None,
+      metrics: dict[str, float] | None = None,
   ) -> None:
     """Call once per learning iteration: run commands, publish state, honour pause."""
     if iteration is not None:
@@ -765,7 +767,7 @@ class RlMcp:
       )
     self._jobs.append(job)
 
-  def submit_job(self, job: DeferredJob) -> Dict[str, Any]:
+  def submit_job(self, job: DeferredJob) -> dict[str, Any]:
     """Schedule a deferred job with no request waiting on it.
 
     This is the :class:`~rlmcp.core.extensions.ExtensionContext` surface for
@@ -785,7 +787,7 @@ class RlMcp:
       job: DeferredJob,
       ok: bool,
       result: Any = None,
-      error: Optional[str] = None,
+      error: str | None = None,
   ) -> None:
     """Deliver a job's outcome: the request's response, or a session event."""
     if job.session_event_only:
@@ -799,7 +801,7 @@ class RlMcp:
         Response(req_id=job.req_id, ok=ok, result=result, error=error))
 
   @staticmethod
-  def _job_event_detail(job: DeferredJob) -> Dict[str, Any]:
+  def _job_event_detail(job: DeferredJob) -> dict[str, Any]:
     """A job description safe to splat into an event (``kind`` is the event's)."""
     detail = job.describe()
     detail["job_kind"] = detail.pop("kind", job.kind)
@@ -808,7 +810,7 @@ class RlMcp:
   def _finish_jobs(self) -> None:
     if not self._jobs:
       return
-    remaining: List[DeferredJob] = []
+    remaining: list[DeferredJob] = []
     for job in self._jobs:
       if not job.ready and job.timed_out:
         # Runs in the pause loop too, so a job starved of steps by a pause
@@ -892,8 +894,8 @@ class RlMcp:
     seconds = float(min(max(schedule.seconds, 0.2), _MAX_VIDEO_SECONDS))
     return _ProgressVideoJob(
         env_id=schedule.env_id,
-        steps_needed=max(1, int(round(seconds / dt))),
-        fps=int(round(1.0 / dt)),
+        steps_needed=max(1, round(seconds / dt)),
+        fps=round(1.0 / dt),
         seconds=seconds,
         iteration=iteration,
     )
@@ -910,7 +912,7 @@ class RlMcp:
   # Artifacts.
 
   def _artifact(self, stem: str, suffix: str,
-                iteration: Optional[int] = None) -> Path:
+                iteration: int | None = None) -> Path:
     """A session artifact path, stamped with the iteration it belongs to.
 
     ``iteration`` overrides the current one for an artifact that is *about* an
@@ -930,8 +932,8 @@ class RlMcp:
 
   def _resolve_env_id(
       self,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
   ) -> int:
     """Pick an environment: an explicit id, or the first one matching ``where``.
 
@@ -947,9 +949,9 @@ class RlMcp:
 
   def _resolve_env_ids(
       self,
-      env_ids: Optional[Sequence[int]] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Optional[List[int]]:
+      env_ids: Sequence[int] | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> list[int] | None:
     """Pick a set of environments: explicit ids, a ``where`` query, or all.
 
     The plural of :meth:`_resolve_env_id`, and it answers a different question:
@@ -1017,13 +1019,13 @@ class RlMcp:
         "feedback": self.cmd_feedback,
         "stop_training": self.cmd_stop_training,
     }
-    self._handler_owner = {name: "built-in" for name in self._handlers}
+    self._handler_owner = dict.fromkeys(self._handlers, "built-in")
     # Extensions contribute verbs on equal footing with the built-ins: reachable
     # from the CLI, from MCP, and from a curriculum stage's `apply` list.
     for extension in self.extensions:
       self._merge_extension_commands(extension)
 
-  def cmd_help(self) -> Dict[str, Any]:
+  def cmd_help(self) -> dict[str, Any]:
     """List every command with its one-line docstring."""
     return {
         "commands": {
@@ -1032,11 +1034,11 @@ class RlMcp:
         }
     }
 
-  def cmd_status(self) -> Dict[str, Any]:
+  def cmd_status(self) -> dict[str, Any]:
     """Current iteration, pause state, curriculum stage and headline metrics."""
     return self._status_payload()
 
-  def _status_payload(self) -> Dict[str, Any]:
+  def _status_payload(self) -> dict[str, Any]:
     latest = self.telemetry.get_latest_metrics()
     # Core keys plus every rlmcp/ metric, so an extension's metrics show up in
     # the headline without the core naming them.
@@ -1046,7 +1048,7 @@ class RlMcp:
         if k.startswith("rlmcp/")
         or k in ("Train/mean_reward", "Train/mean_episode_length", "Loss/learning_rate")
     }
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "iteration": self.iteration,
         "total_env_steps": self.total_env_steps,
         "num_envs": self._safe(self.sim.num_envs, None),
@@ -1077,7 +1079,7 @@ class RlMcp:
         payload["records"]["falsifier_fired_at"] = self._falsifier_fired
     return payload
 
-  def _watch_falsifier(self, metrics: Dict[str, float]) -> None:
+  def _watch_falsifier(self, metrics: dict[str, float]) -> None:
     """Say so, once, the moment the run disproves its own hypothesis.
 
     Not a stop: a falsified hypothesis is a result, and whether to spend more
@@ -1108,8 +1110,8 @@ class RlMcp:
     self.session.publish_status(self._status_payload())
 
   def cmd_list_parameters(
-      self, category: Optional[str] = None, contains: Optional[str] = None
-  ) -> Dict[str, Any]:
+      self, category: str | None = None, contains: str | None = None
+  ) -> dict[str, Any]:
     """List tunable parameters with current values, bounds and descriptions."""
     schema = self.parameters.export_schema_json()
     items = {
@@ -1120,13 +1122,13 @@ class RlMcp:
     }
     return {"count": len(items), "parameters": items}
 
-  def cmd_get_parameter(self, key: str) -> Dict[str, Any]:
+  def cmd_get_parameter(self, key: str) -> dict[str, Any]:
     """Read one parameter's live value."""
     return {"key": key, "value": self.parameters.get_value(key)}
 
   def cmd_set_parameter(
       self, key: str, value: Any, rationale: str = ""
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Change a reward weight, randomization range or PPO hyperparameter live."""
     old = self.parameters.get_value(key)
     ok = self.parameters.set_value(key, value)
@@ -1140,7 +1142,7 @@ class RlMcp:
       # A refused write changed nothing; do not republish an unchanged schema.
       self.session.publish_params(self.parameters.export_schema_json())
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "key": key, "old_value": old, "new_value": new, "applied": bool(ok)}
     spec = self.parameters.get_spec(key)
     liveness = getattr(spec, "liveness", None)
@@ -1159,8 +1161,8 @@ class RlMcp:
     return result
 
   def cmd_reset_parameters(
-      self, keys: Optional[Sequence[str]] = None, rationale: str = ""
-  ) -> Dict[str, Any]:
+      self, keys: Sequence[str] | None = None, rationale: str = ""
+  ) -> dict[str, Any]:
     """Restore parameters to the values they had when training started."""
     targets = list(keys) if keys else list(self._defaults)
     restored = {}
@@ -1171,7 +1173,7 @@ class RlMcp:
       if old == self._defaults[key]:
         continue
       ok = self.parameters.set_value(key, self._defaults[key])
-      entry: Dict[str, Any] = {
+      entry: dict[str, Any] = {
           "old": old, "new": self._defaults[key], "applied": bool(ok)}
       # Same surfacing as cmd_set_parameter: liveness, and -- for a write that
       # both applied and routed through the sim -- the adapter's per-write
@@ -1196,10 +1198,10 @@ class RlMcp:
 
   def cmd_reset_envs(
       self,
-      env_ids: Optional[Sequence[int]] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_ids: Sequence[int] | None = None,
+      where: dict[str, Any] | None = None,
       rationale: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Start fresh episodes in some or all environments.
 
     Episodes, not parameter values: ``reset_parameters`` puts the *knobs* back
@@ -1229,7 +1231,7 @@ class RlMcp:
         len(selected) if selected is not None
         else (self._safe(self.sim.num_envs, None) or 0)
     )
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "scope": "all" if selected is None else "selection",
         "env_ids": selected,
         "num_reset": int(detail.get("num_reset", counted)),
@@ -1241,7 +1243,7 @@ class RlMcp:
     )
     return result
 
-  def _default_metric_names(self, limit: int = 4) -> List[str]:
+  def _default_metric_names(self, limit: int = 4) -> list[str]:
     """A sensible default selection, drawn from what this run actually records."""
     available = set(self.telemetry.list_metrics())
     chosen = [
@@ -1253,7 +1255,7 @@ class RlMcp:
       chosen.append(key)
     return chosen or sorted(available)[:limit]
 
-  def cmd_list_metrics(self, contains: Optional[str] = None) -> Dict[str, Any]:
+  def cmd_list_metrics(self, contains: str | None = None) -> dict[str, Any]:
     """List every metric name recorded so far."""
     names = self.telemetry.list_metrics()
     if contains:
@@ -1262,14 +1264,14 @@ class RlMcp:
 
   def cmd_get_metrics(
       self,
-      names: Optional[Sequence[str]] = None,
+      names: Sequence[str] | None = None,
       last_n: int = 30,
       summarize: bool = True,
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Fetch recent values (and a trend summary) for selected metrics."""
     names = list(names) if names else self._default_metric_names()
-    out: Dict[str, Any] = {"metrics": {}}
-    rows: List[Dict[str, Any]] = []
+    out: dict[str, Any] = {"metrics": {}}
+    rows: list[dict[str, Any]] = []
     for name in names:
       series = self.telemetry.get_series(name, last_n=last_n)
       out["metrics"][name] = [[int(i), round(float(v), 6)] for i, v in series]
@@ -1281,11 +1283,11 @@ class RlMcp:
 
   def cmd_plot_metrics(
       self,
-      names: Optional[Sequence[str]] = None,
+      names: Sequence[str] | None = None,
       last_n: int = 400,
       smooth: int = 5,
-      title: Optional[str] = None,
-  ) -> Dict[str, Any]:
+      title: str | None = None,
+  ) -> dict[str, Any]:
     """Render selected metric curves to a PNG and return its path."""
     names = list(names) if names else self._default_metric_names()
     series = {n: self.telemetry.get_series(n, last_n=last_n) for n in names}
@@ -1305,9 +1307,9 @@ class RlMcp:
 
   def cmd_screenshot(
       self,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Render one frame of an environment, chosen by id or by description."""
     resolved = self._resolve_env_id(env_id, where)
     frame = self.sim.render(resolved)
@@ -1325,15 +1327,15 @@ class RlMcp:
   def cmd_record_video(
       self,
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-      fps: Optional[int] = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+      fps: int | None = None,
   ) -> DeferredJob:
     """Record a clip of training as it happens and return the video path."""
     resolved = self._resolve_env_id(env_id, where)
     dt = self._safe(self.sim.step_dt, 0.02)
     seconds = float(min(max(seconds, 0.2), _MAX_VIDEO_SECONDS))
-    steps = max(1, int(round(seconds / dt)))
+    steps = max(1, round(seconds / dt))
     return _VideoJob(
         env_id=resolved,
         steps_needed=steps,
@@ -1345,10 +1347,10 @@ class RlMcp:
   def cmd_progress_video(
       self,
       every: Any = None,
-      seconds: Optional[float] = None,
-      env_id: Optional[int] = None,
-      budget_mb: Optional[float] = None,
-  ) -> Dict[str, Any]:
+      seconds: float | None = None,
+      env_id: int | None = None,
+      budget_mb: float | None = None,
+  ) -> dict[str, Any]:
     """Read or change the automatic clip schedule (``every=0`` turns it off).
 
     Called with nothing, this reports the schedule. ``every`` is ``"double"``
@@ -1369,16 +1371,16 @@ class RlMcp:
 
   def cmd_live_view(
       self,
-      enabled: Optional[bool] = None,
-      port: Optional[int] = None,
-      host: Optional[str] = None,
-      fps: Optional[float] = None,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-      realtime: Optional[bool] = None,
-      buffer_seconds: Optional[float] = None,
-      paused: Optional[bool] = None,
-  ) -> Dict[str, Any]:
+      enabled: bool | None = None,
+      port: int | None = None,
+      host: str | None = None,
+      fps: float | None = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+      realtime: bool | None = None,
+      buffer_seconds: float | None = None,
+      paused: bool | None = None,
+  ) -> dict[str, Any]:
     """Attach, re-point or detach the live browser view; report where it is.
 
     Called with nothing, this says whether a view is running and on what URL.
@@ -1410,8 +1412,8 @@ class RlMcp:
   def cmd_record_trace(
       self,
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
   ) -> DeferredJob:
     """Record per-step joint/base signals for one env and summarise them."""
     return self._start_trace_job("trace", seconds, env_id, where, plot=False)
@@ -1419,8 +1421,8 @@ class RlMcp:
   def cmd_diagnose(
       self,
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
   ) -> DeferredJob:
     """Record a trace, analyse smoothness/tracking/gait, and plot it."""
     return self._start_trace_job("diagnose", seconds, env_id, where, plot=True)
@@ -1429,15 +1431,15 @@ class RlMcp:
       self,
       kind: str,
       seconds: float,
-      env_id: Optional[int],
-      where: Optional[Dict[str, Any]],
+      env_id: int | None,
+      where: dict[str, Any] | None,
       plot: bool,
   ) -> DeferredJob:
     dt = self._safe(self.sim.step_dt, 0.02)
     resolved = self._resolve_env_id(env_id, where)
     seconds = float(min(max(seconds, 0.2), _MAX_TRACE_SECONDS))
-    steps = min(self._trace_capacity, max(8, int(round(seconds / dt))))
-    labels = self._safe(getattr(self.sim, "trace_labels", lambda: {}), {})
+    steps = min(self._trace_capacity, max(8, round(seconds / dt)))
+    labels = self._safe(getattr(self.sim, "trace_labels", dict), {})
     # The recorder belongs to this job alone, so concurrent trace/diagnose
     # jobs (any mix of envs) are legal -- each records only its own env.
     recorder = TraceRecorder(capacity=steps, dt=dt)
@@ -1457,7 +1459,7 @@ class RlMcp:
         seconds=seconds,
     )
 
-  def cmd_cancel_job(self, req_id: str, reason: str = "") -> Dict[str, Any]:
+  def cmd_cancel_job(self, req_id: str, reason: str = "") -> dict[str, Any]:
     """Cancel an in-flight deferred job; its requester gets a truthful error."""
     job = next((j for j in self._jobs if j.req_id == req_id), None)
     if job is None:
@@ -1478,10 +1480,10 @@ class RlMcp:
 
   def cmd_plot_trace(
       self,
-      channels: Optional[Sequence[str]] = None,
-      components: Optional[Sequence[str]] = None,
-      title: Optional[str] = None,
-  ) -> Dict[str, Any]:
+      channels: Sequence[str] | None = None,
+      components: Sequence[str] | None = None,
+      title: str | None = None,
+  ) -> dict[str, Any]:
     """Re-plot the last recorded trace, optionally filtered to some joints."""
     if not self.last_trace:
       raise RuntimeError("No trace recorded yet. Run record_trace or diagnose first.")
@@ -1494,7 +1496,7 @@ class RlMcp:
     )
     return {"image_path": str(self._write_artifact("trace", ".png", png))}
 
-  def cmd_curriculum_status(self) -> Dict[str, Any]:
+  def cmd_curriculum_status(self) -> dict[str, Any]:
     """Current stage, promotion conditions, and how close they are to met."""
     if self.curriculum is None:
       return {"enabled": False, "note": "No curriculum schedule attached to this run."}
@@ -1505,7 +1507,7 @@ class RlMcp:
         "progress": self.curriculum.check(self.iteration, latest),
     }
 
-  def cmd_curriculum_advance(self, reason: str = "manual") -> Dict[str, Any]:
+  def cmd_curriculum_advance(self, reason: str = "manual") -> dict[str, Any]:
     """Promote to the next curriculum stage now."""
     if self.curriculum is None:
       raise RuntimeError("No curriculum schedule attached to this run.")
@@ -1515,7 +1517,7 @@ class RlMcp:
     self._apply_stage(transition)
     return {"transitioned": True, **transition, "stage": self.curriculum.current.to_dict()}
 
-  def cmd_curriculum_goto(self, stage: str, reason: str = "manual") -> Dict[str, Any]:
+  def cmd_curriculum_goto(self, stage: str, reason: str = "manual") -> dict[str, Any]:
     """Jump to a named curriculum stage (forward or backward)."""
     if self.curriculum is None:
       raise RuntimeError("No curriculum schedule attached to this run.")
@@ -1523,7 +1525,7 @@ class RlMcp:
     self._apply_stage(transition)
     return {"transitioned": True, **transition, "stage": self.curriculum.current.to_dict()}
 
-  def cmd_curriculum_auto(self, enabled: bool = True) -> Dict[str, Any]:
+  def cmd_curriculum_auto(self, enabled: bool = True) -> dict[str, Any]:
     """Turn automatic stage promotion on or off."""
     if self.curriculum is None:
       raise RuntimeError("No curriculum schedule attached to this run.")
@@ -1533,24 +1535,24 @@ class RlMcp:
     )
     return {"auto_promote": self.curriculum.auto_promote}
 
-  def cmd_pause(self) -> Dict[str, Any]:
+  def cmd_pause(self) -> dict[str, Any]:
     """Pause training between iterations (commands keep working)."""
     self.paused = True
     self.session.append_event("pause", {"iteration": self.iteration})
     return {"paused": True, "iteration": self.iteration}
 
-  def cmd_resume(self) -> Dict[str, Any]:
+  def cmd_resume(self) -> dict[str, Any]:
     """Resume training after a pause."""
     self.paused = False
     self.session.append_event("resume", {"iteration": self.iteration})
     return {"paused": False, "iteration": self.iteration}
 
-  def cmd_step_once(self) -> Dict[str, Any]:
+  def cmd_step_once(self) -> dict[str, Any]:
     """Run exactly one more iteration while paused, then pause again."""
     self.step_once_requested = True
     return {"stepping": True, "iteration": self.iteration}
 
-  def cmd_save_checkpoint(self, tag: str = "", note: str = "") -> Dict[str, Any]:
+  def cmd_save_checkpoint(self, tag: str = "", note: str = "") -> dict[str, Any]:
     """Save policy weights plus curriculum, parameters and extension state."""
     if self.runner is None:
       raise RuntimeError("No runner attached; cannot save a checkpoint.")
@@ -1578,7 +1580,7 @@ class RlMcp:
     )
     return {"tag": tag, "path": saved, "iteration": self.iteration}
 
-  def cmd_list_checkpoints(self) -> Dict[str, Any]:
+  def cmd_list_checkpoints(self) -> dict[str, Any]:
     """List checkpoints saved through rlmcp in this session."""
     directory = self.session.dir / "checkpoints"
     if not directory.exists():
@@ -1589,7 +1591,7 @@ class RlMcp:
     ]
     return {"checkpoints": items}
 
-  def cmd_load_checkpoint(self, path: str, restore_parameters: bool = True) -> Dict[str, Any]:
+  def cmd_load_checkpoint(self, path: str, restore_parameters: bool = True) -> dict[str, Any]:
     """Roll back policy weights (and optionally parameters/curriculum) to a checkpoint."""
     if self.runner is None:
       raise RuntimeError("No runner attached; cannot load a checkpoint.")
@@ -1597,7 +1599,7 @@ class RlMcp:
     if not candidate.exists():
       candidate = self.session.dir / "checkpoints" / f"{path}.pt"
     infos = self.runner.load_checkpoint(str(candidate))
-    restored: Dict[str, Any] = {"weights": True, "path": str(candidate)}
+    restored: dict[str, Any] = {"weights": True, "path": str(candidate)}
 
     env_state = (infos or {}).get("env_state")
     if env_state:
@@ -1644,7 +1646,7 @@ class RlMcp:
     )
     return restored
 
-  def cmd_note(self, text: str) -> Dict[str, Any]:
+  def cmd_note(self, text: str) -> dict[str, Any]:
     """Write a free-form note into the session's event log."""
     self.session.append_event("note", {"iteration": self.iteration, "text": text})
     return {"logged": True, "iteration": self.iteration}
@@ -1655,7 +1657,7 @@ class RlMcp:
       kind: str = "steer",
       author: str = "user",
       interpretation: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Record something a human said about this run, at the current iteration.
 
     Separate from ``note`` because it is a different kind of fact: a note is the
@@ -1675,16 +1677,14 @@ class RlMcp:
     )
     return {"logged": True, "iteration": self.iteration, "feedback_kind": kind}
 
-  def cmd_stop_training(self, reason: str = "") -> Dict[str, Any]:
+  def cmd_stop_training(self, reason: str = "") -> dict[str, Any]:
     """Ask the training loop to stop cleanly at the next iteration boundary."""
     self.stop_requested = True
     self.stop_reason = reason
     self.paused = False
     if self.runner is not None:
-      try:
+      with contextlib.suppress(NotSupported):
         self.runner.request_stop()
-      except NotSupported:
-        pass
     self.session.append_event(
         "stop_requested", {"iteration": self.iteration, "reason": reason}
     )
@@ -1692,7 +1692,7 @@ class RlMcp:
 
   # Curriculum application.
 
-  def _advance_curriculum(self, metrics: Dict[str, float]) -> None:
+  def _advance_curriculum(self, metrics: dict[str, float]) -> None:
     if self.curriculum is None:
       return
     if not hasattr(self, "_curriculum_applied"):
@@ -1706,7 +1706,7 @@ class RlMcp:
     if transition is not None:
       self._apply_stage(transition)
 
-  def _apply_stage(self, transition: Dict[str, Any], log: bool = True) -> None:
+  def _apply_stage(self, transition: dict[str, Any], log: bool = True) -> None:
     """Push the current stage's intent into the run.
 
     A stage speaks only in parameters and commands, so it works the same on a
@@ -1714,7 +1714,7 @@ class RlMcp:
     names are whatever this environment's extensions provide.
     """
     stage = self.curriculum.current
-    applied: Dict[str, Any] = {}
+    applied: dict[str, Any] = {}
 
     for key, value in (stage.parameters or {}).items():
       try:

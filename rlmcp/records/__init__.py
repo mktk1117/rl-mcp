@@ -12,7 +12,8 @@ Stdlib only, so the whole layer works in an interpreter with no simulator:
     run = store.new_record("faster_commands", hypothesis="...", ...)
 """
 
-from rlmcp.records.clips import caption_for, from_record as clips_of, iteration_of
+from rlmcp.records.clips import caption_for, iteration_of
+from rlmcp.records.clips import from_record as clips_of
 from rlmcp.records.filestore import FileStore, open_store
 from rlmcp.records.record import (
     FEEDBACK_KINDS,
@@ -32,39 +33,39 @@ from rlmcp.records.record import (
 )
 from rlmcp.records.store import (
     ConflictError,
-    RecordStore,
     MediaStore,
+    RecordStore,
     SlotUnavailable,
     StoreError,
 )
 from rlmcp.records.validate import Problem, Report, check_verdict_change, validate
 
 __all__ = [
-    "ConflictError",
     "FEEDBACK_KINDS",
-    "FileStore",
-    "Falsifier",
-    "Feedback",
-    "RecordStore",
-    "Lease",
-    "MediaStore",
     "OPEN_VERDICTS",
     "OWED_A_RESPONSE",
+    "TERMINAL_VERDICTS",
+    "VERDICTS",
+    "ConflictError",
+    "Falsifier",
+    "Feedback",
+    "FileStore",
+    "Lease",
+    "MediaStore",
     "Problem",
+    "RecordStore",
     "Report",
     "RunRecord",
     "SlotUnavailable",
     "StoreError",
-    "TERMINAL_VERDICTS",
-    "VERDICTS",
     "Weights",
     "ancestors",
     "caption_for",
-    "clips_of",
-    "iteration_of",
     "check_verdict_change",
     "children",
+    "clips_of",
     "fold_recipe",
+    "iteration_of",
     "open_store",
     "slugify",
     "validate",

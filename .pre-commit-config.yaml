@@ -1,0 +1,16 @@
+# Run the CI lint before the commit exists, not after it is pushed:
+#
+#   uv tool install pre-commit && pre-commit install
+#
+# Once per clone. After that `git commit` runs the same ruff, with the same
+# pinned version and the same [tool.ruff] config, that ci.yml runs.
+#
+# There is no formatter hook, and that is deliberate — this repo indents by two
+# and lays out its own line breaks. See the [tool.ruff] comment in pyproject.toml.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff
+        name: ruff (lint, autofix)
+        args: [--fix]

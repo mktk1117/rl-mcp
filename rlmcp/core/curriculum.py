@@ -16,8 +16,9 @@ the decision at any point.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 _OPS = {
     ">=": lambda a, b: a >= b,
@@ -35,7 +36,7 @@ class Condition:
   op: str
   value: float
 
-  def check(self, metrics: Dict[str, float]) -> Tuple[bool, Optional[float]]:
+  def check(self, metrics: dict[str, float]) -> tuple[bool, float | None]:
     current = metrics.get(self.metric)
     if not isinstance(current, (int, float)):
       return False, None
@@ -47,11 +48,11 @@ class Condition:
   def describe(self) -> str:
     return f"{self.metric} {self.op} {self.value}"
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {"metric": self.metric, "op": self.op, "value": self.value}
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "Condition":
+  def from_dict(d: dict[str, Any]) -> Condition:
     return Condition(metric=d["metric"], op=d.get("op", ">="), value=float(d["value"]))
 
 
@@ -65,13 +66,13 @@ class Action:
   """
 
   cmd: str
-  args: Dict[str, Any] = field(default_factory=dict)
+  args: dict[str, Any] = field(default_factory=dict)
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {"cmd": self.cmd, "args": self.args}
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "Action":
+  def from_dict(d: dict[str, Any]) -> Action:
     return Action(cmd=d["cmd"], args=dict(d.get("args") or {}))
 
   def describe(self) -> str:
@@ -86,18 +87,18 @@ class CurriculumStage:
   """One rung of the ladder."""
 
   name: str
-  parameters: Dict[str, Any] = field(default_factory=dict)
+  parameters: dict[str, Any] = field(default_factory=dict)
   """Parameter edits applied once on entry, e.g. ``{"reward.foot_slip.weight": -0.2}``."""
-  apply: List[Action] = field(default_factory=list)
+  apply: list[Action] = field(default_factory=list)
   """Commands run once on entry, in order."""
-  promote_when: List[Condition] = field(default_factory=list)
+  promote_when: list[Condition] = field(default_factory=list)
   min_iterations: int = 100
   """Never promote before this many iterations in the stage."""
   hold_iterations: int = 20
   """Conditions must hold for this many consecutive iterations."""
   notes: str = ""
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "name": self.name,
         "parameters": self.parameters,
@@ -109,7 +110,7 @@ class CurriculumStage:
     }
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "CurriculumStage":
+  def from_dict(d: dict[str, Any]) -> CurriculumStage:
     return CurriculumStage(
         name=d["name"],
         parameters=dict(d.get("parameters") or {}),
@@ -127,12 +128,12 @@ class StageSchedule:
   def __init__(self, stages: Sequence[CurriculumStage], auto_promote: bool = True):
     if not stages:
       raise ValueError("A curriculum needs at least one stage.")
-    self.stages: List[CurriculumStage] = list(stages)
+    self.stages: list[CurriculumStage] = list(stages)
     self.auto_promote = bool(auto_promote)
     self.index = 0
     self.entered_at_iteration = 0
     self.streak = 0
-    self.history: List[Dict[str, Any]] = []
+    self.history: list[dict[str, Any]] = []
 
   # Access.
 
@@ -144,7 +145,7 @@ class StageSchedule:
   def is_final(self) -> bool:
     return self.index >= len(self.stages) - 1
 
-  def find(self, name: str) -> Optional[int]:
+  def find(self, name: str) -> int | None:
     for i, stage in enumerate(self.stages):
       if stage.name == name:
         return i
@@ -152,7 +153,7 @@ class StageSchedule:
 
   # Evaluation.
 
-  def evaluate(self, iteration: int, metrics: Dict[str, float]) -> Optional[Dict[str, Any]]:
+  def evaluate(self, iteration: int, metrics: dict[str, float]) -> dict[str, Any] | None:
     """Advance a stage if this iteration's metrics say the policy has earned it.
 
     Returns a description of the transition, or ``None`` when staying put.
@@ -172,7 +173,7 @@ class StageSchedule:
       return None
     return self.advance(iteration, reason="auto: promotion conditions met")
 
-  def check(self, iteration: int, metrics: Dict[str, float]) -> Dict[str, Any]:
+  def check(self, iteration: int, metrics: dict[str, float]) -> dict[str, Any]:
     """Report on each promotion condition without changing state."""
     stage = self.current
     checks = []
@@ -201,18 +202,18 @@ class StageSchedule:
 
   # Transitions.
 
-  def advance(self, iteration: int, reason: str = "") -> Optional[Dict[str, Any]]:
+  def advance(self, iteration: int, reason: str = "") -> dict[str, Any] | None:
     if self.is_final:
       return None
     return self.goto(self.index + 1, iteration, reason=reason or "advance")
 
-  def retreat(self, iteration: int, reason: str = "") -> Optional[Dict[str, Any]]:
+  def retreat(self, iteration: int, reason: str = "") -> dict[str, Any] | None:
     """Step back one stage. Not wired to a command; agents use ``curriculum_goto``."""
     if self.index == 0:
       return None
     return self.goto(self.index - 1, iteration, reason=reason or "retreat")
 
-  def goto(self, index: int, iteration: int, reason: str = "") -> Dict[str, Any]:
+  def goto(self, index: int, iteration: int, reason: str = "") -> dict[str, Any]:
     if not 0 <= index < len(self.stages):
       raise IndexError(f"Stage index {index} out of range (0..{len(self.stages) - 1})")
     previous = self.current.name
@@ -228,7 +229,7 @@ class StageSchedule:
     self.history.append(transition)
     return transition
 
-  def goto_named(self, name: str, iteration: int, reason: str = "") -> Dict[str, Any]:
+  def goto_named(self, name: str, iteration: int, reason: str = "") -> dict[str, Any]:
     index = self.find(name)
     if index is None:
       raise KeyError(
@@ -238,9 +239,9 @@ class StageSchedule:
 
   # Serialisation.
 
-  def status(self, iteration: Optional[int] = None) -> Dict[str, Any]:
+  def status(self, iteration: int | None = None) -> dict[str, Any]:
     stage = self.current
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "stage": stage.name,
         "stage_index": self.index,
         "num_stages": len(self.stages),
@@ -259,7 +260,7 @@ class StageSchedule:
       out["iterations_in_stage"] = iteration - self.entered_at_iteration
     return out
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "stages": [s.to_dict() for s in self.stages],
         "auto_promote": self.auto_promote,
@@ -269,7 +270,7 @@ class StageSchedule:
     }
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "StageSchedule":
+  def from_dict(d: dict[str, Any]) -> StageSchedule:
     schedule = StageSchedule(
         [CurriculumStage.from_dict(s) for s in d["stages"]],
         auto_promote=bool(d.get("auto_promote", True)),

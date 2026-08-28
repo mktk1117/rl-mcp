@@ -110,7 +110,8 @@ appended by the trace recorder itself; adapters never emit it.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -162,7 +163,7 @@ class SimAdapter(ABC):
   # Required.
 
   @abstractmethod
-  def discover_parameters(self) -> List[ParameterSpec]:
+  def discover_parameters(self) -> list[ParameterSpec]:
     """Inspect the environment and describe every tunable parameter."""
 
   @abstractmethod
@@ -192,14 +193,14 @@ class SimAdapter(ABC):
   def step_dt(self) -> float:
     raise NotSupported("step_dt")
 
-  def joint_names(self) -> List[str]:
+  def joint_names(self) -> list[str]:
     raise NotSupported("joint_names")
 
-  def max_episode_length(self) -> Optional[float]:
+  def max_episode_length(self) -> float | None:
     """Episode length cap in steps, used to normalise survival metrics."""
     return None
 
-  def sample_state(self, env_id: int = 0) -> Dict[str, np.ndarray]:
+  def sample_state(self, env_id: int = 0) -> dict[str, np.ndarray]:
     """One step's worth of per-env signals, for trace recording.
 
     Keys come from the trace channel vocabulary (the ``CHANNEL_*`` constants;
@@ -210,7 +211,7 @@ class SimAdapter(ABC):
     """
     raise NotSupported("sample_state")
 
-  def trace_labels(self) -> Dict[str, List[str]]:
+  def trace_labels(self) -> dict[str, list[str]]:
     """Component names for the channels :meth:`sample_state` emits.
 
     The controller attaches these to every recorded trace: diagnostics names
@@ -224,7 +225,7 @@ class SimAdapter(ABC):
     """
     return {}
 
-  def reward_terms(self) -> Dict[str, float]:
+  def reward_terms(self) -> dict[str, float]:
     """What each reward term paid on the last step, by name.
 
     The single most useful thing a task can be asked, and the one a curve
@@ -246,7 +247,7 @@ class SimAdapter(ABC):
     """
     raise NotSupported("reward_terms")
 
-  def termination_terms(self) -> Dict[str, float]:
+  def termination_terms(self) -> dict[str, float]:
     """Which termination terms fired on the last step, as a fraction of envs.
 
     The other half of "why did the episode end". An env that terminates on
@@ -258,7 +259,7 @@ class SimAdapter(ABC):
     """
     raise NotSupported("termination_terms")
 
-  def summary_metrics(self) -> Dict[str, float]:
+  def summary_metrics(self) -> dict[str, float]:
     """Cheap always-on scalars describing the current batch.
 
     ``{}`` means "nothing to report", not failure -- see the module's error
@@ -267,7 +268,7 @@ class SimAdapter(ABC):
     """
     return {}
 
-  def reset_envs(self, env_ids: Optional[Sequence[int]] = None) -> Dict[str, Any]:
+  def reset_envs(self, env_ids: Sequence[int] | None = None) -> dict[str, Any]:
     """Start fresh episodes in some or all environments.
 
     ``env_ids`` is ``None`` for every environment, or the subset to restart;
@@ -288,14 +289,14 @@ class SimAdapter(ABC):
     """
     raise NotSupported("reset_envs")
 
-  def get_env_state(self) -> Dict[str, Any]:
+  def get_env_state(self) -> dict[str, Any]:
     """Environment-side state worth carrying through a checkpoint.
 
     ``{}`` means "nothing to save", not failure.
     """
     return {}
 
-  def set_env_state(self, state: Dict[str, Any]) -> None:
+  def set_env_state(self, state: dict[str, Any]) -> None:
     return None
 
   # Optional: rendering.
@@ -368,7 +369,7 @@ class RunnerAdapter(ABC):
   """Interface to an RL training runner."""
 
   @abstractmethod
-  def discover_hyperparameters(self) -> List[ParameterSpec]:
+  def discover_hyperparameters(self) -> list[ParameterSpec]:
     """Describe algorithm and optimiser hyperparameters."""
 
   @abstractmethod
@@ -386,13 +387,13 @@ class RunnerAdapter(ABC):
   def current_iteration(self) -> int:
     return 0
 
-  def save_checkpoint(self, path: str, infos: Optional[Dict[str, Any]] = None) -> Optional[str]:
+  def save_checkpoint(self, path: str, infos: dict[str, Any] | None = None) -> str | None:
     raise NotSupported("save_checkpoint")
 
-  def load_checkpoint(self, path: str) -> Dict[str, Any]:
+  def load_checkpoint(self, path: str) -> dict[str, Any]:
     raise NotSupported("load_checkpoint")
 
-  def runner_metrics(self) -> Dict[str, float]:
+  def runner_metrics(self) -> dict[str, float]:
     """Scalars the runner already tracks. ``{}`` means nothing to report."""
     return {}
 

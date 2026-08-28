@@ -22,7 +22,7 @@ is carried in the payload so a viewer can label either axis honestly.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from rlmcp.records.graph import Graph
 from rlmcp.records.record import RunRecord
@@ -34,7 +34,7 @@ from rlmcp.session import Session
 Number = (int, float)
 
 
-def _numeric(value: Any) -> Optional[float]:
+def _numeric(value: Any) -> float | None:
   if isinstance(value, bool) or not isinstance(value, Number):
     return None
   return float(value)
@@ -46,7 +46,7 @@ def _describe(value: Any) -> str:
   return str(value)
 
 
-def _session_facts(session_dir: Optional[str]) -> Tuple[List[Dict[str, Any]], int, bool]:
+def _session_facts(session_dir: str | None) -> tuple[list[dict[str, Any]], int, bool]:
   """Parameter edits with their iterations, how far the run got, and liveness.
 
   Returns ``([], 0, False)`` for a session that is gone -- an ancestry whose logs
@@ -59,7 +59,7 @@ def _session_facts(session_dir: Optional[str]) -> Tuple[List[Dict[str, Any]], in
   except (FileNotFoundError, OSError):
     return [], 0, False
 
-  edits: List[Dict[str, Any]] = []
+  edits: list[dict[str, Any]] = []
   for event in session.events():
     kind = event.get("kind")
     iteration = event.get("iteration")
@@ -98,21 +98,21 @@ def _session_facts(session_dir: Optional[str]) -> Tuple[List[Dict[str, Any]], in
   # has closed the record yet.
   try:
     alive = session.liveness() != "dead"
-  except Exception:  # noqa: BLE001 -- liveness is a nicety here.
+  except Exception:
     alive = False
   return edits, iterations, alive
 
 
-def build_history(graph: Graph) -> Dict[str, Any]:
+def build_history(graph: Graph) -> dict[str, Any]:
   """Per-run parameter traces, laid out along the ancestry.
 
   The payload is deliberately viewer-shaped: a list of runs in draw order, each
   with its x offset and a ``series`` of step points per key, plus the index of
   keys that ever moved so a chooser can be built without walking every run.
   """
-  runs: List[Dict[str, Any]] = []
-  by_id: Dict[str, Dict[str, Any]] = {}
-  keys: Dict[str, Dict[str, Any]] = {}
+  runs: list[dict[str, Any]] = []
+  by_id: dict[str, dict[str, Any]] = {}
+  keys: dict[str, dict[str, Any]] = {}
 
   for node_id in graph.order:
     record: RunRecord = graph.nodes[node_id].record
@@ -123,16 +123,16 @@ def build_history(graph: Graph) -> Dict[str, Any]:
 
     # Launch values. A key the run never touched still has a value, and a flat
     # line at the inherited value is information: it says nobody moved it.
-    config = {k: v for k, v in (record.config or {}).items()}
-    series: Dict[str, List[Dict[str, Any]]] = {}
+    config = dict((record.config or {}).items())
+    series: dict[str, list[dict[str, Any]]] = {}
     for key, value in config.items():
       number = _numeric(value)
       if number is None:
         continue
       series[key] = [{"x": 0, "v": number, "source": "launch"}]
 
-    changed: List[str] = []
-    non_numeric: List[str] = []
+    changed: list[str] = []
+    non_numeric: list[str] = []
     for edit in edits:
       key = edit["key"]
       if not key:
@@ -168,7 +168,7 @@ def build_history(graph: Graph) -> Dict[str, Any]:
 
     # Carry the line to the end of the run, so a step chart has something to
     # draw between the last edit and where the run actually stopped.
-    for key, points in series.items():
+    for points in series.values():
       if points and points[-1]["x"] < iterations:
         points.append({"x": iterations, "v": points[-1]["v"], "source": "end"})
 
@@ -229,7 +229,7 @@ def build_history(graph: Graph) -> Dict[str, Any]:
           "span": max([r["end"] for r in runs], default=0)}
 
 
-def leaf_paths(graph: Graph) -> Dict[str, List[str]]:
+def leaf_paths(graph: Graph) -> dict[str, list[str]]:
   """The root-to-leaf chains, keyed by leaf.
 
   The highlight in the viewer is a path, not a node: "how did we get to the
@@ -237,7 +237,7 @@ def leaf_paths(graph: Graph) -> Dict[str, List[str]]:
   runs each contribute one, which is what makes "show all active paths" a
   lookup rather than a traversal in the browser.
   """
-  paths: Dict[str, List[str]] = {}
+  paths: dict[str, list[str]] = {}
   for node_id, node in graph.nodes.items():
     if node.children:
       continue

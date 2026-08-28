@@ -23,14 +23,16 @@ Layout::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
 
 SCHEMA_VERSION = 1
 
@@ -116,7 +118,7 @@ def _append_jsonl(path: Path, obj: Any) -> None:
 _TAIL_BLOCK_BYTES = 64 * 1024
 
 
-def _tail_lines(path: Path, last_n: int) -> List[str]:
+def _tail_lines(path: Path, last_n: int) -> list[str]:
   """The last ``last_n`` physical lines of ``path``, read backward from EOF.
 
   Blocks are read from the end until the buffer holds ``last_n + 1`` newlines
@@ -137,7 +139,7 @@ def _tail_lines(path: Path, last_n: int) -> List[str]:
   return buf.decode("utf-8", errors="replace").splitlines()[-last_n:]
 
 
-def read_jsonl(path: Path, last_n: Optional[int] = None) -> List[Any]:
+def read_jsonl(path: Path, last_n: int | None = None) -> list[Any]:
   """Read a JSONL file, skipping any torn trailing line.
 
   With ``last_n`` only the tail of the file is read (backward, in blocks), so
@@ -152,9 +154,9 @@ def read_jsonl(path: Path, last_n: Optional[int] = None) -> List[Any]:
     lines = path.read_text().splitlines() if last_n is None else _tail_lines(path, last_n)
   except OSError:
     return []
-  out: List[Any] = []
-  for line in lines:
-    line = line.strip()
+  out: list[Any] = []
+  for raw in lines:
+    line = raw.strip()
     if not line:
       continue
     try:
@@ -169,11 +171,11 @@ class Request:
   """A command from the agent side to the training loop."""
 
   cmd: str
-  args: Dict[str, Any] = field(default_factory=dict)
+  args: dict[str, Any] = field(default_factory=dict)
   req_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
   created_at: float = field(default_factory=time.time)
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "req_id": self.req_id,
         "cmd": self.cmd,
@@ -182,7 +184,7 @@ class Request:
     }
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "Request":
+  def from_dict(d: dict[str, Any]) -> Request:
     created = d.get("created_at")
     return Request(
         cmd=d["cmd"],
@@ -201,10 +203,10 @@ class Response:
   req_id: str
   ok: bool
   result: Any = None
-  error: Optional[str] = None
+  error: str | None = None
   finished_at: float = field(default_factory=time.time)
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "req_id": self.req_id,
         "ok": self.ok,
@@ -214,7 +216,7 @@ class Response:
     }
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "Response":
+  def from_dict(d: dict[str, Any]) -> Response:
     return Response(
         req_id=d["req_id"],
         ok=d["ok"],
@@ -261,7 +263,7 @@ class Session:
 
   def __init__(self, session_dir: Path | str):
     self.dir = Path(session_dir).expanduser().resolve()
-    self._cached_pid: Optional[int] = None
+    self._cached_pid: int | None = None
     self._last_outbox_prune = 0.0
 
   # Paths.
@@ -300,7 +302,7 @@ class Session:
 
   # Lifecycle.
 
-  def create(self, info: Dict[str, Any]) -> "Session":
+  def create(self, info: dict[str, Any]) -> Session:
     """Initialise the directory. Called once by the training process.
 
     Any inbox backlog left behind by a previous process -- pending requests as
@@ -330,7 +332,7 @@ class Session:
     return self
 
   @staticmethod
-  def open(session_dir: Path | str) -> "Session":
+  def open(session_dir: Path | str) -> Session:
     s = Session(session_dir)
     if not s.session_file.exists():
       raise FileNotFoundError(
@@ -340,13 +342,13 @@ class Session:
     return s
 
   @staticmethod
-  def find_latest(root: Path | str) -> Optional["Session"]:
+  def find_latest(root: Path | str) -> Session | None:
     """Return the most recently started session under ``root``, if any."""
     return next(iter_sessions(root), None)
 
   # Trainer side.
 
-  def publish_status(self, status: Dict[str, Any]) -> None:
+  def publish_status(self, status: dict[str, Any]) -> None:
     _atomic_write_json(self.status_file, {"updated_at": time.time(), **status})
     # Piggyback outbox hygiene on the heartbeat: responses are deleted by the
     # waiter that consumes them, so anything old enough to prune belongs to a
@@ -356,16 +358,16 @@ class Session:
       self._last_outbox_prune = now
       self.prune_outbox(self.OUTBOX_KEEP_S)
 
-  def publish_params(self, schema: Dict[str, Any]) -> None:
+  def publish_params(self, schema: dict[str, Any]) -> None:
     _atomic_write_json(self.params_file, schema)
 
-  def append_metrics(self, iteration: int, metrics: Dict[str, float]) -> None:
+  def append_metrics(self, iteration: int, metrics: dict[str, float]) -> None:
     _append_jsonl(self.metrics_file, {"iteration": iteration, "t": time.time(), **metrics})
 
-  def append_event(self, kind: str, detail: Dict[str, Any]) -> None:
+  def append_event(self, kind: str, detail: dict[str, Any]) -> None:
     _append_jsonl(self.events_file, {"t": time.time(), "kind": kind, **detail})
 
-  def pop_requests(self, max_age_s: Optional[float] = None) -> List[Request]:
+  def pop_requests(self, max_age_s: float | None = None) -> list[Request]:
     """Claim every pending request, oldest first.
 
     Claiming renames the file into ``outbox`` territory first so a duplicate
@@ -382,7 +384,7 @@ class Session:
     if not self.inbox.exists():
       return []
     files = sorted(self.inbox.glob("*.json"), key=lambda p: p.name)
-    requests: List[Request] = []
+    requests: list[Request] = []
     for path in files:
       claimed = path.with_suffix(".claimed")
       try:
@@ -390,10 +392,8 @@ class Session:
       except OSError:
         continue  # Someone else got it.
       payload = _read_json(claimed)
-      try:
+      with contextlib.suppress(OSError):
         claimed.unlink()
-      except OSError:
-        pass
       if not isinstance(payload, dict) or "cmd" not in payload:
         continue
       try:
@@ -417,7 +417,7 @@ class Session:
     return requests
 
   def _refuse_request(
-      self, req_id: str, cmd: Optional[str], error: str, detail: Dict[str, Any]
+      self, req_id: str, cmd: str | None, error: str, detail: dict[str, Any]
   ) -> None:
     """Answer a request with an error instead of executing it, and log why."""
     self.respond(Response(req_id=req_id, ok=False, error=error))
@@ -465,19 +465,19 @@ class Session:
 
   # Agent side.
 
-  def info(self) -> Dict[str, Any]:
+  def info(self) -> dict[str, Any]:
     return _read_json(self.session_file, {}) or {}
 
-  def status(self) -> Dict[str, Any]:
+  def status(self) -> dict[str, Any]:
     return _read_json(self.status_file, {}) or {}
 
-  def params(self) -> Dict[str, Any]:
+  def params(self) -> dict[str, Any]:
     return _read_json(self.params_file, {}) or {}
 
-  def metrics(self, last_n: Optional[int] = None) -> List[Dict[str, Any]]:
+  def metrics(self, last_n: int | None = None) -> list[dict[str, Any]]:
     return read_jsonl(self.metrics_file, last_n=last_n)
 
-  def events(self, last_n: Optional[int] = None) -> List[Dict[str, Any]]:
+  def events(self, last_n: int | None = None) -> list[dict[str, Any]]:
     return read_jsonl(self.events_file, last_n=last_n)
 
   def submit(self, cmd: str, **args: Any) -> Request:
@@ -492,7 +492,7 @@ class Session:
     _atomic_write_json(self.inbox / name, req.to_dict())
     return req
 
-  def poll(self, req_id: str, consume: bool = False) -> Optional[Response]:
+  def poll(self, req_id: str, consume: bool = False) -> Response | None:
     """Read the response to ``req_id`` if it has arrived.
 
     With ``consume`` the response file is deleted after a successful read.
@@ -512,10 +512,8 @@ class Session:
     except (KeyError, TypeError):
       return None
     if consume:
-      try:
+      with contextlib.suppress(OSError):
         path.unlink()
-      except OSError:
-        pass
     return response
 
   def wait(self, req_id: str, timeout: float = 120.0, interval: float = 0.1) -> Response:
@@ -593,7 +591,7 @@ class Session:
       return True
     return True
 
-  def seconds_since_heartbeat(self) -> Optional[float]:
+  def seconds_since_heartbeat(self) -> float | None:
     updated = self.status().get("updated_at")
     if not isinstance(updated, (int, float)):
       return None
@@ -603,7 +601,7 @@ class Session:
     """``"running"``, ``"stalled"`` or ``"dead"`` -- see :meth:`liveness_info`."""
     return self.liveness_info()["state"]
 
-  def liveness_info(self) -> Dict[str, Any]:
+  def liveness_info(self) -> dict[str, Any]:
     """The liveness verdict plus the evidence it rests on.
 
     Returns ``{"state", "pid_alive", "heartbeat_age_s"[, "note"]}`` where
@@ -620,7 +618,7 @@ class Session:
     """
     pid_alive = self.is_alive()
     age = self.seconds_since_heartbeat()
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "pid_alive": pid_alive,
         "heartbeat_age_s": None if age is None else round(age, 1),
     }

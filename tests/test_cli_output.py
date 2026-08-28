@@ -19,7 +19,6 @@ import pytest
 from rlmcp import cli, cli_output
 from rlmcp.session import Response, Session
 
-
 # Mode resolution: a pipe is an agent, a terminal is a person.
 
 
@@ -566,7 +565,7 @@ def test_the_reserved_stdout_answers_for_the_stream_it_stands_in_for(tmp_path):
   root = Path(__file__).resolve().parent.parent
   done = subprocess.run(
       [sys.executable, str(script)],
-      capture_output=True,
+      capture_output=True, check=False,
       # This checkout, not whatever `rlmcp` the interpreter has installed.
       env={**os.environ, "PYTHONPATH": str(root), "LC_ALL": "C", "LANG": "C",
            "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",

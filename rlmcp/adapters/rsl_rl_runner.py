@@ -9,8 +9,9 @@ silently doing nothing.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from rlmcp.adapters.base import NotSupported, RunnerAdapter
 from rlmcp.core.parameters.spec import ParameterCategory, ParameterSpec
@@ -18,7 +19,7 @@ from rlmcp.core.parameters.spec import ParameterCategory, ParameterSpec
 # Only bounds true by the parameter's own definition: a value outside them is
 # meaningless, not merely unusual. Omit "min"/"max" rather than guessing at a
 # sensible range -- that depends on the task. Guidance belongs in "desc".
-_ALG_PARAMS: Dict[str, Dict[str, Any]] = {
+_ALG_PARAMS: dict[str, dict[str, Any]] = {
     "learning_rate": {
         "min": 0.0,  # Negative is gradient ascent; 0.0 legitimately freezes.
         "desc": "PPO optimiser learning rate (switches schedule to 'fixed' when set)",
@@ -70,11 +71,11 @@ class RslRlRunnerAdapter(RunnerAdapter):
       raise NotSupported("Runner has no 'alg'; cannot touch hyperparameters.")
     return alg
 
-  def discover_hyperparameters(self) -> List[ParameterSpec]:
+  def discover_hyperparameters(self) -> list[ParameterSpec]:
     alg = getattr(self.runner, "alg", None)
     if alg is None:
       return []
-    specs: List[ParameterSpec] = []
+    specs: list[ParameterSpec] = []
     for name, meta in _ALG_PARAMS.items():
       if not hasattr(alg, name):
         continue
@@ -130,17 +131,15 @@ class RslRlRunnerAdapter(RunnerAdapter):
   def current_iteration(self) -> int:
     return int(getattr(self.runner, "current_learning_iteration", 0))
 
-  def runner_metrics(self) -> Dict[str, float]:
+  def runner_metrics(self) -> dict[str, float]:
     """Scalars the runner already tracks: reward, episode length, LR, std."""
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     alg = getattr(self.runner, "alg", None)
     if alg is not None:
       if getattr(alg, "learning_rate", None) is not None:
         out["Loss/learning_rate"] = float(alg.learning_rate)
-      try:
+      with contextlib.suppress(Exception):
         out["Policy/mean_std"] = float(alg.get_policy().output_std.mean().item())
-      except Exception:
-        pass
     logger = getattr(self.runner, "logger", None)
     if logger is not None:
       rewards = list(getattr(logger, "rewbuffer", []) or [])
@@ -152,8 +151,8 @@ class RslRlRunnerAdapter(RunnerAdapter):
     return out
 
   def save_checkpoint(
-      self, path: str, infos: Optional[Dict[str, Any]] = None
-  ) -> Optional[str]:
+      self, path: str, infos: dict[str, Any] | None = None
+  ) -> str | None:
     save = getattr(self.runner, "save", None)
     if not callable(save):
       raise NotSupported("Runner does not implement save().")
@@ -161,7 +160,7 @@ class RslRlRunnerAdapter(RunnerAdapter):
     save(str(path), infos)
     return str(path)
 
-  def _module_tree(self) -> List[Any]:
+  def _module_tree(self) -> list[Any]:
     """Every ``nn.Module`` reachable from the runner or its algorithm.
 
     Read from instance dictionaries rather than ``dir()`` so that evaluating a
@@ -169,7 +168,7 @@ class RslRlRunnerAdapter(RunnerAdapter):
     """
     import torch.nn as nn
 
-    found: Dict[int, Any] = {}
+    found: dict[int, Any] = {}
 
     def collect(obj: Any) -> None:
       if isinstance(obj, nn.Module):
@@ -219,7 +218,7 @@ class RslRlRunnerAdapter(RunnerAdapter):
           thawed += 1
     return thawed
 
-  def load_checkpoint(self, path: str) -> Dict[str, Any]:
+  def load_checkpoint(self, path: str) -> dict[str, Any]:
     load = getattr(self.runner, "load", None)
     if not callable(load):
       raise NotSupported("Runner does not implement load().")
@@ -229,7 +228,7 @@ class RslRlRunnerAdapter(RunnerAdapter):
     infos = load(str(path))
     return infos if isinstance(infos, dict) else {}
 
-  def log_dir(self) -> Optional[str]:
+  def log_dir(self) -> str | None:
     logger = getattr(self.runner, "logger", None)
     return getattr(logger, "log_dir", None) if logger is not None else None
 

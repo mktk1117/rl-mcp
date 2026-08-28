@@ -9,7 +9,7 @@ however many times it has been changed.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 from rlmcp.adapters.manager_based.access.base import AccessProvider, Synthetic, Term
 from rlmcp.core.parameters.spec import ParameterCategory
@@ -22,16 +22,16 @@ class ActionAccess(AccessProvider):
 
   def __init__(self, env: Any):
     super().__init__(env)
-    self._baseline: Dict[str, Any] = {}
+    self._baseline: dict[str, Any] = {}
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     # Action term configs hold no independently tunable leaves worth exposing;
     # everything useful goes through the synthetic gain below.
     return []
 
-  def synthetic(self) -> List[Synthetic]:
+  def synthetic(self) -> list[Synthetic]:
     manager = self.manager
-    out: List[Synthetic] = []
+    out: list[Synthetic] = []
     for name in getattr(manager, "active_terms", []) or []:
       if self._scale_of(name) is None:
         continue

@@ -33,7 +33,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from rlmcp import cli_output
 from rlmcp.records.record import FEEDBACK_KINDS
@@ -42,7 +42,7 @@ from rlmcp.session import Session, iter_sessions
 DEFAULT_ROOTS = ("./logs", "./rlmcp_session", ".")
 
 
-def _search_roots(args: argparse.Namespace) -> Tuple[List[str], str]:
+def _search_roots(args: argparse.Namespace) -> tuple[list[str], str]:
   """The roots a bare command searches, and where that list came from.
 
   Precedence matches the MCP server's: an explicit ``--root`` wins, then
@@ -98,7 +98,7 @@ def _remember(session: Session) -> Session:
   return session
 
 
-def _registry_fallback() -> Tuple[Optional[Session], str]:
+def _registry_fallback() -> tuple[Session | None, str]:
   """The newest session the registry can still vouch for, with provenance.
 
   Live registrants outrank dead ones -- "what is running?" is the question a
@@ -141,7 +141,7 @@ def _registry_fallback() -> Tuple[Optional[Session], str]:
   return None, ""
 
 
-def _refuse_no_session(roots: List[str], origin: str) -> None:
+def _refuse_no_session(roots: list[str], origin: str) -> None:
   """Exit with a report: where the search went, and what would point it right.
 
   In JSON mode the refusal is a payload on stdout -- an agent that captured
@@ -201,7 +201,7 @@ _OPEN = "auto"
 
 # The real stdout, set aside while file descriptor 1 is pointed at stderr; see
 # _stdout_reserved_for_the_payload. None whenever no redirect is in force.
-_PAYLOAD_STDOUT: Optional[Any] = None
+_PAYLOAD_STDOUT: Any | None = None
 
 
 @contextlib.contextmanager
@@ -232,10 +232,8 @@ def _stdout_reserved_for_the_payload():
   """
   global _PAYLOAD_STDOUT
   reserved = sys.stdout
-  try:
+  with contextlib.suppress(Exception):
     reserved.flush()
-  except Exception:
-    pass
   try:
     # The duplicate has to answer for the stream it stands in for, encoding
     # included: `os.fdopen` would otherwise take the *locale's* encoding, and
@@ -262,10 +260,8 @@ def _stdout_reserved_for_the_payload():
     _PAYLOAD_STDOUT = None
     sys.stdout = reserved
     if kept is not None:
-      try:
+      with contextlib.suppress(Exception):
         kept.flush()
-      except Exception:
-        pass
       os.dup2(kept.fileno(), 1)
       kept.close()
 
@@ -278,7 +274,7 @@ def _is_descriptor(stream: Any, fd: int) -> bool:
     return False
 
 
-def _emit(payload: Any, pretty: bool = True, *, command: Optional[str] = None) -> None:
+def _emit(payload: Any, pretty: bool = True, *, command: str | None = None) -> None:
   """The one place a payload reaches stdout (``_emit_text`` is the other door).
 
   ``command`` is the *trainer* command name, so ``rlmcp shot`` and
@@ -338,8 +334,8 @@ def _parse_value(text: str) -> Any:
     return text
 
 
-def _kv_pairs(items: Optional[List[str]]) -> Dict[str, Any]:
-  out: Dict[str, Any] = {}
+def _kv_pairs(items: list[str] | None) -> dict[str, Any]:
+  out: dict[str, Any] = {}
   for item in items or []:
     if "=" not in item:
       raise SystemExit(f"Expected key=value, got '{item}'")
@@ -348,7 +344,7 @@ def _kv_pairs(items: Optional[List[str]]) -> Dict[str, Any]:
   return out
 
 
-def _default_metric_names(session: Session, limit: int = 4) -> List[str]:
+def _default_metric_names(session: Session, limit: int = 4) -> list[str]:
   """A sensible default selection, drawn from what this run actually recorded.
 
   Naming metrics up front would bake one task's vocabulary into the CLI -- a
@@ -367,15 +363,15 @@ def _default_metric_names(session: Session, limit: int = 4) -> List[str]:
 
 
 def _offline_series(
-    session: Session, names: List[str], last_n: Optional[int] = None
-) -> Dict[str, List[List[float]]]:
+    session: Session, names: list[str], last_n: int | None = None
+) -> dict[str, list[list[float]]]:
   """Rebuild metric series from metrics.jsonl, for runs that have finished.
 
   ``last_n`` bounds the file read to its tail: rows are one per iteration, so
   the last N rows hold the last N points of every still-recorded metric.
   """
   rows = session.metrics(last_n=last_n)
-  series: Dict[str, List[List[float]]] = {name: [] for name in names}
+  series: dict[str, list[list[float]]] = {name: [] for name in names}
   for row in rows:
     iteration = row.get("iteration")
     for name in names:
@@ -388,7 +384,7 @@ def _offline_series(
 
 
 def _offline_plot(
-    session: Session, names: List[str], last_n: int, smooth: int
+    session: Session, names: list[str], last_n: int, smooth: int
 ) -> int:
   """Plot a finished run's metrics without talking to a training process."""
   try:
@@ -553,7 +549,7 @@ def _record_command(args: argparse.Namespace) -> int:
     # on a fresh read if another writer interleaves), a refusal aborts before
     # any write and leaves the file untouched, and a lost compare-and-swap is
     # retried instead of surfacing as an error.
-    box: Dict[str, Any] = {}
+    box: dict[str, Any] = {}
 
     def close_out(fresh) -> Any:
       if args.outcome:
@@ -601,6 +597,7 @@ def _record_command(args: argparse.Namespace) -> int:
 
       fresh.verdict = args.verdict
       fresh.lease = None
+      return None  # Anything but False: write the record.
 
     try:
       closed = store.update_record(record.id, close_out)
@@ -751,15 +748,15 @@ def _record_command(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
   if action == "graph":
-    from rlmcp.records.views import plot_records, render_records_html
     from rlmcp.records.graph import build, summarize
     from rlmcp.records.poster import ensure_posters
+    from rlmcp.records.views import plot_records, render_records_html
 
     records = store.list_records()
     if not records:
       _emit({"ok": False, "error": "No records to draw."})
       return 1
-    posters: Dict[str, str] = {}
+    posters: dict[str, str] = {}
     if args.png:
       out = Path(args.out or (store.root / "records.png"))
       out.write_bytes(plot_records(records, title=args.title))
@@ -800,7 +797,7 @@ def _record_command(args: argparse.Namespace) -> int:
              "`rlmcp.wrap(code_root=...)`, to stamp the package."})
       return 1
 
-    payload: Dict[str, Any] = {"ok": True, "record": record.id, "code": code}
+    payload: dict[str, Any] = {"ok": True, "record": record.id, "code": code}
     if args.restore:
       payload["restored"] = str(
           snapshot.restore(code["repo"], code["tree"], args.restore))
@@ -880,7 +877,7 @@ def _record_command(args: argparse.Namespace) -> int:
   raise SystemExit(f"Unhandled record command '{action}'")
 
 
-def _parse_conditions(tokens: Optional[List[str]]):
+def _parse_conditions(tokens: list[str] | None):
   """``metric op value`` triples into Conditions."""
   from rlmcp.core.curriculum import Condition
 
@@ -897,7 +894,7 @@ def _parse_conditions(tokens: Optional[List[str]]):
   ]
 
 
-def _falsifier_row(result: Dict[str, Any]) -> str:
+def _falsifier_row(result: dict[str, Any]) -> str:
   """The falsifier's one-line verdict, recorded against the run's metrics."""
   if result.get("too_early"):
     return (
@@ -910,7 +907,7 @@ def _falsifier_row(result: Dict[str, Any]) -> str:
   return state if evaluated_at is None else f"{state} (at iteration {evaluated_at})"
 
 
-def _parse_metrics(items: Optional[List[str]]) -> List[List[str]]:
+def _parse_metrics(items: list[str] | None) -> list[list[str]]:
   """``name=value`` pairs, kept as strings on purpose."""
   out = []
   for item in items or []:
@@ -996,7 +993,8 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("params", help="List tunable parameters")
   p.add_argument("--contains")
   p.add_argument("--category")
-  p.add_argument("--live", action="store_true", help="Ask the trainer instead of reading params.json")
+  p.add_argument("--live", action="store_true",
+                 help="Ask the trainer instead of reading params.json")
 
   p = sub.add_parser("get", help="Read one parameter")
   p.add_argument("key")
@@ -1186,7 +1184,8 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument("--why", default="")
 
   rec = sub.add_parser("record", help="Run records: plans, outcomes, ancestry")
-  rec.add_argument("--records-root", help="Records directory (default: $RLMCP_RECORDS or ./records)")
+  rec.add_argument("--records-root",
+                   help="Records directory (default: $RLMCP_RECORDS or ./records)")
   rec.add_argument("--slots", type=int, default=1,
                    help="How many runs may hold a lease at once (default: 1)")
   record_sub = rec.add_subparsers(dest="record_command", required=True)
@@ -1335,7 +1334,7 @@ def build_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
   """Parse the line, decide who owns stdout, and run the command."""
   global _MODE, _OPEN
 
@@ -1438,7 +1437,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     roots, origin = _search_roots(args)
     seen, rows = set(), []
-    newest: Optional[Session] = None
+    newest: Session | None = None
     newest_started = 0.0
 
     def add(session: Session) -> None:

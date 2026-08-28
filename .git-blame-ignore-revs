@@ -1,0 +1,8 @@
+# Commits that only moved characters around. Teach git to skip them:
+#
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# (GitHub reads this file on its own.)
+
+# Mechanical: what `ruff check --fix` fixes on its own
+78948b8c58e6fa835fb3b047835e09f8f873f70c

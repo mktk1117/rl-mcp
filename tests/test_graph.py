@@ -9,7 +9,10 @@ import pytest
 from rlmcp.records.graph import build, frontier, summarize, to_payload
 from rlmcp.records.record import RunRecord, Weights
 from rlmcp.records.views import (
-    plot_records, plot_run_comparison, render_records_html, vendored,
+  plot_records,
+  plot_run_comparison,
+  render_records_html,
+  vendored,
 )
 
 ENGINES = ["simple"] + (["cytoscape"] if vendored() else [])

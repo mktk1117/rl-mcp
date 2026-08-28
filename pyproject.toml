@@ -42,8 +42,10 @@ server = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
-    "black",
-    "ruff",
+    # Pinned to the version CI runs, so `ruff check` locally and `ruff check` on
+    # a pull request are the same check. black is deliberately absent: it is a
+    # 4-space formatter and this tree indents by two — see [tool.ruff] below.
+    "ruff==0.16.4",
 ]
 mjlab = [
     "mjlab>=1.5.0",
@@ -69,3 +71,101 @@ include = ["rlmcp*"]
 
 [tool.setuptools.package-data]
 rlmcp = ["py.typed"]
+
+# ----------------------------------------------------------------------------
+# Style. Two spaces, one hundred columns, checked by ruff.
+#
+# The style here is descriptive, not aspirational: it was read off the tree
+# that already existed. 99 of 102 modules indent by two, and the 95th
+# percentile line is 79 characters, so `line-length = 100` is a wall to catch
+# the runaway line, not a target to write up to. Keep writing ~80.
+#
+# There is deliberately NO formatter. `ruff format` (and black, which is why it
+# is no longer in the dev extra) is a 4-space formatter — black cannot do two
+# at all — and running either over this tree rewrites 99 files, re-wrapping
+# line breaks that were placed by hand to keep a signature or a dict readable.
+# The line breaks in this repo carry intent. A formatter cannot see that, so
+# the check is a linter and the layout stays a judgement call.
+[tool.ruff]
+line-length = 100
+indent-width = 2
+target-version = "py310"
+# Anchored with a leading slash: a bare "records" would match any path
+# segment of that name and quietly stop linting the rlmcp/records/ package.
+# This is the scratch records/ that appears when somebody runs a record
+# command with $RLMCP_RECORDS unset.
+extend-exclude = ["/records", "/.venv", "/.venv-server"]
+
+[tool.ruff.lint]
+# E1 (indentation) is absent on purpose: those rules assume four spaces.
+select = [
+  "F",      # pyflakes — undefined names, unused imports, redefinitions
+  "E4", "E501", "E7", "E9",  # pycodestyle errors, minus the indent rules
+  "W",      # trailing whitespace and friends
+  "I",      # import order
+  "UP",     # pyupgrade — the repo is py310+, annotations should say so
+  "B",      # bugbear — mutable defaults, loop-variable capture, bare zip
+  "C4",     # comprehension shortcuts
+  "SIM",    # simplifiable branches and context managers
+  "RET",    # return-path consistency
+  "PIE",    # small dead constructs
+  "RUF",    # ruff's own checks
+  "DTZ",    # naive datetimes — a record timestamp without a zone is a bug
+  "ISC",    # implicit string concatenation, i.e. the comma somebody forgot
+  "LOG", "G",  # logging misuse
+  "PLE",    # pylint errors
+  "PLW",    # pylint warnings
+  "TRY",    # exception antipatterns
+]
+
+ignore = [
+  # This codebase writes long, explanatory messages at the raise site on
+  # purpose — an error is supposed to name the fix ("No extension understands
+  # {...}. This run has: ..."). TRY003 would push every one of those into a
+  # custom exception class and make them worse.
+  "TRY003",
+
+  # These helpers are documented to raise ValueError, the CLI turns a
+  # ValueError into a message for the user, and the difference between a wrong
+  # type and a wrong value is not one that surface makes. Switching them to
+  # TypeError is a change to the public behaviour, not a lint fix.
+  "TRY004",
+
+  # Module-level singletons -- the pinned stdout of the payload split, the
+  # once-only entry-point scan, the CLI's output mode -- are the design here,
+  # and `global` is how a module writes to its own state. The alternative is a
+  # class whose only instance is a module.
+  "PLW0603",
+]
+
+# Rules considered and deliberately left out, so nobody re-litigates them:
+#
+#   BLE001 (blind except)     78 hits. Catching everything is the contract for
+#                             inspection code: a screenshot that fails must not
+#                             take the training run down with it.
+#   ARG00x (unused argument)  131 hits. Adapters implement a protocol; an
+#                             implementation that ignores an argument is doing
+#                             its job, not forgetting one.
+#   T201 (print)              45 hits, all in the CLI, which prints for a living.
+#   PLR2004 (magic value)     231 hits, nearly all in test assertions.
+#   C901 / PLR0912 / PLR0913  Real, and not enforceable yet: eleven functions
+#                             score over 15 on mccabe, topping out at 62
+#                             (`_dispatch` in cli.py), and one signature takes
+#                             27 arguments. Tracked as its own issue rather
+#                             than frozen into a threshold that would
+#                             rubber-stamp what is already here.
+#
+# The long form of all of this, with the reasoning, is docs/style.md.
+
+[tool.ruff.lint.isort]
+known-first-party = ["rlmcp"]
+
+[tool.ruff.lint.per-file-ignores]
+# An example is read top to bottom; the import that sets a simulator up has to
+# come after the flags that configure it.
+"examples/*" = ["E402"]
+# The long lines in here are inside the embedded JavaScript of the record
+# graph. A `# noqa` cannot go on a line that is inside a string literal, and
+# re-wrapping somebody else's language to satisfy a Python linter is worse
+# than the long line.
+"rlmcp/records/views.py" = ["E501"]

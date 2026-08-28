@@ -58,9 +58,11 @@ and the accounting.
 
 from __future__ import annotations
 
+import contextlib
 import socket
 import time
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 DEFAULT_PORT = 8740
 """First port tried. Busy ones are skipped -- see :data:`PORT_SEARCH`."""
@@ -121,9 +123,10 @@ def find_free_port(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
       probe.bind((host, candidate))
-      return candidate
     except OSError:
       continue
+    else:
+      return candidate
     finally:
       probe.close()
   raise RuntimeError(
@@ -170,9 +173,9 @@ class LiveView:
       realtime: bool = False,
       buffer_seconds: float = DEFAULT_BUFFER_SECONDS,
       label: str = "rlmcp",
-      server_factory: Optional[Callable[[str, int, str], Any]] = None,
+      server_factory: Callable[[str, int, str], Any] | None = None,
       clock: Callable[[], float] = time.monotonic,
-      status_provider: Optional[Callable[[], str]] = None,
+      status_provider: Callable[[], str] | None = None,
   ):
     self.sim = sim
     self.host = str(host or DEFAULT_HOST)
@@ -205,9 +208,9 @@ class LiveView:
     self.push_ms = 0.0
     self.last_error = ""
     self.stopped_because = ""
-    self._last_push: Optional[float] = None  # None: no frame pushed yet.
-    self._last_watch_check: Optional[float] = None
-    self._last_status: Optional[float] = None
+    self._last_push: float | None = None  # None: no frame pushed yet.
+    self._last_watch_check: float | None = None
+    self._last_status: float | None = None
     self._status_handle: Any = None
     self._pause_button: Any = None
     self._watchers = 0
@@ -263,7 +266,7 @@ class LiveView:
       return True
     return bool(self._scene_can_pause and getattr(self._scene, "paused", False))
 
-  def set_paused(self, paused: bool) -> Dict[str, Any]:
+  def set_paused(self, paused: bool) -> dict[str, Any]:
     """Stop feeding the view, or start again. Returns :meth:`describe`.
 
     Deliberately not a detach: the port stays bound, the scene stays built in
@@ -277,10 +280,8 @@ class LiveView:
     # filling any more it would show motion the run has stopped producing.
     setter = getattr(self._scene, "set_paused", None)
     if setter is not None:
-      try:
+      with contextlib.suppress(Exception):
         setter(self._paused)
-      except Exception:
-        pass
     self._label_pause_button()
     return self.describe()
 
@@ -290,7 +291,7 @@ class LiveView:
 
   # Lifecycle.
 
-  def start(self) -> Dict[str, Any]:
+  def start(self) -> dict[str, Any]:
     """Open the server and build the scene. Returns :meth:`describe`.
 
     Restarting an already-running view is not an error and not a rebuild: the
@@ -404,7 +405,7 @@ class LiveView:
     if declared is SimAdapter.open_live_view:
       declared(self.sim, server=None)  # Raises NotSupported, in the contract's words.
 
-  def stop(self, reason: str = "") -> Dict[str, Any]:
+  def stop(self, reason: str = "") -> dict[str, Any]:
     """Close the scene and give the port back. Safe to call when not running."""
     scene, server = self._scene, self._server
     self._scene, self._server, self._status_handle = None, None, None
@@ -412,10 +413,8 @@ class LiveView:
     self._scene_can_pause = False
     self._hosted = False
     if scene is not None:
-      try:
+      with contextlib.suppress(Exception):
         scene.close()
-      except Exception:
-        pass
     self._close_server(server)
     self.port = 0
     self._watchers = 0
@@ -426,22 +425,20 @@ class LiveView:
   def _close_server(server: Any) -> None:
     if server is None:
       return
-    try:
+    with contextlib.suppress(Exception):
       server.stop()
-    except Exception:
-      pass
 
   def configure(
       self,
-      enabled: Optional[bool] = None,
-      port: Optional[int] = None,
-      host: Optional[str] = None,
-      fps: Optional[float] = None,
-      env_id: Optional[int] = None,
-      realtime: Optional[bool] = None,
-      buffer_seconds: Optional[float] = None,
-      paused: Optional[bool] = None,
-  ) -> Dict[str, Any]:
+      enabled: bool | None = None,
+      port: int | None = None,
+      host: str | None = None,
+      fps: float | None = None,
+      env_id: int | None = None,
+      realtime: bool | None = None,
+      buffer_seconds: float | None = None,
+      paused: bool | None = None,
+  ) -> dict[str, Any]:
     """Read or change the view, starting or stopping it as asked.
 
     Changing the port, the host or the mode of a *running* view restarts it:
@@ -565,10 +562,8 @@ class LiveView:
     tell = getattr(self._scene, "set_watchers", None)
     if tell is None:
       return
-    try:
+    with contextlib.suppress(Exception):
       tell(int(watchers))
-    except Exception:
-      pass
 
   def _add_pause_button(self, server: Any) -> None:
     """Put a pause in the tab, for a mode with no player to put one in.
@@ -677,7 +672,7 @@ class LiveView:
 
   # Reporting.
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     """The status-payload view: where it is, who is on it, what it costs."""
     payload = {
         "running": self.running,
@@ -714,7 +709,7 @@ class LiveView:
       payload["playback"] = described
     return payload
 
-  def _safe_describe(self) -> Dict[str, Any]:
+  def _safe_describe(self) -> dict[str, Any]:
     describe = getattr(self._scene, "describe", None)
     if describe is None:
       return {}

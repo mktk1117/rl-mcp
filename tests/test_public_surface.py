@@ -29,8 +29,8 @@ def _console_scripts() -> dict:
                     _pyproject_text(), re.S | re.M)
   assert block, "pyproject.toml has no [project.scripts] table"
   entries = {}
-  for line in block.group(1).splitlines():
-    line = line.strip()
+  for raw in block.group(1).splitlines():
+    line = raw.strip()
     if not line or line.startswith("#"):
       continue
     name, _, target = line.partition("=")
@@ -82,7 +82,7 @@ def test_version_matches_the_installed_distribution():
   except metadata.PackageNotFoundError:
     pytest.skip("rl-mcp is not installed in this environment")
   assert rlmcp.__version__ == installed
-  assert re.search(r'^version = "%s"$' % re.escape(installed),
+  assert re.search(rf'^version = "{re.escape(installed)}"$',
                    _pyproject_text(), re.M), (
       "the installed distribution disagrees with pyproject.toml; "
       "reinstall, or the version was bumped without a release"

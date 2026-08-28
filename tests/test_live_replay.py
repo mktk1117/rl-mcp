@@ -9,7 +9,7 @@ recorded between windows, and no step costs a device synchronisation.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 
@@ -72,15 +72,14 @@ def _env(num_envs: int = 4, nq: int = 7, nu: int = 3) -> Any:
 
 
 def _view(env: Any = None, seconds: float = 0.2, clock: Any = None) -> Any:
-  view = mod.MjlabReplayView(
+  return mod.MjlabReplayView(
       env=env or _env(), server=object(), scene=FakeScene(), seconds=seconds,
       player_factory=FakePlayer, clock=clock or Clock(),
   )
   # The thread is the player's; with a fake player there is nothing to run.
-  return view
 
 
-def _record(view: Any, steps: int, env_id: int = 0, clock: Optional[Clock] = None,
+def _record(view: Any, steps: int, env_id: int = 0, clock: Clock | None = None,
             dt: float = 0.02) -> None:
   for _ in range(steps):
     if clock is not None:

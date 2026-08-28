@@ -24,7 +24,8 @@ Three rules the protocol exists to enforce:
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any, Protocol
 
 from rlmcp.records.record import Feedback, RunRecord
 
@@ -62,7 +63,7 @@ class MediaStore(Protocol):
   def put(self, run_id: str, path: str, caption: str = "", kind: str = "plots") -> str:
     """Copy a file into the store and return the key to record."""
 
-  def get(self, key: str) -> Optional[str]:
+  def get(self, key: str) -> str | None:
     """A locally readable path for ``key``, or None if it is gone."""
 
   def exists(self, key: str) -> bool:
@@ -91,7 +92,7 @@ class RecordStore(Protocol):
       record_id: str,
       mutate: Callable[[RunRecord], Any],
       retries: int = 3,
-  ) -> Optional[RunRecord]:
+  ) -> RunRecord | None:
     """Re-read, apply ``mutate``, and persist -- retrying on conflict.
 
     The read-modify-write loop every mutating caller needs, so none of them
@@ -101,21 +102,21 @@ class RecordStore(Protocol):
     ``retries`` more times before letting :class:`ConflictError` out.
     """
 
-  def get_record(self, record_id: str) -> Optional[RunRecord]:
+  def get_record(self, record_id: str) -> RunRecord | None:
     ...
 
-  def list_records(self) -> List[RunRecord]:
+  def list_records(self) -> list[RunRecord]:
     """Every record, ordered by ``seq``."""
 
   def query(
       self,
-      stage: Optional[str] = None,
-      verdict: Optional[str] = None,
-      parent: Optional[str] = None,
-      proposed_by: Optional[str] = None,
-      text: Optional[str] = None,
-      limit: Optional[int] = None,
-  ) -> List[RunRecord]:
+      stage: str | None = None,
+      verdict: str | None = None,
+      parent: str | None = None,
+      proposed_by: str | None = None,
+      text: str | None = None,
+      limit: int | None = None,
+  ) -> list[RunRecord]:
     """Filtered listing. ``text`` matches slug, hypothesis and outcome."""
 
   def delete_record(self, record_id: str) -> bool:
@@ -142,11 +143,11 @@ class RecordStore(Protocol):
 
   def feedback_timeline(
       self,
-      kind: Optional[str] = None,
-      author: Optional[str] = None,
+      kind: str | None = None,
+      author: str | None = None,
       outstanding: bool = False,
-      limit: Optional[int] = None,
-  ) -> List[Dict[str, Any]]:
+      limit: int | None = None,
+  ) -> list[dict[str, Any]]:
     """Every remark across the whole store, oldest first.
 
     The cross-run question -- "when did they say what, and what came of it" --
@@ -162,7 +163,7 @@ class RecordStore(Protocol):
       slot: str,
       holder: str = "",
       ttl_seconds: float = 900.0,
-      owner: Optional[str] = None,
+      owner: str | None = None,
   ) -> RunRecord:
     """Take ``slot`` for this record, or raise :class:`SlotUnavailable`.
 
@@ -172,13 +173,13 @@ class RecordStore(Protocol):
     claim that names a ``holder`` is the runner path, a bare claim is manual.
     """
 
-  def heartbeat(self, record_id: str) -> Optional[RunRecord]:
+  def heartbeat(self, record_id: str) -> RunRecord | None:
     """Renew the record's lease. Returns None if it holds none."""
 
-  def release(self, record_id: str) -> Optional[RunRecord]:
+  def release(self, record_id: str) -> RunRecord | None:
     ...
 
-  def reap_expired(self) -> List[RunRecord]:
+  def reap_expired(self) -> list[RunRecord]:
     """Move records whose job has died to ``interrupted``.
 
     That covers a dead lease, and a ``running`` record with no lease at all
@@ -211,7 +212,7 @@ def next_display_id(existing: Iterable[str], width: int = 3) -> str:
   return str(highest + 1).zfill(width)
 
 
-def summarize_lease(record: RunRecord, now: Optional[float] = None) -> Dict[str, Any]:
+def summarize_lease(record: RunRecord, now: float | None = None) -> dict[str, Any]:
   """Human-readable lease state for a status payload."""
   if record.lease is None:
     return {"held": False}
@@ -227,5 +228,5 @@ def summarize_lease(record: RunRecord, now: Optional[float] = None) -> Dict[str,
   }
 
 
-def records_by_id(records: Sequence[RunRecord]) -> Dict[str, RunRecord]:
+def records_by_id(records: Sequence[RunRecord]) -> dict[str, RunRecord]:
   return {r.id: r for r in records}
