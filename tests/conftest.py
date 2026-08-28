@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pytest
+import torch
 
 from rlmcp.adapters.base import (
     CHANNEL_ACTION,
@@ -341,3 +342,94 @@ def fake_terrain(fake_sim) -> FakeTerrainExtension:
 @pytest.fixture
 def fake_runner() -> FakeRunnerAdapter:
   return FakeRunnerAdapter()
+
+
+# A legged-gym-shaped environment, for the second adapter family.
+
+
+class FakeFlatEnv:
+  """A Go2Env-shaped environment, down to the traps."""
+
+  def __init__(self, num_envs: int = 4):
+    self.num_envs = num_envs
+    self.dt = 0.02
+
+    self.env_cfg = {
+        "num_actions": 12,
+        "action_scale": 0.25,
+        "clip_actions": 100.0,
+        "episode_length_s": 20.0,
+        "resampling_time_s": 4.0,
+        "termination_if_pitch_greater_than": 10.0,
+        "termination_if_roll_greater_than": 10.0,
+        "kp": 20.0,
+        "kd": 0.5,
+        "joint_names": ["FL_hip", "FL_thigh"],
+        "base_init_pos": [0.0, 0.0, 0.42],
+    }
+    self.reward_cfg = {
+        "tracking_sigma": 0.25,
+        "base_height_target": 0.3,
+        "reward_scales": {
+            "tracking_lin_vel": 1.0,
+            "lin_vel_z": -1.0,
+            "action_rate": -0.005,
+        },
+    }
+    self.command_cfg = {
+        "num_commands": 3,
+        "lin_vel_x_range": [0.5, 1.5],
+        "lin_vel_y_range": [-0.5, 0.5],
+        "ang_vel_range": [-1.0, 1.0],
+    }
+    self.obs_cfg = {"obs_scales": {"lin_vel": 2.0}}
+
+    # Exactly what Go2Env.__init__ does, in the order it does it.
+    self.reward_scales = self.reward_cfg["reward_scales"]
+    self.commands_limits = tuple(
+        torch.tensor(values, dtype=torch.float32)
+        for values in zip(
+            self.command_cfg["lin_vel_x_range"],
+            self.command_cfg["lin_vel_y_range"],
+            self.command_cfg["ang_vel_range"],
+        )
+    )
+    self.reward_functions = {}
+    for name in self.reward_scales:
+      self.reward_scales[name] *= self.dt
+      self.reward_functions[name] = lambda: torch.ones(self.num_envs)
+
+    # The per-step buffers step() writes, which is where traces read from.
+    n, j = num_envs, len(self.env_cfg["joint_names"])
+    self.dof_pos = torch.zeros(n, j)
+    self.dof_vel = torch.zeros(n, j)
+    self.actions = torch.zeros(n, j)
+    self.last_actions = torch.zeros(n, j)
+    self.base_lin_vel = torch.zeros(n, 3)
+    self.base_ang_vel = torch.zeros(n, 3)
+    self.base_pos = torch.zeros(n, 3)
+    self.projected_gravity = torch.tensor([[0.0, 0.0, -1.0]] * n)
+    self.rew_buf = torch.zeros(n)
+    self.commands = torch.zeros(n, 3)
+    self.episode_length_buf = torch.zeros(n, dtype=torch.long)
+    self.max_episode_length = 1000
+    self.extras = {}
+
+  def total_reward(self) -> float:
+    """One step's reward, computed the way the env computes it."""
+    return float(
+        sum(fn() * self.reward_scales[name]
+            for name, fn in self.reward_functions.items())[0]
+    )
+
+  def sample_command(self, channel: int) -> tuple:
+    """The bounds the resampler would draw channel ``channel`` from."""
+    lower, upper = self.commands_limits
+    return float(lower[channel]), float(upper[channel])
+
+
+@pytest.fixture
+def flat_env() -> FakeFlatEnv:
+  """A Go2Env-shaped environment: dict configs, flat buffers, and the traps
+  that come with both. See tests/test_flat_env_access.py for what they are."""
+  return FakeFlatEnv()
