@@ -223,9 +223,10 @@ and the MCP-server tests skip unless the optional `mcp` package is installed.
 ## Style: two spaces, and a linter that says so
 
 `ruff check` is the whole style guide, and `[tool.ruff]` in `pyproject.toml` is
-where it is written down. Two-space indent, 100 columns as a wall (write to
-~80), `from __future__` not needed — this is a py310+ tree and the annotations
-should read like one.
+where it is written down. Two-space indent, four for a continuation, 100 columns
+as a wall (write to ~80), and annotations that read like the py310+ tree this
+is. [docs/style.md](docs/style.md) is the long form: what every rule is doing
+there, why the ones that are off are off, and how to spell a `noqa`.
 
 ```bash
 uvx ruff@0.16.4 check rlmcp tests examples      # what CI runs

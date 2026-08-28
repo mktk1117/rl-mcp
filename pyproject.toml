@@ -148,10 +148,14 @@ ignore = [
 #                             its job, not forgetting one.
 #   T201 (print)              45 hits, all in the CLI, which prints for a living.
 #   PLR2004 (magic value)     231 hits, nearly all in test assertions.
-#   C901 / PLR0912 / PLR0913  Real, and not enforceable yet: the worst function
-#                             in the tree scores 214 on mccabe. Tracked as its
-#                             own issue rather than frozen into a threshold
-#                             that would rubber-stamp what is already here.
+#   C901 / PLR0912 / PLR0913  Real, and not enforceable yet: eleven functions
+#                             score over 15 on mccabe, topping out at 62
+#                             (`_dispatch` in cli.py), and one signature takes
+#                             27 arguments. Tracked as its own issue rather
+#                             than frozen into a threshold that would
+#                             rubber-stamp what is already here.
+#
+# The long form of all of this, with the reasoning, is docs/style.md.
 
 [tool.ruff.lint.isort]
 known-first-party = ["rlmcp"]
