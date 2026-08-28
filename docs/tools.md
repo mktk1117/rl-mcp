@@ -66,6 +66,14 @@ output. Present and the command is not `record`, take `"result"` on success and
 `"error"` on failure. Every command's family is pinned by
 `tests/test_cli_output.py`, so none of it can drift silently.
 
+**One document, and nothing else.** In JSON mode stdout carries the payload and
+nothing but the payload, so `json.loads` on the whole of it works. Anything the
+command says on the way — a note from the CLI, a simulator announcing its
+version and every kernel it compiles from inside native code — goes to stderr,
+where it is still there to read. `rlmcp train` and `rlmcp serve` are outside
+this: the trainer's stdout is yours, and the MCP server speaks its protocol on
+stdout. Text mode is untouched; watching a viewer build is the point of it.
+
 ## Quick index
 
 | what you want | command | MCP tool |

@@ -27,6 +27,7 @@ simulator lives in the training process, not here.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -198,16 +199,89 @@ def _refuse_no_session(roots: List[str], origin: str) -> None:
 _MODE = "json"
 _OPEN = "auto"
 
+# The real stdout, set aside while file descriptor 1 is pointed at stderr; see
+# _stdout_reserved_for_the_payload. None whenever no redirect is in force.
+_PAYLOAD_STDOUT: Optional[Any] = None
+
+
+@contextlib.contextmanager
+def _stdout_reserved_for_the_payload():
+  """Keep stdout clear of everything except the JSON document, for one command.
+
+  ``_emit`` is the only thing in *this module* that writes to stdout, but it is
+  a long way from being the only thing in the process that does. Any command
+  that builds an environment imports Warp and mujoco_warp, which announce their
+  version, their CUDA toolkit, their device list and every kernel they compile.
+  So a caller who did what ``docs/tools.md`` promises and piped us into
+  ``json.loads`` got a parse error over a payload that was perfectly good.
+
+  Those announcements come out of native code, straight to descriptor 1, where
+  reassigning ``sys.stdout`` cannot reach them -- so the descriptor is
+  redirected too: 1 points at 2 for the length of the command, and the original
+  is kept aside for the payload. Both levels are moved, because either one
+  alone leaves a hole: the descriptor for the simulator, ``sys.stdout`` for the
+  case where something in front of us has already replaced it.
+
+  Nothing is lost. The announcements still reach a terminal, on the stream that
+  was already carrying this CLI's own notes, and a person watching gets the
+  same output they always did. Only the pipe gets a stricter promise.
+
+  Restoring in ``finally`` is the point of the context manager: a command that
+  raises on the way out must leave a working stdout behind it, so the traceback
+  and the shell that follows land somewhere a person can see.
+  """
+  global _PAYLOAD_STDOUT
+  reserved = sys.stdout
+  try:
+    reserved.flush()
+  except Exception:
+    pass
+  try:
+    kept = os.fdopen(os.dup(1), "w")
+    os.dup2(2, 1)
+  except (OSError, ValueError):
+    # Nothing to shuffle -- stdout closed, or an embedder holding something
+    # unusual. Swapping sys.stdout alone is still worth having, and a tidier
+    # pipe is not worth failing the command over.
+    kept = None
+  # Only when the reserved stream *is* the descriptor just borrowed does the
+  # payload need the duplicate. When it is not, the caller has already said
+  # where its output goes, and that answer outranks ours.
+  _PAYLOAD_STDOUT = kept if kept and _is_descriptor(reserved, 1) else reserved
+  sys.stdout = sys.stderr
+  try:
+    yield
+  finally:
+    _PAYLOAD_STDOUT = None
+    sys.stdout = reserved
+    if kept is not None:
+      try:
+        kept.flush()
+      except Exception:
+        pass
+      os.dup2(kept.fileno(), 1)
+      kept.close()
+
+
+def _is_descriptor(stream: Any, fd: int) -> bool:
+  """Whether ``stream`` writes to file descriptor ``fd``, as far as it will say."""
+  try:
+    return stream.fileno() == fd
+  except Exception:  # No fileno at all, or a closed or detached stream.
+    return False
+
 
 def _emit(payload: Any, pretty: bool = True, *, command: Optional[str] = None) -> None:
-  """The one place anything reaches stdout.
+  """The one place a payload reaches stdout (``_emit_text`` is the other door).
 
   ``command`` is the *trainer* command name, so ``rlmcp shot`` and
   ``rlmcp run screenshot`` render through the same formatter; it is ignored
   in JSON mode, where the bytes must not depend on how the call was spelled.
   """
   if _MODE != "text":
-    print(json.dumps(payload, indent=2 if pretty else None, default=str))
+    # file=None means sys.stdout, which is right whenever nothing was reserved.
+    print(json.dumps(payload, indent=2 if pretty else None, default=str),
+          file=_PAYLOAD_STDOUT)
     return
   print(cli_output.render(payload, command))
   shown, held = cli_output.show_artifacts(payload, _OPEN)
@@ -216,6 +290,16 @@ def _emit(payload: Any, pretty: bool = True, *, command: Optional[str] = None) -
       print(cli_output.note(f"-> opened {path} ({how})"))
   if held and _OPEN != "never":
     print(cli_output.note(f"-> {len(held)} artifact(s) not opened; --open to show"))
+
+
+def _emit_text(text: str) -> None:
+  """An answer that was never JSON -- ``record timeline --markdown``.
+
+  It is still the answer, so it goes where a payload goes rather than joining
+  the noise that gets moved aside: somebody redirecting the ledger into a file
+  wants the ledger in the file.
+  """
+  print(text, file=_PAYLOAD_STDOUT)
 
 
 def _call(session: Session, cmd: str, timeout: float, **args: Any) -> int:
@@ -608,7 +692,7 @@ def _record_command(args: argparse.Namespace) -> int:
       out.write_text(text)
       _emit({"ok": True, "path": str(out), "count": len(rows)})
     else:
-      print(text)
+      _emit_text(text)
     return 0
 
   if action == "asset":
@@ -1198,11 +1282,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+  """Parse the line, decide who owns stdout, and run the command."""
   global _MODE, _OPEN
 
   # `train` and `serve` launch a process rather than talking to one, and their
   # flags are their own. Hand the rest of the line over before argparse claims
   # it. Imported lazily: `rlmcp status` should not pay for mjlab or torch.
+  #
+  # They are also the two commands whose stdout is not ours to touch. The
+  # trainer's stdout is the user's -- its progress lines are the run. The MCP
+  # server *speaks* JSON-RPC on stdout, one message per line, and redirecting
+  # that would take the protocol with it. Handing over here, above the
+  # redirect, is what keeps both of them out of it.
   head = list(sys.argv[1:] if argv is None else argv)
   if head and head[0] == "train":
     from rlmcp.train import main as train_main
@@ -1212,10 +1303,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     return serve_main(head[1:])
 
   args = build_parser().parse_args(argv)
-  cmd = args.command
-  timeout = args.timeout
+  # Resolved here rather than in _dispatch, because _dispatch runs with the
+  # descriptor already borrowed: `resolve_mode` asks stdout whether it is a
+  # terminal, and by then stdout is stderr and would answer for it.
   _MODE = cli_output.resolve_mode(getattr(args, "output", None))
   _OPEN = cli_output.resolve_open(getattr(args, "open_policy", None))
+  if _MODE == "text":
+    # Somebody is watching. A viewer coming up, a renderer warming, a simulator
+    # naming its device -- that is progress, and it belongs on their screen.
+    return _dispatch(args)
+  with _stdout_reserved_for_the_payload():
+    return _dispatch(args)
+
+
+def _dispatch(args: argparse.Namespace) -> int:
+  """Every command, one `if` each, ending in `_emit` or a `_call`."""
+  cmd = args.command
+  timeout = args.timeout
 
   if cmd == "sessions":
     from rlmcp import registry

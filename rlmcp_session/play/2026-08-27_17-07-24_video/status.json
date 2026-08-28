@@ -1,0 +1,42 @@
+{
+  "updated_at": 1787875644.8024957,
+  "iteration": 0,
+  "total_env_steps": 20,
+  "num_envs": 2,
+  "paused": false,
+  "stop_requested": false,
+  "headline_metrics": {},
+  "num_parameters": 8,
+  "renderer_built": true,
+  "pending_jobs": [],
+  "progress_video": {
+    "enabled": false,
+    "every": null,
+    "cadence": "",
+    "cadence_prose": "no clips",
+    "seconds": 4.0,
+    "env_id": 0,
+    "next_iteration": null,
+    "clips": 0,
+    "skipped": 0,
+    "megabytes": 0.0,
+    "budget_mb": 200.0,
+    "last_iteration": null,
+    "last_path": "",
+    "last_error": "",
+    "stopped_because": "",
+    "at": 1787875644.802453
+  },
+  "extensions": {
+    "play_policy": {
+      "checkpoint": "zero",
+      "iteration": -1,
+      "stage": null,
+      "swaps": 0
+    }
+  },
+  "records": {
+    "registered": false,
+    "warning": "run has no lab record"
+  }
+}
