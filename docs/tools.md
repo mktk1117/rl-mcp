@@ -70,6 +70,7 @@ output. Present and the command is not `record`, take `"result"` on success and
 
 | what you want | command | MCP tool |
 | --- | --- | --- |
+| what could I run at all | [`tasks`](#tasks) | (CLI only) |
 | what runs exist | [`sessions`](#sessions) | `list_sessions` |
 | point at another run | (use `--session`) | `switch_session` |
 | how is it doing | [`status`](#status) | `get_training_status` |
@@ -92,6 +93,47 @@ output. Present and the command is not `record`, take `"result"` on success and
 | watch a finished run | [`play`](#play) | (CLI only) |
 | what code a run used | [`record code`](records.md#what-the-code-was-the-other-half-of-a-recipe) | (CLI only) |
 | the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
+
+---
+
+# Before there is a run
+
+## `tasks`
+
+Every task id this environment can drive, whether or not one has ever been
+trained. Everything else here starts from a session; this is the one question a
+task being *built* can ask, because it has no runs yet to be found by.
+
+```bash
+rlmcp tasks
+rlmcp tasks --task-package my_project.tasks       # yours, imported first
+rlmcp tasks --contains steering                   # narrow the list
+```
+
+```
+task                             backend  package               experiment
+Smp-Steering-Rough-G1            mjlab    smp_locomotion.tasks  smp_steering_rough_g1
+Smp-Steering-Rough-LowNoise-G1   mjlab    smp_locomotion.tasks  smp_steering_rough_g1
+Mjlab-Velocity-Rough-Unitree-G1  mjlab                          g1_velocity
+```
+
+| column | what it is |
+| --- | --- |
+| `task` | the id `--task` takes |
+| `backend` | which simulator's registry it came from |
+| `package` | the import that registered it — what to name in `--task-package` or `$RLMCP_TASK_PACKAGES`. Blank means the backend ships it, so nothing needs importing |
+| `experiment` | the log directory its runs land in. Two ids sharing one is worth knowing before you go looking for a run |
+
+The reply also carries `packages` and `backends`, and both matter when the list
+is empty: **a package that would not import** is the usual reason an id is
+missing, and it is invisible in the list itself — the task is simply not there —
+so its `ImportError` comes back with it. And **no backend installed** is a
+different answer from **no tasks registered**; a caller that cannot tell them
+apart will send somebody to fix the wrong thing.
+
+Nothing is discovered. Only packages you name are imported, because a listing
+that goes looking for packages on disk is a listing that runs code nobody asked
+it to.
 
 ---
 
