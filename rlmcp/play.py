@@ -29,6 +29,13 @@ viewer:
 * ``--mode native`` opens MuJoCo's own viewer, for looking closely at a robot
   that is in front of you.
 * ``--mode viser`` serves a viewer in the browser, for a robot that is not.
+* ``--mode hold`` opens no viewer at all. It steps the environment at its own
+  clock and waits, which turns a task into something you can *drive*: attach a
+  view with ``rlmcp view --on``, take frames with ``rlmcp shot``, change a
+  weight with ``rlmcp set`` and watch what it does, and end it with
+  ``rlmcp stop``. A viewer is one way to look at an environment; this is the
+  mode for every other way, and the one that does not need a display, a GPU or
+  a checkpoint.
 
 Neither viewer is required to be installed: a build without them says so and
 points at ``--mode video``, rather than failing on import.
@@ -75,7 +82,7 @@ from rlmcp.core.replay import (
     with_overrides,
 )
 
-MODES = ("video", "native", "viser")
+MODES = ("video", "native", "viser", "hold")
 POLICIES = ("checkpoint", "zero", "random")
 
 TASK_PACKAGES_ENV = "RLMCP_TASK_PACKAGES"
@@ -682,6 +689,8 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
   try:
     if cfg.mode == "video":
       result.update(_record(cfg, env, vec_env, policy, checkpoint, session_dir))
+    elif cfg.mode == "hold":
+      result.update(_hold(cfg, env, vec_env, policy))
     else:
       result.update(_view(cfg, env, vec_env, policy))
   finally:
@@ -695,6 +704,103 @@ def run_play(cfg: PlayConfig) -> Dict[str, Any]:
     result["policy_swaps"] = policy.swaps
     result["final_checkpoint"] = str(policy.checkpoint)
   return result
+
+
+def _hold(cfg: PlayConfig, env: Any, vec_env: Any, policy: Any) -> Dict[str, Any]:
+  """Step the environment, serve nothing, and wait to be told what to do.
+
+  The three modes above all end with somebody *looking* at the robot -- a file,
+  a window, a browser tab. This one is for everything else you might want to do
+  with an environment that is already built: a live view attached later, a
+  screenshot, a parameter changed to see what it does, a reset. All of those
+  are already commands a play session answers; what was missing was a way to
+  keep the session alive without opening a viewer to do it.
+
+  So: no renderer, no window, no port. It needs no display, no GPU and no
+  checkpoint, which is what makes ``--policy zero --mode hold`` the cheapest
+  way to have a task standing in front of you.
+
+  It steps at the environment's own control rate rather than as fast as the
+  machine allows. An unpaced hold advances simulated time about as fast as the
+  CPU can integrate it, so anything attached to it -- a live view, a clip --
+  shows a robot sprinting, and any measurement of "per second" is measuring
+  the machine rather than the task. The pacing is dropped, with a warning, only
+  if the loop cannot keep up.
+
+  Ends on ``--seconds`` if one was given, and otherwise when somebody says
+  ``rlmcp stop``: the same :class:`~rlmcp.core.controller.SessionStopped` the
+  viewers unwind on, at the same service boundary, so a held session records
+  its end exactly as a watched one does.
+  """
+  from rlmcp.core.controller import SessionStopped
+
+  lab = env.rlmcp
+  dt = 0.0
+  try:
+    dt = float(lab.sim.step_dt())
+  except Exception:
+    dt = 0.0
+
+  if not cfg.quiet:
+    session = lab.session.dir
+    print(
+        f"[rlmcp-play] holding {cfg.num_envs} env(s); nothing is being served.\n"
+        f"[rlmcp-play]   rlmcp --session {session} view --on\n"
+        f"[rlmcp-play]   rlmcp --session {session} shot\n"
+        f"[rlmcp-play]   rlmcp --session {session} set <key> <value> --why ...\n"
+        f"[rlmcp-play]   rlmcp --session {session} stop",
+        flush=True,
+    )
+
+  obs = None
+  try:
+    obs = vec_env.get_observations()
+    if isinstance(obs, tuple):
+      obs = obs[0]
+  except Exception:
+    obs = None
+
+  steps = 0
+  behind = 0
+  started = time.time()
+  deadline = started + cfg.seconds if cfg.seconds and cfg.seconds > 0 else 0.0
+  stopped = ""
+  try:
+    while True:
+      if deadline and time.time() >= deadline:
+        break
+      due = time.time() + dt
+      result = vec_env.step(policy(obs))
+      obs = result[0]
+      if isinstance(obs, tuple):
+        obs = obs[0]
+      steps += 1
+      if dt:
+        remaining = due - time.time()
+        if remaining > 0:
+          time.sleep(remaining)
+        else:
+          behind += 1
+  except SessionStopped as stop:
+    stopped = _stop_state(lab, stop)
+  else:
+    stopped = _stop_state(lab)
+
+  if behind and not cfg.quiet:
+    print(f"[rlmcp-play] fell behind real time on {behind} of {steps} steps; "
+          "the robot you are watching is slower than the task's own clock.",
+          flush=True)
+  if stopped and not cfg.quiet:
+    print(f"[rlmcp-play] stopped: {stopped}", flush=True)
+  return {
+      "held": True,
+      "steps": steps,
+      "seconds": round(time.time() - started, 2),
+      "step_dt": dt,
+      "behind_steps": behind,
+      "stopped": bool(stopped),
+      "stop_reason": stopped or None,
+  }
 
 
 def _stop_state(lab: Any, error: Optional[BaseException] = None) -> str:
@@ -1125,13 +1231,18 @@ def add_arguments(parser: Any) -> Any:
       help="Checkpoint .pt, or a run directory to take the latest one from",
   )
   parser.add_argument("--mode", default="video", choices=list(MODES),
-                      help="video: render an mp4. native/viser: open a viewer.")
+                      help="video: render an mp4. native/viser: open a viewer. "
+                           "hold: step it and serve nothing, so rlmcp commands "
+                           "can drive it.")
   parser.add_argument(
       "--policy", default="checkpoint", choices=list(POLICIES),
       help="Where actions come from. zero/random need no checkpoint, so they "
            "are how you look at a task that does not train yet (needs --task).",
   )
-  parser.add_argument("--seconds", type=float, default=8.0)
+  parser.add_argument(
+      "--seconds", type=float, default=None,
+      help="video: how long a clip. hold: how long to hold, 0 for until "
+           "`rlmcp stop`. Defaults: 8 for a clip, 0 for a hold.")
   parser.add_argument("--out", default="", help="Video path (video mode)")
   parser.add_argument("--fps", type=int, default=None)
   parser.add_argument("--num-envs", type=int, default=1)
@@ -1172,12 +1283,17 @@ def add_arguments(parser: Any) -> Any:
 
 
 def config_from_args(args: Any, overrides: Dict[str, Any]) -> PlayConfig:
+  # A clip has a natural length and a hold does not, so the default differs by
+  # mode rather than by one number that is wrong for one of them.
+  seconds = args.seconds
+  if seconds is None:
+    seconds = 0.0 if args.mode == "hold" else 8.0
   return PlayConfig(
       checkpoint=args.checkpoint,
       task=args.task,
       mode=args.mode,
       policy=args.policy,
-      seconds=args.seconds,
+      seconds=seconds,
       num_envs=args.num_envs,
       device=args.device,
       out=args.out,
