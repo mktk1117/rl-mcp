@@ -225,7 +225,10 @@ class LiveView:
 
   @property
   def running(self) -> bool:
-    return self._scene is not None
+    # The *server* is what a browser connects to. The scene is only how it
+    # gets fed, and a view whose scene belongs to somebody else -- see
+    # :meth:`host_for_viewer` -- is running in every sense a caller cares about.
+    return self._server is not None
 
   @property
   def url(self) -> str:
@@ -332,6 +335,49 @@ class LiveView:
     self._last_status = None
     self._last_watch_check = None
     return self.describe()
+
+  def host_for_viewer(self) -> Any:
+    """Open the server and let somebody else put the scene on it.
+
+    For a play session. There, mjlab's own ``ViserPlayViewer`` already owns the
+    simulation loop and builds a panel far richer than this class should ever
+    grow -- reward bars, term plots, camera feeds, the command sliders, the
+    debug visualisers -- and it takes a ``viser_server`` for exactly this.
+    Without this method a play session runs *two* viser servers: mjlab's, on
+    its own default port with the whole GUI, and this one, on the port the
+    session publishes, mirroring the same environment through a much smaller
+    panel. Whoever is watching gets whichever port they were told about, and
+    the one rlmcp tells them about is the poorer of the two.
+
+    So: this class keeps what it is good at -- picking a free port, publishing
+    the url, putting the run's own numbers at the top of the panel, closing it
+    all at the end -- and hands the server to the viewer that owns the
+    environment. It pushes nothing afterwards; ``tick`` is a no-op with no
+    scene, which is already how it is written.
+
+    Returns the viser server, or ``None`` if this install has no viser.
+    """
+    if self._server is not None:
+      return self._server
+    started = time.perf_counter()
+    self.port = find_free_port(self.host, self.requested_port)
+    try:
+      server = self._server_factory(self.host, self.port, self.label)
+    except Exception as exc:
+      # A play session without viser is not a broken session -- `--mode video`
+      # and `--mode native` never needed it. The caller falls back to letting
+      # the viewer open its own.
+      self.last_error = f"{type(exc).__name__}: {exc}"
+      self.port = 0
+      return None
+    self._open_status_panel(server)
+    self._server = server
+    self.startup_ms = round((time.perf_counter() - started) * 1000.0, 1)
+    self.failures = 0
+    self.frames = 0
+    self.last_error = ""
+    self.stopped_because = ""
+    return server
 
   def _refuse_a_backend_with_no_view(self) -> None:
     """Answer "this backend has no live view" before spending anything on one.

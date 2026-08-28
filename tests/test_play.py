@@ -12,6 +12,8 @@ Nothing here imports a simulator, and every fixture is built in ``tmp_path``.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from typing import Any, Dict
 
 import pytest
 
@@ -792,3 +794,81 @@ def test_the_policy_choice_round_trips_through_the_command_line():
 
   assert config_from_args(args, {}).policy == "random"
   assert "checkpoint" in POLICIES
+
+
+# ── one server, and mjlab's panel on it ───────────────────────────────────
+class _RecordingViewer:
+  """A stand-in for mjlab's viewer that remembers how it was built."""
+
+  seen: Dict[str, Any] = {}
+
+  def __init__(self, vec_env, policy, **kwargs):
+    _RecordingViewer.seen = dict(kwargs)
+
+  def run(self) -> None:
+    pass
+
+
+def _stub_viewers(monkeypatch) -> None:
+  """Stand in for both mjlab viewers.
+
+  Patched on `mjlab.viewer`, not on `rlmcp.play`: `_view` imports them inside
+  the function, so the name this test has to replace is the one it reads.
+  """
+  import mjlab.viewer as mjlab_viewer
+
+  monkeypatch.setattr(mjlab_viewer, "NativeMujocoViewer", _RecordingViewer)
+  monkeypatch.setattr(mjlab_viewer, "ViserPlayViewer", _RecordingViewer)
+  _RecordingViewer.seen = {}
+
+
+def _viewer_cfg(mode: str):
+  from rlmcp.play import PlayConfig
+  return PlayConfig(checkpoint=None, mode=mode, task="Example-Task-v0")
+
+
+def test_the_viewer_is_given_the_session_s_own_server(play_lab, monkeypatch):
+  """The bug: a play session served the same environment twice -- mjlab's
+  viewer on its own port with the full GUI, and the session's live view on the
+  port `status` publishes with a much smaller one. Whoever read `status` went
+  to the poorer panel. One server now, and mjlab draws on it."""
+  import rlmcp.play as play_module
+
+  sentinel = object()
+  monkeypatch.setattr(play_lab.live_view, "host_for_viewer", lambda: sentinel)
+  _stub_viewers(monkeypatch)
+
+  env = SimpleNamespace(rlmcp=play_lab)
+  play_module._view(_viewer_cfg("viser"), env, object(), object())
+
+  assert _RecordingViewer.seen.get("viser_server") is sentinel
+
+
+def test_the_native_viewer_is_not_handed_a_viser_server(play_lab, monkeypatch):
+  """`--mode native` opens a window, not a port, and would reject the argument."""
+  import rlmcp.play as play_module
+
+  asked = []
+  monkeypatch.setattr(play_lab.live_view, "host_for_viewer",
+                      lambda: asked.append(1))
+  _stub_viewers(monkeypatch)
+
+  env = SimpleNamespace(rlmcp=play_lab)
+  play_module._view(_viewer_cfg("native"), env, object(), object())
+
+  assert not asked, "a native viewer needs no server bound on its behalf"
+  assert "viser_server" not in _RecordingViewer.seen
+
+
+def test_an_install_without_viser_still_plays(play_lab, monkeypatch):
+  """`host_for_viewer` answers None when no server could be opened. That is the
+  old behaviour exactly: let the viewer open whatever it can."""
+  import rlmcp.play as play_module
+
+  monkeypatch.setattr(play_lab.live_view, "host_for_viewer", lambda: None)
+  _stub_viewers(monkeypatch)
+
+  env = SimpleNamespace(rlmcp=play_lab)
+  play_module._view(_viewer_cfg("viser"), env, object(), object())
+
+  assert "viser_server" not in _RecordingViewer.seen

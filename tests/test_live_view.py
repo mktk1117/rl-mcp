@@ -691,3 +691,56 @@ def test_pause_is_reported_and_said_plainly(servers):
   assert view.describe()["paused"] is True
   assert "paused" in view.prose()
   assert view.url in view.prose()
+# ── hosting somebody else's scene ─────────────────────────────────────────
+def test_a_hosted_view_serves_without_a_scene_of_its_own(servers):
+  """`host_for_viewer()` is for a play session, where mjlab's viewer owns the simulation
+  loop and draws a far richer panel than this class should. LiveView keeps the
+  port, the url and the status panel; the scene is the viewer's."""
+  sim = ViewableSim()
+  view = _view(sim)
+
+  server = view.host_for_viewer()
+
+  assert server is servers[0]
+  assert view.running, "a hosted view is running: a browser can connect to it"
+  assert view.url.endswith(str(view.port))
+  assert not sim.opened, "the backend's own scene is exactly what is not built"
+  assert view.describe()["url"] == view.url
+
+
+def test_a_hosted_view_pushes_nothing(servers):
+  """Whoever owns the scene owns the pushing. Ticking a hosted view must not
+  touch the simulator -- in a play session another thread is stepping it."""
+  scene = FakeScene()
+  sim = ViewableSim(scene=scene)
+  view = _view(sim)
+  view.host_for_viewer()
+
+  for _ in range(10):
+    view.tick()
+
+  assert scene.updates == [], "a hosted view has no scene to update"
+
+
+def test_hosting_twice_returns_the_one_server(servers):
+  """The viewer asks once, but a session that restarts a view must not leave a
+  port bound behind it."""
+  view = _view(ViewableSim())
+
+  first = view.host_for_viewer()
+  second = view.host_for_viewer()
+
+  assert first is second
+  assert len(servers) == 1
+
+
+def test_a_hosted_view_gives_the_port_back(servers):
+  """LiveView opened the server, so LiveView closes it -- mjlab's viewer is a
+  guest on it and leaves an external server alone."""
+  view = _view(ViewableSim())
+  view.host_for_viewer()
+
+  view.stop("the run ended")
+
+  assert servers[0].stopped
+  assert not view.running
