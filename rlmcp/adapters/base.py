@@ -298,6 +298,34 @@ class SimAdapter(ABC):
   def set_env_state(self, state: Dict[str, Any]) -> None:
     return None
 
+  # Optional: growing the reward function.
+
+  def add_reward_term(
+      self,
+      name: str,
+      func: Any,
+      weight: float,
+      params: Optional[Dict[str, Any]] = None,
+  ) -> Dict[str, Any]:
+    """Append a reward term to the running environment.
+
+    The counterpart of :meth:`set_parameter` for the case where no existing
+    weight expresses what the agent wants: a term the task never had, scoring
+    from the next batch on. ``func`` is already a callable -- compiling the
+    agent's source and deciding whether to trust it happens above this layer,
+    in :mod:`rlmcp.core.reward_source` and the controller.
+
+    An implementation must be all-or-nothing: a term that cannot be installed
+    leaves the manager exactly as it was, because the alternative is a run
+    that dies on its next batch inside the reward manager. Validate first --
+    including a trial call -- then mutate.
+
+    Returns a dict describing the installed term (at minimum ``name`` and
+    ``index``), and raises :class:`NotSupported` on a backend whose reward
+    function is fixed at construction.
+    """
+    raise NotSupported("add_reward_term")
+
   # Optional: rendering.
 
   def render(self, env_id: int = 0) -> np.ndarray:

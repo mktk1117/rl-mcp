@@ -87,6 +87,8 @@ output. Present and the command is not `record`, take `"result"` on success and
 | raw per-step signals | [`trace`](#trace), [`plot-trace`](#plot-trace), [`analyze`](#analyze) | `record_trace`, `plot_joint_trace` |
 | what can I tune | [`params`](#params), [`get`](#get) | `list_parameters` |
 | change a weight | [`set`](#set), [`reset`](#reset) | `set_parameter`, `reset_parameters` |
+| add a reward the task lacks | [`add-reward`](#add-reward) | `add_reward` |
+| keep a term you added | [`rewards export`](#rewards) | (CLI only) |
 | restart episodes | [`reset-envs`](#reset-envs) | `reset_environments` |
 | task-specific verbs | [`commands`](#commands), [`run`](#run) | `list_commands`, `run_command` |
 | the stage ladder | [`curriculum`](#curriculum) | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
@@ -757,6 +759,73 @@ rlmcp reset-envs --env-id 0 --env-id 7
 
 Use it to clear a stuck state, or to watch the start of a behaviour instead of
 waiting for the robot to fail into one.
+
+## `add-reward`
+
+Add a reward term the task does not have, written during the run.
+
+`set` explores the reward function the task shipped with. This is for the other
+case: nothing in it scores the thing you are trying to encourage, and no weight
+you can reach expresses it. Check [`params`](#params) first — a term the task
+already has is always the better lever, including one shipped at weight `0.0`.
+
+```bash
+cat > /tmp/upright.py <<'EOF'
+def upright(env, scale: float = 1.0):
+  """Reward keeping the torso vertical."""
+  projected = env.scene["robot"].data.projected_gravity_b[:, 2]
+  return torch.exp(-(1.0 + projected) ** 2 / scale)
+EOF
+
+rlmcp add-reward upright /tmp/upright.py --weight 1.5 \
+    --params '{"scale": 0.25}' --why "nothing scores torso attitude"
+```
+
+**MCP:** `add_reward({"name": ..., "source": ..., "weight": ..., "params": {...}, "rationale": ...})`
+
+The source is one function taking `(env, **params)` and returning one score per
+environment — a tensor of shape `(num_envs,)`. It is compiled with `torch` and
+the task's `mdp` module already in scope, and **called once against the live
+environment before it is installed**: a term that raises, returns the wrong
+shape, or produces a NaN costs you an error message rather than the run. The
+manager is left untouched in every one of those cases.
+
+Once installed it scores from the next batch, and its weight is a parameter
+like any other — `set reward.upright.weight 3.0`, plottable, usable in a
+curriculum stage, and returned to its original value by `reset`.
+
+This runs Python you wrote inside the training process, with the simulator and
+the optimiser in scope. That is the same trust `set` and `load` already need, so
+it is not gated — it is recorded instead. Every added term is written to
+`<session>/rewards/<name>.py` and its digest goes into the event log.
+
+## `rewards`
+
+What a run added, and how to keep it.
+
+```bash
+rlmcp rewards list                    # what this run added
+rlmcp rewards export --out ./exported # write it back out
+```
+
+A term added mid-run exists as text in the session and nowhere else. When the
+session is gone, so is it: the task package still does not define it and its
+config still does not list it. `rewards export` writes the two halves a task
+package needs —
+
+* `added_rewards.py` — the implementations, to move into the task's `mdp`
+  package;
+* `added_rewards_cfg.py` — one `RewTerm` line per term, to paste into its
+  `RewardsCfg`.
+
+The weights written are the ones **in force at the end of the run**, not the
+ones the terms were added with, since those are what the run being reproduced
+actually used. A term added at `0.5` and tuned to `3.0` arrives at `3.0`, with
+the history kept as a comment.
+
+Editing the task's own files is left to you on purpose: rlmcp does not know
+which package a term belongs to, and nothing task-shaped may live in this repo
+(see `AGENTS.md`).
 
 ## `commands`
 

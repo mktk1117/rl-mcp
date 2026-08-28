@@ -36,6 +36,7 @@ from rlmcp.core.live_view import (
 )
 from rlmcp.core.parameters.registry import ParameterRegistry
 from rlmcp.core.progress_video import DEFAULT_BUDGET_MB, ProgressVideoSchedule
+from rlmcp.core.reward_source import compile_reward_source
 from rlmcp.records.clips import PROGRESS_STEM
 from rlmcp.core.telemetry.buffer import TelemetryBuffer
 from rlmcp.core.telemetry import plotter
@@ -991,6 +992,7 @@ class RlMcp:
         "get_parameter": self.cmd_get_parameter,
         "set_parameter": self.cmd_set_parameter,
         "reset_parameters": self.cmd_reset_parameters,
+        "add_reward": self.cmd_add_reward,
         "reset_envs": self.cmd_reset_envs,
         "list_metrics": self.cmd_list_metrics,
         "get_metrics": self.cmd_get_metrics,
@@ -1193,6 +1195,121 @@ class RlMcp:
       )
       self.session.publish_params(self.parameters.export_schema_json())
     return {"restored_count": len(restored), "restored": restored}
+
+  def cmd_add_reward(
+      self,
+      name: str,
+      source: str,
+      weight: float = 1.0,
+      params: Optional[Dict[str, Any]] = None,
+      rationale: str = "",
+  ) -> Dict[str, Any]:
+    """Add a reward term the task never had, written by the agent, live."""
+    compiled = compile_reward_source(
+        source, name=name, namespace=self._reward_namespace())
+    installed = self.sim.add_reward_term(
+        name=compiled.name,
+        func=compiled.func,
+        weight=float(weight),
+        params=dict(params or {}),
+    )
+
+    # Written before the event, so the event's `source_path` always names a
+    # file that exists -- a reader following the audit trail never lands on a
+    # term whose text was lost to a crash between the two writes.
+    source_path = self._write_reward_source(
+        compiled, weight=weight, params=params, rationale=rationale)
+
+    # The new weight is a parameter like any other from here on: tunable with
+    # set_parameter, plotted by the records, usable in a curriculum stage.
+    # Re-running discovery is what puts it in the registry -- the schema was
+    # built from the terms the task shipped with.
+    self._discover_parameters()
+    key = f"reward.{compiled.name}.weight"
+    self._defaults.setdefault(key, float(weight))
+
+    detail = {
+        "iteration": self.iteration,
+        "name": compiled.name,
+        "function": compiled.func_name,
+        "weight": float(weight),
+        "params": dict(params or {}),
+        "digest": compiled.digest,
+        "source_path": str(source_path),
+        "rationale": rationale,
+    }
+    self.session.append_event("add_reward_term", detail)
+    self.session.publish_params(self.parameters.export_schema_json())
+
+    return {
+        **detail,
+        "key": key,
+        "index": installed.get("index"),
+        "class_based": installed.get("class_based", False),
+        "trial_value": installed.get("trial_value"),
+        "note": (
+            f"'{compiled.name}' scores from the next batch. Its weight is "
+            f"tunable as '{key}'. The source is saved in the session; "
+            "`rlmcp rewards export` writes it back out as a task module with "
+            "the config lines to go with it."
+        ),
+    }
+
+  def _reward_namespace(self) -> Dict[str, Any]:
+    """What an agent's reward source is compiled against.
+
+    The task's own ``mdp`` module when the environment exposes one, because a
+    new term usually wants the helpers the existing terms use, plus ``torch``.
+    Everything here is a convenience: source that imports what it needs works
+    the same.
+    """
+    namespace: Dict[str, Any] = {}
+    try:
+      import torch
+
+      namespace["torch"] = torch
+    except Exception:  # pragma: no cover - torch is present wherever a sim is.
+      pass
+    env = getattr(self.sim, "env", None)
+    for attr in ("mdp", "_mdp"):
+      module = getattr(env, attr, None)
+      if module is not None:
+        namespace["mdp"] = module
+        break
+    return namespace
+
+  def _write_reward_source(
+      self,
+      compiled: Any,
+      *,
+      weight: float,
+      params: Optional[Dict[str, Any]],
+      rationale: str,
+  ) -> Path:
+    """Save the term's source into the session, header first.
+
+    The header is what makes the file re-usable rather than merely archived:
+    it carries the term name, the weight and params it was added with, and the
+    reason it was written, so the file alone says how to put it into a task
+    config.
+    """
+    directory = self.session.rewards
+    directory.mkdir(parents=True, exist_ok=True)
+    header = [
+        f"\"\"\"Reward term '{compiled.name}', added during this run.",
+        "",
+        f"iteration: {self.iteration}",
+        f"weight:    {float(weight)!r}",
+        f"params:    {dict(params or {})!r}",
+        f"function:  {compiled.func_name}",
+        f"digest:    {compiled.digest}",
+    ]
+    if rationale:
+      header += ["", f"rationale: {rationale}"]
+    header += ['"""', "", ""]
+    path = directory / f"{compiled.name}.py"
+    path.write_text("\n".join(header) + compiled.source)
+    return path
 
   def cmd_reset_envs(
       self,

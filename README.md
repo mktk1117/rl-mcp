@@ -230,7 +230,7 @@ of JSON files.
   torch + a simulator               plain JSON files                  no simulator
 ┌───────────────────┐             ┌─────────────────┐             ┌──────────────────┐
 │ rlmcp-wrapped env │             │ status.json     │             │ MCP server       │
-│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (37 tools)       │
+│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (38 tools)       │
 │ records frames    │             │ events.jsonl    │             │ rlmcp CLI        │
 │ runs commands     │ ◄──reads─── │ artifacts/      │ ◄──writes── │ your own scripts │
 │ between batches   │             │ inbox/  outbox/ │             │                  │

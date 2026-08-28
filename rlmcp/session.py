@@ -19,6 +19,7 @@ Layout::
       inbox/              pending requests written by the agent side
       outbox/             responses written by the trainer side
       artifacts/          png / mp4 / npz produced on demand
+      rewards/            source of every reward term added mid-run
 """
 
 from __future__ import annotations
@@ -297,6 +298,17 @@ class Session:
   @property
   def artifacts(self) -> Path:
     return self.dir / "artifacts"
+
+  @property
+  def rewards(self) -> Path:
+    """Source of reward terms added during the run, one file per term.
+
+    Kept out of ``artifacts`` because it is not an output to look at: it is
+    what the run was optimising, and the only copy of a term that existed
+    nowhere before the agent wrote it. Created on first write, so a run that
+    adds none has no empty directory.
+    """
+    return self.dir / "rewards"
 
   # Lifecycle.
 

@@ -665,6 +665,50 @@ def create_mcp_server(
     return _call(handle, "reset_parameters", keys=keys)
 
   @mcp.tool()
+  def add_reward(
+      name: str,
+      source: str,
+      weight: float = 1.0,
+      params: Optional[Dict[str, Any]] = None,
+      rationale: str = "",
+  ) -> Dict[str, Any]:
+    """Add a reward term this task does not have, written by you, live.
+
+    Reach for this only when no existing weight expresses what you want:
+    ``list_parameters(category="reward")`` first, because a term the task
+    already ships is always the better lever. What this is for is the case
+    where the reward function is genuinely missing a term -- nothing scores
+    the thing you are trying to encourage.
+
+    The function is compiled and called once against the live environment
+    before it is installed, so a term that raises or returns the wrong shape
+    costs you an error message rather than the run. Once installed it scores
+    from the next batch, and its weight is tunable as ``reward.<name>.weight``
+    like any other.
+
+    The source is saved into the session and the event log records its digest,
+    so the run stays reproducible: ``rlmcp rewards export`` writes the terms
+    back out as a task module plus the config lines to go with it. Do that
+    before the run's session is gone, or the term exists nowhere.
+
+    Note that this executes the Python you pass inside the training process.
+
+    Args:
+      name: the term name, a Python identifier. It becomes the config field
+        and the parameter key.
+      source: the text of a function taking ``(env, **params)`` and returning
+        one score per environment -- a tensor of shape ``(num_envs,)``. It is
+        compiled with ``torch`` and the task's ``mdp`` module already in
+        scope; import anything else it needs at the top.
+      weight: the term's weight. Sign matters: negative is a penalty.
+      params: keyword arguments passed to the function on every call.
+      rationale: why this term is needed; recorded in the event log and in the
+        header of the saved source.
+    """
+    return _call(handle, "add_reward", name=name, source=source,
+                 weight=weight, params=params or {}, rationale=rationale)
+
+  @mcp.tool()
   def reset_environments(
       env_ids: Optional[List[int]] = None,
       where: Optional[Dict[str, Any]] = None,

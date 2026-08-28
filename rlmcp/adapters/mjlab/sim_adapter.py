@@ -25,6 +25,7 @@ import numpy as np
 
 from rlmcp.adapters.base import NotSupported, SimAdapter
 from rlmcp.adapters.manager_based.access import ParameterAccess
+from rlmcp.adapters.manager_based.reward_terms import install_reward_term
 from rlmcp.adapters.manager_based import metrics as state_metrics
 from rlmcp.adapters.manager_based import terms as state_terms
 from rlmcp.adapters.mjlab.state import live_view, rendering
@@ -93,6 +94,17 @@ class MjlabSimAdapter(SimAdapter):
     # overridden); keep them for the caller that asks next.
     self._last_set_notes = self.parameters.set(key, value)
     return True
+
+  def add_reward_term(
+      self,
+      name: str,
+      func: Any,
+      weight: float,
+      params: Optional[Dict[str, Any]] = None,
+  ) -> Dict[str, Any]:
+    """Append a reward term to the live manager. See the base class."""
+    return install_reward_term(
+        self.env, name=name, func=func, weight=weight, params=params)
 
   def last_set_notes(self) -> Dict[str, Any]:
     return dict(self._last_set_notes)

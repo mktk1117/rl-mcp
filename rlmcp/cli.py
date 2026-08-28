@@ -919,6 +919,35 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument("keys", nargs="*")
 
   p = sub.add_parser(
+      "add-reward",
+      help="Add a reward term the task does not have, from a source file",
+      description="Compiles a function you wrote and appends it to the "
+                  "running reward manager, scoring from the next batch. The "
+                  "source is saved in the session; `rlmcp rewards export` "
+                  "writes it back out for the task package. This runs your "
+                  "file inside the training process.",
+  )
+  p.add_argument("name", help="Term name, as it will appear in the config")
+  p.add_argument("source", help="Path to a .py file defining the function ('-' for stdin)")
+  p.add_argument("--weight", type=float, default=1.0)
+  p.add_argument("--params", default="",
+                 help="JSON object passed to the function on every call")
+  p.add_argument("--why", default="", help="Rationale recorded in the event log")
+
+  rew = sub.add_parser(
+      "rewards",
+      help="Reward terms added during a run: list them, write them back out")
+  rewards_sub = rew.add_subparsers(dest="rewards_command", required=True)
+
+  q = rewards_sub.add_parser(
+      "export",
+      help="Write added terms out as a task module plus its config lines")
+  q.add_argument("--out", default=".",
+                 help="Directory to write into (default: the current one)")
+
+  rewards_sub.add_parser("list", help="List the terms this run added")
+
+  p = sub.add_parser(
       "reset-envs",
       help="Start fresh episodes in some or all environments",
       description="Restarts episodes, not parameter values -- 'reset' is the "
@@ -1444,6 +1473,30 @@ def main(argv: Optional[List[str]] = None) -> int:
       return 0
     _emit(session.events(last_n=args.last_n), command="events")
     return 0
+  if cmd == "rewards":
+    # Offline: the terms and their sources are in the session, so this answers
+    # for a run that finished hours ago exactly as it does for a live one.
+    from rlmcp import rewards_export
+
+    if args.rewards_command == "list":
+      rewards = rewards_export.collect_added_rewards(session)
+      _emit({
+          "count": len(rewards),
+          "session": str(session.dir),
+          "rewards": [
+              {"name": r.name, "function": r.func_name, "weight": r.weight,
+               "params": r.params, "iteration": r.iteration,
+               "digest": r.digest, "rationale": r.rationale}
+              for r in rewards
+          ],
+      })
+      return 0
+    payload = rewards_export.export_added_rewards(
+        session, args.out, task=str(session.info().get("task") or ""))
+    _emit(payload)
+    if _MODE == "text":
+      print(cli_output.note(rewards_export.describe(payload)), file=sys.stderr)
+    return 0
   if cmd == "params" and not args.live:
     schema = session.params()
     items = {
@@ -1507,6 +1560,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                  value=_parse_value(args.value), rationale=args.why)
   if cmd == "reset":
     return _call(session, "reset_parameters", timeout, keys=args.keys or None)
+  if cmd == "add-reward":
+    source = sys.stdin.read() if args.source == "-" else Path(args.source).read_text()
+    try:
+      params = json.loads(args.params) if args.params else {}
+    except json.JSONDecodeError as exc:
+      print(cli_output.note(f"[rlmcp] --params is not valid JSON: {exc}"),
+            file=sys.stderr)
+      return 2
+    if not isinstance(params, dict):
+      print(cli_output.note("[rlmcp] --params must be a JSON object, since it "
+                            "becomes keyword arguments to the function."),
+            file=sys.stderr)
+      return 2
+    return _call(session, "add_reward", timeout, name=args.name, source=source,
+                 weight=args.weight, params=params, rationale=args.why)
   if cmd == "reset-envs":
     return _call(session, "reset_envs", timeout, env_ids=args.env_ids or None,
                  where=_kv_pairs(args.where) or None, rationale=args.why)
