@@ -774,7 +774,7 @@ def test_an_untrained_play_never_looks_for_a_checkpoint(tmp_path, monkeypatch):
                       lambda target: looked.append(target) or (_ for _ in ()).throw(
                           AssertionError("looked for a checkpoint")))
   monkeypatch.setattr("rlmcp.play._choose_gl_backend", lambda cfg: None)
-  monkeypatch.setattr("rlmcp.play._build_env",
+  monkeypatch.setattr("rlmcp.play.build_env",
                       lambda cfg, task, session_dir: (_ for _ in ()).throw(
                           PlayError("stop here: past the checkpoint lookup")))
 

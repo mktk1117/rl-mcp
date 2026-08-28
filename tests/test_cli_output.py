@@ -285,6 +285,8 @@ SHAPES = {
     "plot": ENVELOPE,
     "shot": ENVELOPE,
     "video": ENVELOPE,
+    "view": ENVELOPE,
+    "check": ENVELOPE,     # stands in for a trainer that does not exist yet
     "play": ENVELOPE,
     "trace": ENVELOPE,
     "diagnose": ENVELOPE,
@@ -321,7 +323,7 @@ _SHAPE_ARGS = {
     "play": ["/nonexistent/checkpoint.pt"],
     "record": ["list"],
 }
-_REFUSALS = {"play", "analyze"}
+_REFUSALS = {"play", "analyze", "check"}
 
 # `train` and `serve` hand the line to another program; there is no payload.
 _NO_OUTPUT = {"train", "serve"}

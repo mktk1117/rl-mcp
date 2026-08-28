@@ -45,6 +45,7 @@ without the variable set; it is a scratch directory, not the records.
 | you are about to… | use instead |
 | --- | --- |
 | grep a task package to find out which task ids exist | `rlmcp tasks` — every registered id, which package registered it, and where its runs land |
+| write a scratch script that rolls zero actions to see whether a new task works | `rlmcp check --task <id>` — the six gates (including one training iteration), plus what each reward term pays |
 | write a loop that builds a task and steps it so you can poke at it | `rlmcp play --policy zero --mode hold` — a built, stepping, steerable session with no viewer |
 | parse `metrics.jsonl` / `status.json` yourself | `rlmcp status`, `rlmcp metrics`, `rlmcp plot` |
 | write a loop that pokes weights at milestones | a **curriculum** (`StageSchedule`) — see below |
@@ -53,6 +54,9 @@ without the variable set; it is a scratch directory, not the records.
 | judge smoothness from reward curves | `rlmcp diagnose` (measures HF power share, jerk, effort) |
 | tell the user "it improved" | `rlmcp video` / `rlmcp plot`, then show them |
 | script a clip every N iterations of a run | already done — progress clips at 0, 50, 100, 200 … (`rlmcp video --schedule`) |
+| start a viewer, or `play`, to see what a run is doing *now* | `rlmcp view` — a run already serves one; this says where. No restart, no renderer |
+| explain that the live view "looks too fast" | `rlmcp view --realtime` — a buffered window played back at 1x, with a player in the tab |
+| stop the view costing the run anything, without losing the tab | `rlmcp view --pause` — the frame stays, the port stays, the run goes back to full speed |
 | look at a policy whose run has already exited | `rlmcp play` — it restores the conditions the checkpoint trained under first |
 | call `env.reset()` yourself to clear a bad state | `rlmcp reset-envs` (`--where key=value` to restart only some) |
 | restart `rlmcp play` to see a different checkpoint | `rlmcp run load_policy checkpoint=<path>` — same env, same conditions, new weights |

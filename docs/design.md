@@ -62,7 +62,7 @@ rlmcp/adapters/manager_based/
   env_wrapper.py          # servicing, telemetry, curricula, records, clips
 rlmcp/adapters/mjlab/
   sim_adapter.py          # thin: implements SimAdapter by delegating
-  state/                  # what is mjlab's own: rendering, terrain
+  state/                  # what is mjlab's own: rendering, terrain, the live view
 ```
 
 None of that is mjlab's, which is why it does not live there: term configs are

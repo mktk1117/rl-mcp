@@ -224,6 +224,40 @@ class SimAdapter(ABC):
     """
     return {}
 
+  def reward_terms(self) -> Dict[str, float]:
+    """What each reward term paid on the last step, by name.
+
+    The single most useful thing a task can be asked, and the one a curve
+    cannot answer: total reward went up, *because of which term?* The failure
+    it exists to catch is in this project's own worked example -- a task where
+    standing still paid about 2600x what making progress paid. That is
+    invisible in the code, invisible in the total, and obvious the moment the
+    terms are put side by side.
+
+    Values are per-term contributions averaged over the batch, in whatever
+    units the environment adds them in -- weighted, because the question is
+    what each term is *paying*, not what its raw function returned. A backend
+    that scales rewards by ``dt`` may report the unscaled rate, since a factor
+    common to every term changes no comparison between them.
+
+    Raises :class:`NotSupported` where terms are not a thing the environment
+    has: a hand-written env with one scalar reward has nothing to break down,
+    and saying so is more useful than a dict with one entry called "reward".
+    """
+    raise NotSupported("reward_terms")
+
+  def termination_terms(self) -> Dict[str, float]:
+    """Which termination terms fired on the last step, as a fraction of envs.
+
+    The other half of "why did the episode end". An env that terminates on
+    step 1 and one that never terminates at all are both broken, both produce
+    training curves, and neither says so anywhere else.
+
+    ``0.0`` for a term that did not fire is meaningful and should be reported;
+    an empty dict means the environment has no named termination terms.
+    """
+    raise NotSupported("termination_terms")
+
   def summary_metrics(self) -> Dict[str, float]:
     """Cheap always-on scalars describing the current batch.
 
@@ -285,6 +319,49 @@ class SimAdapter(ABC):
     Graceful default: ``False``.
     """
     return False
+
+  def open_live_view(self, server: Any, realtime: bool = False,
+                     buffer_seconds: float = 4.0) -> Any:
+    """Mirror this environment into a viser server, for a live browser view.
+
+    The counterpart of :meth:`render` for watching rather than recording:
+    where ``render`` produces pixels for a clip, this hands the browser the
+    scene once and then feeds it state, which is why it needs no render
+    context and works on a headless machine.
+
+    ``server`` is a live :class:`viser.ViserServer` owned by
+    :class:`~rlmcp.core.live_view.LiveView`; the backend adds its geometry to
+    it and returns a *scene handle* with two methods:
+
+    * ``update(env_id: int) -> None`` -- take the current state of one
+      environment. It must be a copy, never a simulation step or a reset.
+    * ``close() -> None`` -- release whatever the handle holds. The server
+      itself is closed by the caller.
+    * ``describe() -> dict`` -- optional; whatever the backend can say about
+      its own playback, reported under ``playback`` in ``status``.
+
+    ``realtime`` picks between the two things "watch the run" can mean, and
+    changes what ``update`` is for:
+
+    * ``False`` -- push the state to the browser now. Called at a bounded frame
+      rate; the motion in the tab runs at the *run's* pace, which for training
+      is faster than life.
+    * ``True`` -- record this step into a buffer holding ``buffer_seconds`` of
+      sim time, and play the window back at 1x once it is full. ``update`` is
+      then called on *every* environment step, because a window with steps
+      missing is not the run's motion; it must therefore be cheap enough for
+      the training loop -- no device synchronisation per step. What plays the
+      window back is the backend's business (mjlab drives mjlab's own viewer),
+      which is why none of it is in the core.
+
+    Raise :class:`NotSupported` when the backend has no scene to mirror -- a
+    live view is a nice-to-have, and a run whose backend cannot serve one
+    should keep every other capability.
+    """
+    raise NotSupported(
+        "open_live_view: this backend cannot serve a live 3-D view of its "
+        "environment. `rlmcp video` still records clips of it."
+    )
 
 
 class RunnerAdapter(ABC):
