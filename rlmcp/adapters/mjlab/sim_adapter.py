@@ -26,6 +26,7 @@ import numpy as np
 from rlmcp.adapters.base import NotSupported, SimAdapter
 from rlmcp.adapters.manager_based.access import ParameterAccess
 from rlmcp.adapters.manager_based import metrics as state_metrics
+from rlmcp.adapters.manager_based import terms as state_terms
 from rlmcp.adapters.mjlab.state import live_view, rendering
 from rlmcp.adapters.manager_based.sampling import StateSampler
 from rlmcp.core.parameters.spec import ParameterSpec
@@ -111,6 +112,17 @@ class MjlabSimAdapter(SimAdapter):
 
   def summary_metrics(self) -> Dict[str, float]:
     return state_metrics.summary_metrics(self.env, self.robot_name)
+
+  # Manager terms.
+
+  def reward_terms(self) -> Dict[str, float]:
+    found = state_terms.reward_terms(self.env)
+    if not found:
+      raise NotSupported("reward_terms")
+    return found
+
+  def termination_terms(self) -> Dict[str, float]:
+    return state_terms.termination_terms(self.env)
 
   # Rendering.
 

@@ -14,7 +14,7 @@ The loop, and where each step's tools are documented:
 
 | step | tools |
 | --- | --- |
-| 1. verify the task before training | zero/random rollouts, [`shot`](tools.md#shot), term-magnitude checks |
+| 1. verify the task before training | [`check`](tools.md#check), [`shot`](tools.md#shot) |
 | 2. open the record | [`record new`](records.md) |
 | 3. watch the right numbers | [`status`](tools.md#status), [`metrics`](tools.md#metrics), [`plot`](tools.md#plot), [`curriculum`](tools.md#curriculum) |
 | 4. look at the robot | [`shot`](tools.md#shot), [`video`](tools.md#video), [`play`](tools.md#play) |
@@ -29,6 +29,12 @@ A wrong task trains fine. It produces curves, checkpoints and plausible
 metrics, and tells you nothing. Each check below is cheap and each caught a
 real defect.
 
+**`rlmcp check --task <id>` does the first three of these**, and its exit code
+is the verdict: it builds the task with no policy, rolls it, and reports
+imports / constructs / steps / rewards finite / terminations sane / trains,
+followed by what each reward term paid. What follows is what it checks and why
+each one earned its place.
+
 **Roll zero actions first.** ~150 passive steps: the robot holds its keyframe
 pose, held objects stay put, nothing terminates. This catches reset-ordering
 bugs, actuator gains sized for the wrong limb (stock arm gains under a hand
@@ -40,6 +46,16 @@ palm used to be), and an action offset centred on servo mid-range so that
 Identical random-action rollouts are also the cheapest A/B for an interface
 change: an action filter was settled before any training run — 130 drops
 unfiltered vs 2 filtered, peak joint speed 70 → 43 rad/s.
+
+**Take one training iteration before you buy thirty thousand.** A zero-action
+rollout never constructs a policy, so it never reads the task's `rl_cfg` at
+all — and half of what kills a run at iteration 0 lives there. One task passed
+every environment check and then died on its first act: its actor had no
+`distribution_cfg`, so it was built deterministic and PPO had no distribution
+to take a log-prob from. `rlmcp check` builds the runner and takes one
+iteration for this reason (the `trains` gate, on by default, under a second on
+CPU). Nothing cheaper can see it, because nothing cheaper opens the agent
+config.
 
 **Screenshot the running scene, not the compiled spec.** A standalone
 `spec.compile()` passes while the live scene is wrong; one full run trained on

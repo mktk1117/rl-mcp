@@ -45,6 +45,8 @@ without the variable set; it is a scratch directory, not the records.
 | you are about to… | use instead |
 | --- | --- |
 | grep a task package to find out which task ids exist | `rlmcp tasks` — every registered id, which package registered it, and where its runs land |
+| write a scratch script that rolls zero actions to see whether a new task works | `rlmcp check --task <id>` — the six gates (including one training iteration), plus what each reward term pays |
+| write a loop that builds a task and steps it so you can poke at it | `rlmcp play --policy zero --mode hold` — a built, stepping, steerable session with no viewer |
 | parse `metrics.jsonl` / `status.json` yourself | `rlmcp status`, `rlmcp metrics`, `rlmcp plot` |
 | write a loop that pokes weights at milestones | a **curriculum** (`StageSchedule`) — see below |
 | add a task-specific verb by editing core code | an **extension** (`rlmcp/extensions/`, or your own package) |
