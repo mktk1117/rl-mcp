@@ -171,3 +171,21 @@ def test_nothing_but_the_episode_block_is_treated_as_telemetry(flat_env):
 def test_a_run_before_its_first_reset_reports_nothing_rather_than_failing():
   assert episode_log({}) == {}
   assert episode_log(None) == {}
+
+
+def test_a_standing_policy_is_visible_in_the_metrics(flat_env, sampler):
+  """The do-nothing check the run-report discipline asks for.
+
+  A policy that stands still collects posture and action-rate rewards and stops
+  falling over, so reward and episode length both *rise*. Measured ground speed
+  is the number that goes to zero, and nothing else does.
+  """
+  flat_env.commands[:, 0] = 1.0
+  flat_env.base_lin_vel.zero_()          # the robot is not moving
+  standing = summary_metrics(flat_env, sampler)
+  assert standing["rlmcp/achieved_speed_mean"] == pytest.approx(0.0)
+
+  flat_env.base_lin_vel[:, 0] = 1.0      # now it is
+  walking = summary_metrics(flat_env, sampler)
+  assert walking["rlmcp/achieved_speed_mean"] == pytest.approx(1.0)
+  assert walking["rlmcp/lin_vel_error_mean"] < standing["rlmcp/lin_vel_error_mean"]
