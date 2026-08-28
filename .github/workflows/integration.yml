@@ -89,7 +89,13 @@ jobs:
             if [ -n "$skipped" ]; then echo; echo "**Skipped**"; echo; echo "$skipped"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          { echo "skipped<<EOF"; echo "$skipped"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+          # A random delimiter, for the same reason the `Report` step below
+          # takes its values through `env:`. The list is built out of branch
+          # names and PR titles, and one of those containing a line that is
+          # exactly the delimiter would close the heredoc early and let the
+          # rest of it set whatever step outputs it liked.
+          eof="EOF_$(openssl rand -hex 16)"
+          { echo "skipped<<$eof"; echo "$skipped"; echo "$eof"; } >> "$GITHUB_OUTPUT"
 
       - uses: astral-sh/setup-uv@v6
 
