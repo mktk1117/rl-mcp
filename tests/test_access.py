@@ -20,13 +20,13 @@ import torch
 
 from rlmcp.adapters import base
 from rlmcp.adapters.base import NotSupported, RunnerAdapter, SimAdapter
-from rlmcp.adapters.mjlab.access import ParameterAccess
-from rlmcp.adapters.mjlab.access import paths
-from rlmcp.adapters.mjlab import runner_adapter
-from rlmcp.adapters.mjlab.runner_adapter import MjlabRunnerAdapter
-from rlmcp.adapters.mjlab.state import metrics as state_metrics
+from rlmcp.adapters.manager_based.access import ParameterAccess
+from rlmcp.adapters.manager_based.access import paths
+from rlmcp.adapters import rsl_rl_runner as runner_adapter
+from rlmcp.adapters.rsl_rl_runner import RslRlRunnerAdapter
+from rlmcp.adapters.manager_based import metrics as state_metrics
 from rlmcp.adapters.mjlab.state import rendering
-from rlmcp.adapters.mjlab.state.sampling import StateSampler
+from rlmcp.adapters.manager_based.sampling import StateSampler
 from rlmcp.core import diagnostics as diag
 from rlmcp.core.parameters.spec import ParameterCategory
 
@@ -656,6 +656,108 @@ def test_update_params_hook_failure_is_not_swallowed():
     access.set(key, 0.6)
 
 
+# Command terms: what the constructor read is what it cached.
+
+
+@dataclass
+class KernelCommandCfg:
+  ranges: Ranges = field(default_factory=Ranges)
+  kernel_lambda: float = 0.8
+  kernel_size: int = 1
+
+
+class KernelCommandTerm:
+  """A command term shaped like mjlab's MotionCommand.
+
+  Its constructor folds ``kernel_lambda`` and ``kernel_size`` into a sampling
+  kernel and validates one range; ``ranges.lin_vel_x`` is read on every
+  resample. Editing the cfg fields the constructor read changes nothing --
+  the kernel is already built -- so they must be reported inert.
+  """
+
+  def __init__(self, cfg=None):
+    self.cfg = cfg or KernelCommandCfg()
+    if self.cfg.ranges.ang_vel_z[0] > self.cfg.ranges.ang_vel_z[1]:
+      raise ValueError("ang_vel_z range is inverted")
+    self.kernel = [self.cfg.kernel_lambda**i for i in range(self.cfg.kernel_size)]
+
+  def resample(self):
+    return self.cfg.ranges.lin_vel_x
+
+
+class RebuildableKernelCommandTerm(KernelCommandTerm):
+  """The same term, able to rebuild its kernel when told a field changed."""
+
+  def __init__(self, cfg=None):
+    super().__init__(cfg)
+    self.rebuilt_with: List[Dict[str, Any]] = []
+
+  def update_params(self, **fields):
+    self.rebuilt_with.append(fields)
+    self.kernel = [self.cfg.kernel_lambda**i for i in range(self.cfg.kernel_size)]
+
+
+def _access_with_command(term) -> ParameterAccess:
+  env = FakeEnv()
+  env.command_manager._terms["motion"] = term
+  return ParameterAccess(env)
+
+
+def test_constructor_cfg_reads_are_found_along_the_mro():
+  from rlmcp.adapters.manager_based.access.base import constructor_cfg_reads
+
+  reads = constructor_cfg_reads(RebuildableKernelCommandTerm)
+  assert reads == frozenset({"kernel_lambda", "kernel_size", "ranges.ang_vel_z"})
+  # The fake velocity term reads nothing from its cfg at construction.
+  assert constructor_cfg_reads(CommandTerm) == frozenset()
+
+
+def test_command_field_read_by_constructor_is_inert_and_refused():
+  term = KernelCommandTerm()
+  access = _access_with_command(term)
+  specs = {s.key: s for s in access.discover()}
+  assert specs["command.motion.kernel_lambda"].liveness == "inert"
+  assert specs["command.motion.kernel_size"].liveness == "inert"
+
+  with pytest.raises(ValueError) as excinfo:
+    access.set("command.motion.kernel_lambda", 0.5)
+  assert "inert" in str(excinfo.value)
+  assert term.cfg.kernel_lambda == 0.8
+  assert term.kernel == [1.0]
+
+
+def test_command_field_read_at_runtime_stays_live():
+  """A validation read of ``ranges.ang_vel_z`` must not spread to its siblings:
+  the term reads ``ranges.lin_vel_x`` on every resample, so that one is live."""
+  term = KernelCommandTerm()
+  access = _access_with_command(term)
+  specs = {s.key: s for s in access.discover()}
+  assert specs["command.motion.ranges.lin_vel_x"].liveness == "live"
+
+  access.set("command.motion.ranges.lin_vel_x", [-0.3, 0.3])
+  assert term.resample() == (-0.3, 0.3)
+
+
+def test_command_term_with_update_params_stays_live_and_is_rebuilt():
+  term = RebuildableKernelCommandTerm()
+  access = _access_with_command(term)
+  specs = {s.key: s for s in access.discover()}
+  assert specs["command.motion.kernel_lambda"].liveness == "live"
+  assert specs["command.motion.kernel_size"].liveness == "live"
+
+  access.set("command.motion.kernel_size", 3)
+  access.set("command.motion.kernel_lambda", 0.5)
+  assert term.kernel == [1.0, 0.5, 0.25]
+
+  # A nested write hands the hook the whole top-level field it cached from.
+  access.set("command.motion.ranges.lin_vel_x", [-2.0, 2.0])
+  assert term.rebuilt_with == [
+      {"kernel_size": 3},
+      {"kernel_lambda": 0.5},
+      {"ranges": term.cfg.ranges},
+  ]
+
+
 # The walker itself.
 
 
@@ -1006,7 +1108,7 @@ def test_request_stop_is_advisory():
     _MinimalRunner().request_stop()
   # mjlab: a documented no-op -- rsl_rl has no stop hook to arm, and stopping
   # is delivered by the loop polling should_stop().
-  adapter = MjlabRunnerAdapter(SimpleNamespace(alg=None))
+  adapter = RslRlRunnerAdapter(SimpleNamespace(alg=None))
   assert adapter.request_stop() is False
 
 
@@ -1028,7 +1130,7 @@ def test_rl_bounds_are_only_the_definitional_ones():
 
 
 def test_unknown_hyperparameter_raises_naming_what_exists():
-  adapter = MjlabRunnerAdapter(
+  adapter = RslRlRunnerAdapter(
       SimpleNamespace(alg=SimpleNamespace(learning_rate=1e-3, entropy_coef=0.01))
   )
   with pytest.raises(KeyError) as excinfo:
@@ -1107,7 +1209,7 @@ def test_rollback_survives_buffers_reassigned_in_inference_mode(tmp_path):
   with pytest.raises(RuntimeError, match="inference tensor"):
     runner.load(str(checkpoint))
 
-  infos = MjlabRunnerAdapter(runner).load_checkpoint(str(checkpoint))
+  infos = RslRlRunnerAdapter(runner).load_checkpoint(str(checkpoint))
 
   assert infos == {"tag": "before-experiment"}
   restored = runner.alg._raw_actor.obs_normalizer._std
@@ -1118,7 +1220,7 @@ def test_rollback_survives_buffers_reassigned_in_inference_mode(tmp_path):
 def test_thaw_leaves_ordinary_buffers_alone(tmp_path):
   """It is a no-op on a run that has not entered inference mode yet."""
   runner = _FakeRunner()
-  adapter = MjlabRunnerAdapter(runner)
+  adapter = RslRlRunnerAdapter(runner)
   before = runner.alg._raw_actor.obs_normalizer._std
 
   assert adapter._thaw_inference_buffers() == 0
@@ -1131,7 +1233,7 @@ def test_thaw_does_not_replace_parameters(tmp_path):
   runner.collect_a_rollout()
   weight = runner.alg._raw_actor.linear.weight
 
-  MjlabRunnerAdapter(runner)._thaw_inference_buffers()
+  RslRlRunnerAdapter(runner)._thaw_inference_buffers()
 
   assert runner.alg._raw_actor.linear.weight is weight
 
@@ -1148,13 +1250,13 @@ def test_thaw_finds_modules_without_evaluating_properties():
   runner.alg = SimpleNamespace(_raw_actor=runner.alg._raw_actor, extra=_Exploding())
   runner.collect_a_rollout()
 
-  assert MjlabRunnerAdapter(runner)._thaw_inference_buffers() == 1
+  assert RslRlRunnerAdapter(runner)._thaw_inference_buffers() == 1
 
 
 def test_load_checkpoint_still_reports_a_missing_file(tmp_path):
   """Thawing runs before the load, but must not mask the file check."""
   with pytest.raises(FileNotFoundError):
-    MjlabRunnerAdapter(_FakeRunner()).load_checkpoint(str(tmp_path / "nope.pt"))
+    RslRlRunnerAdapter(_FakeRunner()).load_checkpoint(str(tmp_path / "nope.pt"))
 
 # Restarting episodes.
 

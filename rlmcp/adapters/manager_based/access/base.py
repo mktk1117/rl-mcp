@@ -11,11 +11,13 @@ controller or the MCP server needs to change.
 
 from __future__ import annotations
 
+import functools
 import inspect
+import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
-from rlmcp.adapters.mjlab.access import paths
+from rlmcp.adapters.manager_based.access import paths
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
 
 
@@ -36,17 +38,56 @@ def is_term_instance(func: Any) -> bool:
   )
 
 
+_CFG_READ = re.compile(r"\bcfg\.((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)")
+
+
+@functools.lru_cache(maxsize=None)
+def constructor_cfg_reads(cls: type) -> FrozenSet[str]:
+  """Dotted ``cfg`` paths the constructors of ``cls`` read, from their source.
+
+  A class-based term is handed its cfg once, at construction, and whatever its
+  ``__init__`` derives from a cfg field -- a kernel built from a decay rate, a
+  buffer sized from a count -- keeps the value it was built with after the cfg
+  is edited. The attribute-name check in :meth:`AccessProvider.liveness` cannot
+  see that kind of cache: mjlab's ``MotionCommand`` stores its sampling kernel
+  as ``kernel``, not as ``adaptive_lambda``. The constructor's source can.
+
+  Every ``__init__`` along the MRO is scanned, since a base class may cache on
+  a subclass's behalf. Paths are matched whole and dotted, so a constructor
+  that only validates ``cfg.ranges.heading`` does not make ``ranges.lin_vel_x``
+  inert. Source that cannot be read (built-ins, extension modules) contributes
+  nothing, which leaves the default of live.
+  """
+  reads: set = set()
+  for klass in cls.__mro__:
+    init = klass.__dict__.get("__init__")
+    if init is None:
+      continue
+    try:
+      source = inspect.getsource(init)
+    except (OSError, TypeError):
+      continue
+    reads.update(_CFG_READ.findall(source))
+  return frozenset(reads)
+
+
 @dataclass
 class Term:
   """One addressable config object and the name it is addressed by.
 
   ``key`` may contain dots -- events are addressed as ``<mode>.<name>`` -- which
   is why term lookup matches the longest key rather than a single segment.
+
+  ``instance`` is the live term object when the config belongs to one (command
+  terms are always class instances holding their cfg), so a provider can ask
+  it about liveness and hand it ``update_params`` writes. Function-based terms
+  leave it ``None`` and are reached through ``root.func`` instead.
   """
 
   key: str
   root: Any
   label: str = ""
+  instance: Any = None
 
 
 @dataclass

@@ -10,8 +10,10 @@ Attach it to a running job and you can ask the live process what the robot is
 doing, look at it, measure how jerky it is, change a reward weight, unlock harder
 terrain, and roll back if that made things worse. No restart.
 
-Built for [mjlab](https://github.com/mujocolab/mjlab) today. The simulator sits
-behind a small adapter, so other backends can plug in.
+Two backends ship: [mjlab](https://github.com/mujocolab/mjlab), which is what
+this is developed against, and [IsaacLab](https://github.com/isaac-sim/IsaacLab).
+The simulator sits behind a small adapter, so a third is a couple of hundred
+lines rather than a fork.
 
 > ⚠️ Experimental. The surface is real and tested, but it is still moving.
 
@@ -24,6 +26,8 @@ behind a small adapter, so other backends can plug in.
 ```text
 Wrap my mjlab env with rlmcp (github.com/mktk1117/rl-mcp) and show me how to use it.
 ```
+
+(Say IsaacLab instead if that is what you train on — the docs cover both.)
 
 It reads the docs here, adds the wrapper to your training script, and drives the
 run from there.
@@ -40,15 +44,18 @@ rlmcp status                                   # iteration, stage, headline metr
 rlmcp diagnose --seconds 4                     # is the gait smooth? is it tracking?
 rlmcp shot --where terrain=pyramid_stairs      # look at a robot on the stairs
 rlmcp video --seconds 5                        # and one at 0, 50, 100, 200 … unasked
+rlmcp view                                     # where the browser view is (a run has one)
 rlmcp set reward.action_rate_l2.weight -0.25 --why "ankles chattering at 15 Hz"
 rlmcp run set_terrain terrains='["flat","random_rough"]' max_level=4
 rlmcp curriculum advance --why "flat is solved"
 rlmcp checkpoint before-experiment             # and `rlmcp load` to undo
+rlmcp events --interventions                   # everything anyone did, and why
 rlmcp play                                     # watch a finished run's policy
 ```
 
-Every one of those is also an MCP tool. An agent can do all of it, and
-**it sees the screenshots and plots**, not just their file paths.
+Almost all of that is an MCP tool too, so an agent can drive the whole loop,
+and **it sees the screenshots and plots**, not just their file paths. `play` is
+the exception, and stays CLI-only because it opens a window.
 
 The CLI knows who is reading. A terminal gets aligned tables, and pictures open
 by themselves. A pipe gets JSON, and each command's JSON is a parsing contract
@@ -75,17 +82,45 @@ runner.learn(num_learning_iterations=agent_cfg.max_iterations)
 
 That is it. Details and traps: [docs/your-task.md](docs/your-task.md).
 
+### The same one call on IsaacLab
+
+IsaacLab launches its own app before anything else can be imported, so the wrap
+goes after `gym.make`. Downstream is the same CLI, the same MCP tools and the
+same JSON, minus what only mjlab can answer — the terrain commands, which an
+IsaacLab run reports as absent rather than broken.
+
+```python
+env = gym.make(task, cfg=env_cfg, render_mode="rgb_array")
+env = rlmcp_isaaclab.wrap(env, session_dir=log_dir / "rlmcp", task_id=task,
+                          service_every_steps=agent_cfg.num_steps_per_env)
+```
+
+<p align="center">
+  <img src="docs/media/isaaclab-anymal-shot.png" width="440"
+       alt="One ANYmal-D walking down pyramid stairs, picked out of 2048 training environments by rlmcp shot">
+</p>
+
+`rlmcp shot --env-id 300`, taken mid-training from a stock
+`Isaac-Velocity-Rough-Anymal-D-v0` run: one robot on the stairs, with the other
+2047 environments carrying on behind it. Nothing about the task was described to
+rlmcp — 73 tunable knobs came out of walking the environment's own manager
+configs, the same walk it uses on mjlab. The example script is
+[examples/train_isaaclab.py](examples/train_isaaclab.py), and the things that
+differ — cameras, the robot's name, which Isaac Sim goes with which driver — are
+in [docs/isaaclab.md](docs/isaaclab.md).
+
 ## What you get
 
 | | |
 | --- | --- |
 | **Look at the robot** | Screenshots and clips of real training steps, not a separate eval. Pick which robot with `--where terrain=stairs`. |
+| **Watch it live** | Every run serves a browser view; `rlmcp view` says where. It needs no renderer, so it works on a headless box, and it costs nothing while nobody has the tab open — which is why it is on rather than a flag. The tab has mjlab's own panels: reward bars, term plots, contact and force overlays. **Pause view** (or `rlmcp view --pause`) freezes the tab and hands the run back its full speed, without giving the port back. `--realtime` buffers a window and plays it at the speed the robot actually moves, with mjlab's player in the tab. |
 | **Know why it moves badly** | `diagnose` measures jerk, chatter, effort, posture and gait, then says which lever to pull. When it cannot measure properly, it says so instead of guessing. |
 | **Tune anything, live** | 97 knobs on the G1 rough task, discovered from the environment. Reward weights, randomization ranges, PPO hyperparameters. Applied between rollout batches, never mid-step. |
 | **A ladder that drives itself** | Curriculum stages promote on earned conditions, not a schedule. Override any of it from a shell. |
 | **Undo** | Checkpoints save weights *and* parameters, stage and extension state. |
 | **Your task's own words** | Extensions add verbs, metrics and env selectors. They reach the CLI, MCP and curriculum stages at once, without editing rlmcp. |
-| **A record that survives** | Every change is logged with its reason. Runs are kept as a graph with hypotheses and verdicts, so three failures in a row become one conclusion. |
+| **A record that survives** | Every change is logged with its reason, and every run stamps the code it launched with. Runs are kept as a graph with hypotheses and verdicts, so three failures in a row become one conclusion. |
 | **Look at a finished run** | `rlmcp play` restores the conditions a checkpoint trained under before rendering it. Otherwise a good policy looks broken. |
 
 ## A worked example: in-hand cube reorientation
@@ -137,6 +172,10 @@ pip install -e '.[server]'      # adds the MCP SDK for the agent side
 The MCP SDK is optional on purpose. The training process does not need it, and
 the server does not need a simulator. Both `mcp>=2` and `mcp` 1.x work.
 
+The simulator is yours to install. rlmcp asks only that it be importable from
+the training process — for IsaacLab that means installing into the interpreter
+Isaac Sim runs under.
+
 Register the server with Claude Code:
 
 ```bash
@@ -146,6 +185,7 @@ claude mcp add rlmcp -- rlmcp-server --root /path/to/logs
 ## Try it
 
 ```bash
+rlmcp tasks         # which ids exist here, before anything has run
 # train, with the terrain ladder driving itself
 rlmcp-train Mjlab-Velocity-Rough-Unitree-G1 --num-envs 4096
 ```
@@ -161,6 +201,9 @@ rlmcp diagnose --seconds 4
 
 The explicit-curriculum version of the same run is in
 [examples/train_g1_rough_curriculum.py](examples/train_g1_rough_curriculum.py).
+On IsaacLab, the equivalent first run is
+[examples/train_isaaclab.py](examples/train_isaaclab.py) — same four commands
+afterwards.
 
 ## Documentation
 
@@ -172,7 +215,8 @@ The explicit-curriculum version of the same run is in
 | [docs/your-task.md](docs/your-task.md) | Putting rlmcp on your own task, in five steps. |
 | [docs/curriculum.md](docs/curriculum.md) | Writing the stage ladder. |
 | [docs/extensions.md](docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
-| [docs/records.md](docs/records.md) | Hypotheses, verdicts, feedback, the record graph. |
+| [docs/isaaclab.md](docs/isaaclab.md) | Driving an IsaacLab run: the one line, cameras, what differs from mjlab. |
+| [docs/records.md](docs/records.md) | Hypotheses, verdicts, feedback, code snapshots, the record graph. |
 | [docs/design.md](docs/design.md) | How it fits together, how parameters are found, other simulators. |
 | [AGENTS.md](AGENTS.md) | Contributing to this repository. |
 
@@ -183,10 +227,10 @@ of JSON files.
 
 ```
    training process                session directory                 agent process
-    torch + mujoco                  plain JSON files                  no simulator
+  torch + a simulator               plain JSON files                  no simulator
 ┌───────────────────┐             ┌─────────────────┐             ┌──────────────────┐
 │ rlmcp-wrapped env │             │ status.json     │             │ MCP server       │
-│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (35 tools)       │
+│ publishes metrics │ ──writes──► │ metrics.jsonl   │ ───reads──► │ (37 tools)       │
 │ records frames    │             │ events.jsonl    │             │ rlmcp CLI        │
 │ runs commands     │ ◄──reads─── │ artifacts/      │ ◄──writes── │ your own scripts │
 │ between batches   │             │ inbox/  outbox/ │             │                  │
@@ -198,19 +242,23 @@ memory, and nothing blocks the training loop.
 
 That buys four things:
 
-- The agent side never imports torch or mujoco, so starting or killing it cannot
-  disturb training.
+- The agent side never imports torch or a simulator, so starting or killing it
+  cannot disturb training.
 - Commands run **between rollout batches**, so an edit can never race the
   simulator.
 - Everything is inspectable with `cat` when something goes wrong.
 - A run leaves a complete, replayable record behind after it exits.
 
-More in [docs/design.md](docs/design.md).
+The same split is why a second backend was cheap. Parameter discovery, trace
+sampling, metrics and the wrapper are written against the shape mjlab and
+IsaacLab share; each adapter is only what is genuinely its own — how a robot is
+found in the scene and how a frame is rendered. More in
+[docs/design.md](docs/design.md).
 
 ## Tests
 
 ```bash
-pytest tests -q     # 766 tests, ~6s, no GPU and no simulator required
+pytest tests -q     # 855 tests, ~10s, no GPU and no simulator required
 ```
 
 ## License

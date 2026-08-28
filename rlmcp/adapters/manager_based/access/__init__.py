@@ -16,18 +16,18 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from rlmcp.adapters.mjlab.access import paths
-from rlmcp.adapters.mjlab.access.actions import ActionAccess
-from rlmcp.adapters.mjlab.access.base import (
+from rlmcp.adapters.manager_based.access import paths
+from rlmcp.adapters.manager_based.access.actions import ActionAccess
+from rlmcp.adapters.manager_based.access.base import (
     AccessProvider,
     ProviderRegistry,
     Synthetic,
     Term,
 )
-from rlmcp.adapters.mjlab.access.commands import CommandAccess
-from rlmcp.adapters.mjlab.access.events import EventAccess
-from rlmcp.adapters.mjlab.access.rewards import RewardAccess
-from rlmcp.adapters.mjlab.access.terminations import TerminationAccess
+from rlmcp.adapters.manager_based.access.commands import CommandAccess
+from rlmcp.adapters.manager_based.access.events import EventAccess
+from rlmcp.adapters.manager_based.access.rewards import RewardAccess
+from rlmcp.adapters.manager_based.access.terminations import TerminationAccess
 from rlmcp.core.parameters.spec import Liveness, ParameterSpec
 
 PROVIDER_TYPES: List[type] = [
@@ -184,14 +184,16 @@ class ParameterAccess:
           f"Cannot set '{key}': liveness is 'inert'. The term's class "
           "instance cached this value when it was constructed and never "
           "re-reads the config, so no write can take effect during this run. "
-          "Change the task config and restart training instead."
+          "Change the task config and restart training instead (or give the "
+          "term an update_params(**fields) method that rebuilds its cache, "
+          "which makes the field live)."
       )
     try:
       written = resolved.write(value)
     except (TypeError, ValueError) as exc:
       raise type(exc)(f"Cannot set '{key}': {exc}") from exc
     try:
-      self._notify_class_term(term.root, parts, written)
+      self._notify_class_term(term, parts, written)
     except Exception as exc:
       raise RuntimeError(
           f"Set '{key}': the config value was updated, but rebuilding the "
@@ -209,24 +211,32 @@ class ParameterAccess:
     return notes
 
   @staticmethod
-  def _notify_class_term(root: Any, parts: List[str], value: Any) -> None:
+  def _notify_class_term(term: Term, parts: List[str], value: Any) -> None:
     """Give class-based terms a chance to rebuild anything they cached.
 
     Most mjlab terms are plain functions reading ``params`` every step and need
     nothing. A class-based term whose instance exposes ``update_params`` gets
-    it called with the updated top-level param -- the whole ``std`` dict when
-    one regex-keyed entry inside it changed, since that is the shape the term
-    cached from. A failure here must surface rather than vanish: the config
-    write has already landed, and an agent told nothing would keep trusting a
-    cache the term failed to rebuild.
+    it called with the updated top-level field -- the whole ``std`` dict when
+    one regex-keyed entry inside it changed, the whole ``ranges`` object when
+    one range did, since that is the shape the term cached from. The instance
+    is the term itself for a command term and ``root.func`` for a function
+    slot that mjlab filled with an instance. A failure here must surface
+    rather than vanish: the config write has already landed, and an agent told
+    nothing would keep trusting a cache the term failed to rebuild.
     """
-    func = getattr(root, "func", None)
-    hook = getattr(func, "update_params", None)
+    root = term.root
+    instance = term.instance
+    if instance is None:
+      instance = getattr(root, "func", None)
+    hook = getattr(instance, "update_params", None)
     if not callable(hook):
       return
     if len(parts) >= 2 and parts[0] == "params":
       name = parts[1]
       payload = getattr(root, "params", {}).get(name, value)
+    elif term.instance is not None:
+      name = parts[0]
+      payload = paths.resolve(root, [name]).read() if len(parts) > 1 else value
     else:
       name, payload = parts[-1], value
     hook(**{name: payload})

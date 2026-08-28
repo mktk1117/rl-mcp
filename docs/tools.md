@@ -70,6 +70,8 @@ output. Present and the command is not `record`, take `"result"` on success and
 
 | what you want | command | MCP tool |
 | --- | --- | --- |
+| what could I run at all | [`tasks`](#tasks) | (CLI only) |
+| is this task worth training | [`check`](#check) | (CLI only) |
 | what runs exist | [`sessions`](#sessions) | `list_sessions` |
 | point at another run | (use `--session`) | `switch_session` |
 | how is it doing | [`status`](#status) | `get_training_status` |
@@ -78,6 +80,9 @@ output. Present and the command is not `record`, take `"result"` on success and
 | a picture of the robot | [`shot`](#shot) | `take_screenshot` |
 | a clip of the robot | [`video`](#video) | `record_video` |
 | clips taken automatically | [`video --every`](#video) | `set_progress_video` |
+| watch it live in a browser | [`view`](#view) | `live_view` |
+| stop the view costing the run anything | [`view --pause`](#pause-the-tab-stays-the-cost-goes) | `live_view` |
+| watch it at the robot's own speed | [`view --realtime`](#--realtime-the-same-view-at-the-speed-the-robot-moves) | `live_view` |
 | why does it move badly | [`diagnose`](#diagnose) | `diagnose_motion` |
 | raw per-step signals | [`trace`](#trace), [`plot-trace`](#plot-trace), [`analyze`](#analyze) | `record_trace`, `plot_joint_trace` |
 | what can I tune | [`params`](#params), [`get`](#get) | `list_parameters` |
@@ -93,6 +98,150 @@ output. Present and the command is not `record`, take `"result"` on success and
 | run it again | [`recipe build`](records.md#making-a-run-runnable-again-rlmcp-recipe-build) | (CLI only) |
 | what code a run used | [`record code`](records.md#what-the-code-was-the-other-half-of-a-recipe) | (CLI only) |
 | the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
+
+---
+
+# Before there is a run
+
+## `tasks`
+
+Every task id this environment can drive, whether or not one has ever been
+trained. Everything else here starts from a session; this is the one question a
+task being *built* can ask, because it has no runs yet to be found by.
+
+```bash
+rlmcp tasks
+rlmcp tasks --task-package my_project.tasks       # yours, imported first
+rlmcp tasks --contains steering                   # narrow the list
+```
+
+```
+task                             backend  package               experiment
+Smp-Steering-Rough-G1            mjlab    smp_locomotion.tasks  smp_steering_rough_g1
+Smp-Steering-Rough-LowNoise-G1   mjlab    smp_locomotion.tasks  smp_steering_rough_g1
+Mjlab-Velocity-Rough-Unitree-G1  mjlab                          g1_velocity
+```
+
+| column | what it is |
+| --- | --- |
+| `task` | the id `--task` takes |
+| `backend` | which simulator's registry it came from |
+| `package` | the import that registered it — what to name in `--task-package` or `$RLMCP_TASK_PACKAGES`. Blank means the backend ships it, so nothing needs importing |
+| `experiment` | the log directory its runs land in. Two ids sharing one is worth knowing before you go looking for a run |
+
+The reply also carries `packages` and `backends`, and both matter when the list
+is empty: **a package that would not import** is the usual reason an id is
+missing, and it is invisible in the list itself — the task is simply not there —
+so its `ImportError` comes back with it. And **no backend installed** is a
+different answer from **no tasks registered**; a caller that cannot tell them
+apart will send somebody to fix the wrong thing.
+
+Nothing is discovered. Only packages you name are imported, because a listing
+that goes looking for packages on disk is a listing that runs code nobody asked
+it to.
+## `check`
+
+Build the task, roll it with no policy, build the runner a training run would
+build, and answer the six questions that decide whether training it is worth a
+GPU. Everything else here talks to a run; this runs before one exists.
+
+```bash
+rlmcp check --task Mjlab-Velocity-Rough-Unitree-G1
+rlmcp check --task My-Task --task-package my_project.tasks --policy random
+rlmcp check --task My-Task --steps 300 --num-envs 8 --device cuda:0
+```
+
+```
+gate            ok    detail
+imports         true
+constructs      true  8 env(s) on cuda:0          5.97 s
+steps           true  40 of 40 steps
+rewards_finite  true  6 terms, all finite
+terminations    true  0.6 episodes per env
+trains          true  1 iteration of 24 steps/env 0.71 s
+
+term              mean      share
+alive             2.98      0.83
+track_direction   0.31      0.09
+joint_acc_l2     -0.18      0.05
+```
+
+| gate | the failure it catches |
+| --- | --- |
+| `imports` | a syntax error, a package that does not import, a task nothing registers |
+| `constructs` | a term naming a body the robot does not have |
+| `steps` | an env that dies on step 1 |
+| `rewards_finite` | a NaN, a divide by zero, an exploding scale |
+| `terminations` | everything ending at once, or nothing ever ending |
+| `trains` | a runner that will not build, or dies at iteration 0 |
+
+A gate that fails **stops the ones after it**, and they report `not run` rather
+than passing — a "reward is NaN" line under "the env would not construct" sends
+you to fix a reward that was never the problem. Exit code is the verdict, so
+`rlmcp check --task X && rlmcp train X` is a sentence you can write.
+
+| flag | meaning |
+| --- | --- |
+| `--task` | required: there is no checkpoint here to infer one from |
+| `--policy zero\|random` | zero: the task must survive doing nothing. random: it must survive being shaken |
+| `--steps`, `--num-envs` | how long and how wide. Defaults 150 and 4 |
+| `--device` | `cpu` by default, so a check never queues behind a run |
+| `--task-package MODULE` | import this first, so your tasks register. Repeatable |
+| `--session-dir` | keep the throwaway session instead of using a temp dir |
+| `--no-runner` | skip the `trains` gate. On by default; see below for why |
+
+### Why `trains` is on by default
+
+The first five gates roll a *zero policy* — a callable returning zeros. It
+never constructs an RL runner, so it never opens the task's `rl_cfg`, and a
+task whose agent config is wrong passes all five and dies at iteration 0. That
+happened: five green ticks, then a run that was dead before its first log
+line, because the `rl_cfg` had no `distribution_cfg` and the actor had no
+distribution to sample from.
+
+`trains` builds the runner `rlmcp train` would build — the same
+`load_rl_cfg` / `load_runner_cls` from the same registry — against the
+environment that was just built, and takes one iteration on it: a rollout and
+one optimiser update. A missing config field, an actor whose input does not
+match the observation the env returns, an optimiser that cannot be built: all
+of them fail here, on CPU, in under a second, instead of on the card.
+
+It costs about that. The environment is already built and already rolled by
+the time this runs; the iteration adds `num_steps_per_env` steps on a handful
+of CPU envs and one PPO update over what they produce. Measured: 0.34 s of a
+4.8 s cartpole check, 0.71 s of a 5.9 s check of a 29-joint G1 task. Turn it
+off with `--no-runner` if your task's iteration really is expensive and you
+are checking something else.
+
+Two things it does *not* say. It runs nothing to W&B or tensorboard and leaves
+no run behind — the runner is built with no log directory on purpose. And a
+green `trains` means training **starts**, not that the task learns: that is
+what [`docs/tuning.md`](tuning.md) is for.
+
+It is the **last** gate, and deliberately so. It is the only one that needs
+the five before it to be true to mean anything — PPO will take an optimiser
+step on a NaN reward without complaining — so a failure anywhere above leaves
+it `not run` rather than spending an iteration proving nothing. It is also the
+only gate that steps the environment with something other than zeros, and the
+terms table below the gates is only "what doing nothing pays" because nothing
+before it did.
+
+### What the terms table is for
+
+The gates are the cheap half. The table under them is the one that changes what
+you build: **what each reward term actually paid**, largest first, against a
+policy that is by construction doing nothing.
+
+The failure it exists to make obvious is
+[docs/tuning.md](tuning.md#1-verify-the-task-before-training-on-it)'s worked
+example — a task where standing still paid about 2600× what making progress
+paid. Nobody writes that on purpose. It is invisible in the code, invisible in
+the total reward, and unmissable the moment the terms are side by side. When
+one term dominates, `dominance` names it and the ratio.
+
+The same numbers come from the environment's own managers, so a task whose
+backend cannot break its reward down says so rather than reporting a total as
+though it were a term.
 
 ---
 
@@ -203,10 +352,10 @@ Everything the run has written: PNGs, MP4s, `.npz` traces.
 
 # Looking at the robot
 
-All four commands below record during normal rollout steps, so what you see is
-real training behaviour, not a separate evaluation. `video`, `trace` and
-`diagnose` are **deferred jobs**: they collect data over the coming steps and
-answer when done.
+All the commands below read the run as it steps, so what you see is real
+training behaviour, not a separate evaluation. `video`, `trace` and `diagnose`
+are **deferred jobs**: they collect data over the coming steps and answer when
+done. `view` is the odd one out -- it records nothing and returns a URL.
 
 Every one takes `--env-id N` or `--where key=value` to pick which robot. The
 `where` vocabulary comes from the run's extensions — the core does not know what
@@ -257,15 +406,17 @@ The gap stops doubling at 2 000 so a long run still shows what it is doing
 rlmcp video --schedule            # cadence, next iteration, clips taken, MB spent
 rlmcp video --every 50            # flat: every 50 iterations from here
 rlmcp video --every double:200    # doubling, starting at 200
-rlmcp video --every 0             # off
+rlmcp video --every off           # no more clips
 rlmcp video --budget-mb 500       # let the clips use more disk
 rlmcp-train <task> --video-every double --video-seconds 4      # at launch
 ```
 
 `--video-every` / `--every` / `wrap(video_every=…)` / `set_progress_video` all
 take the same value: `double`, `double:<first>:<cap>`, a flat interval like
-`200`, or `0`. Anything else is refused with the reason rather than rounded
-into a different schedule.
+`200`, or `off` for no clips. `none`, `never`, `0` and an empty string are
+accepted for that last one too, but `off` is the one to write — "every 0"
+reads as *constantly*, which is the opposite of what it does. Anything else is
+refused with the reason rather than rounded into a different schedule.
 
 **What it costs.** Frames are rendered during the training rollout, one per
 environment step, so a clip shows the actual training environment --
@@ -277,6 +428,154 @@ says so (`--video-budget-mb`, `0` for no limit).
 A scheduled clip never takes the last deferred-job slot from a command you are
 waiting on; if it cannot start it says so in the events
 (`progress_clip_skipped`) and waits for the next gap.
+
+## `view`
+
+The run in a browser tab, live, while it trains. **A run already has one** --
+the URL is printed at startup and `rlmcp view` says it again.
+
+```bash
+rlmcp view                        # where is it?
+rlmcp view --pause                # stop it costing the run anything
+rlmcp view --resume               # start feeding it again
+rlmcp view --realtime             # play it back at the speed the robot moves
+rlmcp view --env-id 300           # show another environment
+rlmcp view --where terrain=pyramid_stairs
+rlmcp view --off                  # detach, and give the port back
+rlmcp view --on                   # attach one to a run launched with --no-viser
+rlmcp-train <task> --no-viser     # or launch without one, and no port bound
+```
+
+**MCP:** `live_view({"enabled": true})` -- returns the URL to hand to whoever
+asked to see the robot. It is a page, not an image: the tab keeps updating on
+its own.
+
+Attaching does not restart, pause or reload anything. A run launched hours ago
+with no viewer gets one on the next iteration boundary, showing the policy
+currently being trained -- exploration noise, curriculum stage and all -- and
+`--off` gives the port back. Which environment is shown can be changed from
+either end: the slider in the tab, or `--env-id` / `--where` from a shell.
+
+**Why it is on rather than a flag.** Because the hour into a run when somebody
+wants to see the robot is not an hour they can go back and pass a flag in, and
+because an unwatched view uses a port and nothing else. `--no-viser` opts out
+and binds no port.
+
+```
+   the run ──▶ every step ──▶ due? ──▶ anybody watching? ──▶ push ──▶ browser
+                               │                   │
+                          20 per second       no browser: stop here
+```
+
+**What it costs.** Nothing while no browser is open -- the tick is a clock
+comparison and returns. With a tab open it is a state copy at up to 20 frames a
+second (`--fps`); a G1-sized scene measures around 1-3 ms a frame, and
+`rlmcp status` reports the measured `push_ms` so you never have to take that on
+faith. There is **no renderer**: geometry crosses to the browser once and only
+body poses follow, so unlike `shot` and `video` this needs no render context, no
+GPU memory and no GL -- it works on a headless box over ssh.
+
+**Where it is served.** Port 8740 by default, and the next free one after that
+if it is taken, so a second run on the same machine does not silently fail or
+show you the first one. Bound on all interfaces: from another machine use
+`http://<host>:<port>` (`host_url` in the status payload), or forward it with
+`ssh -L 8740:localhost:8740 <host>`.
+
+### Pause: the tab stays, the cost goes
+
+```bash
+rlmcp view --pause     # or the button in the tab; the player's Pause in realtime
+rlmcp view --resume
+```
+
+The same idea as IsaacGym's sync toggle. The tab holds the frame it last
+painted, the port stays bound, the scene stays built in the browser -- and the
+run goes straight back to the speed it trains at unwatched, because the
+per-step tick returns at its first gate, before it reads a clock or asks who
+is connected. Resuming is a click rather than a rebuild, which is the whole
+difference between this and `--off`.
+
+In realtime the player's **Pause** is this: it stops the playback *and* the
+recording together, because a window recorded during a pause is a stretch of
+the run nobody watched. On resume the next window starts after the pause
+rather than splicing across it.
+
+`status.live_view.paused` says which it is.
+
+### What else is in the tab
+
+mjlab's own viewer panels, below rlmcp's:
+
+* **Rewards** -- live bars per reward term against their running means, plus
+  term plots. **Metrics** the same for the metrics manager.
+* **Visualization** -- contact points and forces, inertia, joints, actuators,
+  convex hulls, tendons, COM, constraints.
+* **Scene** -- the environment slider, camera, and per-sensor and per-reward
+  debug visualisation.
+
+They are mjlab's code, read on rlmcp's thread: every value they show is read
+inside the same push that sends the frame, so nothing here races the step that
+produced it. What they cost is inside the measured `push_ms`, and it is paid
+only while somebody is watching and not paused.
+
+Two of mjlab's panels are deliberately absent. **Commands**, because its
+sliders write to the command manager, and retuning a command term is a change
+to the run -- `rlmcp set` is how that is asked for, and it records who asked
+and why. **Camera Feeds**, because they need a render context and this view's
+whole claim is that it needs none.
+
+In realtime the debug *arrows* are not drawn, though their checkboxes are
+there: the pose on screen is a few seconds old and the arrows would be from
+now, which is two moments drawn as one.
+
+**What it is not.** A recording. Nothing here lands in the run record, because
+nothing here is evidence -- clips and traces are the run's memory and this is
+the window.
+
+### `--realtime`: the same view, at the speed the robot moves
+
+By default the view shows the *current* step, which means it runs at the run's
+pace -- training steps as fast as the GPU allows, so a policy walking at 1 m/s
+sprints across the tab and a gait is impossible to judge.
+
+`--realtime` fixes that by buffering. The run records a few seconds of itself
+into a window, hands it over, and the tab plays it back at 1x:
+
+```
+ record 3s of sim   ──▶   play it back over 3s of wall clock   ──▶   record again
+ (a fraction of a                   ▲
+  second, at 20x)                   └── pause · single step · 1/32x … 8x
+```
+
+What you get in the tab is mjlab's own player: **Pause**, **Step**, a **Speed**
+control from 1/32x to 8x, and *Skip to a fresh window* when you would rather
+see now than see it properly. The status line says where the playback is and
+how old the window is (`playing 75/150 (1.5s of 3s) · recorded 2s ago`), and
+`rlmcp status` carries the same under `live_view.playback`.
+
+```bash
+rlmcp view --realtime                    # switch a running view over
+rlmcp view --realtime --buffer-seconds 8 # a longer window
+rlmcp view --live                        # back to the current step
+```
+
+The trade is stated plainly: you are watching a stretch that finished a moment
+ago, not the current step, and the jump between windows is however much sim
+time passed while the last one played. Each window is one *contiguous* stretch
+-- if the browser closes or the run pauses mid-recording, the window starts
+over rather than splicing two moments together and calling the result motion.
+
+**What it costs.** A few hundred bytes copied per environment step while a
+window is filling, with no device synchronisation -- and nothing at all between
+windows, which is most of the time. The transfer to the CPU happens once per
+window; forward kinematics, the browser, and waiting out real time all happen
+on the player's own thread, where being slow costs the run nothing. Switching
+mode rebuilds the view (the buffer and the player exist on one side of that
+switch and not the other), so the tab reloads.
+
+A view that fails three pushes in a row detaches itself, says why in the events
+(`live_view_stopped`), and frees the port -- a broken window must not become a
+cost on every training step.
 
 ## `diagnose`
 
@@ -399,7 +698,7 @@ write:
 | --- | --- |
 | `live` | takes effect next rollout batch |
 | `at_reset` | applied now, takes effect at each environment's next reset. The response says so |
-| `at_startup`, `inert` | the write is **refused**. These are only read when the environment is built, so a write would report success and change nothing |
+| `at_startup`, `inert` | the write is **refused**. These are only read when the environment is built -- `at_startup` by a startup event, `inert` by a class-based term's constructor, which kept what it derived from them -- so a write would report success and change nothing. A term that can rebuild its cache exposes `update_params(**fields)` and stays `live` |
 
 ## `get`
 
@@ -604,11 +903,12 @@ rlmcp play logs/rsl_rl/my_run/model_final_4375.pt --device cpu
 rlmcp play --stage 2_hardest --seconds 12
 rlmcp play --mode native                        # MuJoCo's own viewer
 rlmcp play --mode viser                         # a viewer in the browser
+rlmcp play --task My-Task --policy zero --mode hold   # built, stepping, serving nothing
 ```
 
 | flag | meaning |
 | --- | --- |
-| `--mode video\|native\|viser` | render an mp4 (works over ssh), or open a viewer |
+| `--mode video\|native\|viser\|hold` | render an mp4 (works over ssh), open a viewer, or hold the env open and serve nothing |
 | `--device cpu` | play without touching a GPU that is training |
 | `--stage NAME` | restore conditions as of the end of that stage |
 | `--set KEY=VALUE` | override a parameter after the replay, so it wins. Repeatable |
@@ -617,6 +917,31 @@ rlmcp play --mode viser                         # a viewer in the browser
 | `--task-package MODULE` | import this first so your tasks register. Repeatable |
 | `--num-envs`, `--extra-envs` | how many robots, and how many composited into the frame |
 | `--seconds`, `--fps`, `--out`, `--render-width/-height` | clip options |
+
+### `--mode hold`: an environment to drive rather than watch
+
+The other three modes end with somebody *looking* at the robot — a file, a
+window, a browser tab. `hold` opens nothing. It steps the environment at its
+own control rate and waits, which turns a task into something you can drive
+with everything else rlmcp already has:
+
+```bash
+rlmcp play --task My-Task --policy zero --mode hold --session-dir /tmp/preview &
+rlmcp --session /tmp/preview view --on          # look at it, when you want to
+rlmcp --session /tmp/preview shot               # a frame
+rlmcp --session /tmp/preview set reward.alive.weight 0.5 --why "it just stands"
+rlmcp --session /tmp/preview reset-envs
+rlmcp --session /tmp/preview stop
+```
+
+No renderer, no window, no port, no display, no GPU, and with `--policy zero`
+no checkpoint — which makes it the cheapest way to have a task standing in
+front of you. `--seconds` bounds it; the default is to hold until `rlmcp stop`.
+
+It paces itself to the environment's control rate on purpose. An unpaced hold
+advances simulated time as fast as the machine can integrate it, so a view
+attached to it shows a robot sprinting and anything measured "per second" is
+measuring the machine. If the loop cannot keep up it says so and how often.
 
 ### Why `play` replays the run first
 

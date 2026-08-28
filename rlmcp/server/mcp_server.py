@@ -736,14 +736,57 @@ def create_mcp_server(
 
     Args:
       every: the cadence. "double" (the default), "double:<first>:<cap>", a
-        flat interval like "200", or "0" to stop taking clips. A change takes
-        effect at the next iteration.
+        flat interval like "200", or "off" to stop taking clips ("none",
+        "never" and 0 mean the same). A change takes effect at the next
+        iteration.
       seconds: length of each clip.
       env_id: which environment to film.
       budget_mb: disk the clips may use before the schedule stops itself.
     """
     return _call(handle, "progress_video", every=every, seconds=seconds,
                  env_id=env_id, budget_mb=budget_mb)
+
+  @mcp.tool()
+  def live_view(
+      enabled: Optional[bool] = None,
+      env_id: Optional[int] = None,
+      where: Optional[Dict[str, Any]] = None,
+      realtime: Optional[bool] = None,
+      fps: Optional[float] = None,
+      port: Optional[int] = None,
+      paused: Optional[bool] = None,
+  ) -> Dict[str, Any]:
+    """Attach a live browser view to the run, re-point it, or detach it.
+
+    The view is a 3-D scene served over viser and fed from the training loop,
+    so it shows the policy that is being trained right now -- no checkpoint, no
+    restart, and no pause. Return the URL to whoever asked to see the robot;
+    it is not an image, it is a page they open.
+
+    A training run has one attached already, so call with no arguments to
+    report where it is. It costs nothing while no browser is connected or
+    while it is paused, so leaving one attached is cheap; ``enabled=False``
+    gives the port back.
+
+    Args:
+      enabled: True attaches the view, False detaches it.
+      env_id: which environment to show.
+      where: pick that environment by description instead, e.g.
+        {"terrain": "pyramid_stairs"} -- see ``get_training_status`` for the
+        vocabulary this run supports.
+      realtime: True buffers a few seconds of the run and plays it back at the
+        speed the robot actually moves, with a player in the tab. Worth asking
+        for when somebody wants to judge a gait: training steps far faster than
+        life, so the default view is a fast-forward.
+      fps: frames per second pushed while somebody is watching (live mode).
+      port: first port to try; busy ones are skipped.
+      paused: True stops feeding an attached view -- the tab holds the frame
+        it has and the run goes back to the speed it trains at unwatched --
+        without giving the port back. False starts it again.
+    """
+    return _call(handle, "live_view", enabled=enabled, env_id=env_id,
+                 where=where, realtime=realtime, fps=fps, port=port,
+                 paused=paused)
 
   # Motion analysis.
 

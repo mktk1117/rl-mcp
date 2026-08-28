@@ -14,6 +14,7 @@ constructor runs.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import pytest
@@ -167,3 +168,114 @@ def test_a_stop_unwinds_as_the_core_signal_under_the_backend_name(wrapper_cls,
     wrapper._service(iteration=1)
 
   assert "seen enough" in str(caught.value)
+
+
+# Where "once per learning iteration" lives, per runner.
+
+
+class _MjlabStyleRunner:
+  """mjlab: the runner owns a logger object with a `log(it=...)`."""
+
+  def __init__(self):
+    self.logger = SimpleNamespace(log=self._log)
+    self.seen = []
+
+  def _log(self, *args, **kwargs):
+    self.seen.append(kwargs.get("it", args[0] if args else None))
+
+
+class _RslRlStyleRunner:
+  """plain rsl_rl, which IsaacLab uses: `log(locs)` on the runner itself."""
+
+  def __init__(self):
+    self.seen = []
+
+  def log(self, locs, width=80, pad=35):
+    self.seen.append(locs.get("it"))
+
+
+@pytest.mark.parametrize("runner_type", [_MjlabStyleRunner, _RslRlStyleRunner],
+                         ids=["mjlab-logger", "rsl_rl-runner"])
+def test_the_iteration_hook_is_found_wherever_the_runner_keeps_it(
+    runner_type, wrapper_cls, tmp_path, monkeypatch):
+  """A backend that logs from the runner rather than from a logger object still
+  gets serviced on iteration boundaries -- not every N steps, which is the
+  fallback and answers commands at the wrong moment."""
+  wrapper = wrapper_cls(wrappable_env(), session_dir=tmp_path / "session",
+                        video_every=0)
+  serviced = []
+  monkeypatch.setattr(type(wrapper), "_service",
+                      lambda self, iteration=None: serviced.append(iteration))
+  runner = runner_type()
+  try:
+    wrapper.attach_runner(runner)
+    if isinstance(runner, _MjlabStyleRunner):
+      runner.logger.log(it=7)
+    else:
+      runner.log({"it": 7})
+  finally:
+    wrapper.rlmcp.close()
+
+  assert wrapper._runner_hooked is True
+  assert serviced == [7]
+  assert runner.seen == [7]     # and the runner's own logging still happened
+
+
+# The shared base is not a backend.
+
+
+def test_the_shared_base_cannot_be_wrapped_round_an_environment(tmp_path):
+  """`manager_based` holds the half that is not any simulator's, so it has no
+  simulator to talk to. Constructing it directly has to fail where a backend
+  would have answered -- and say which file to copy -- rather than half-build a
+  wrapper whose every sim call is broken."""
+  pytest.importorskip("torch", reason="the wrapper module imports torch")
+  from rlmcp.adapters import manager_based
+  from rlmcp.adapters.manager_based import env_wrapper as shared
+
+  # No module-level `wrap()` here: the entry point belongs to the backend that
+  # can name a SimAdapter, next to the subclass it builds.
+  assert not hasattr(shared, "wrap")
+  assert not hasattr(manager_based, "wrap")
+
+  with pytest.raises(NotImplementedError) as caught:
+    shared.RlMcpEnvWrapper(wrappable_env(), session_dir=tmp_path / "session")
+  assert "build_sim_adapter" in str(caught.value)
+  assert "mjlab" in str(caught.value)
+
+
+# The live view is on unless somebody says otherwise.
+#
+# It is a default rather than a flag because of what it costs: with no browser
+# open, and while paused, the tick returns before it reads a clock. What an
+# unwatched view uses is a port. What a missing one costs is the hour of a run
+# somebody now wants to look at and cannot.
+
+
+def test_a_training_run_serves_a_live_view_without_being_asked():
+  from rlmcp.adapters.manager_based.env_wrapper import serve_a_live_view
+
+  assert serve_a_live_view(None, "") is True
+
+
+def test_a_play_session_does_not():
+  # It is opening a viewer of its own; a second one on a second port is only a
+  # way to end up watching the wrong scene.
+  from rlmcp.adapters.manager_based.env_wrapper import serve_a_live_view
+
+  assert serve_a_live_view(None, "play") is False
+
+
+def test_saying_so_wins_either_way():
+  from rlmcp.adapters.manager_based.env_wrapper import serve_a_live_view
+
+  assert serve_a_live_view(False, "") is False
+  assert serve_a_live_view(True, "play") is True
+
+
+def test_rlmcp_train_defaults_the_view_on_and_no_viser_turns_it_off():
+  from rlmcp.train import _parse_args
+
+  assert _parse_args(["Some-Task"]).viser is True
+  assert _parse_args(["Some-Task", "--no-viser"]).viser is False
+  assert _parse_args(["Some-Task", "--viser"]).viser is True

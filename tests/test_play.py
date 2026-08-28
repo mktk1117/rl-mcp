@@ -16,8 +16,10 @@ import json
 import pytest
 
 from rlmcp.play import (
+    POLICIES,
     PlayConfig,
     PlayError,
+    UntrainedPolicy,
     add_arguments,
     checkpoint_iteration,
     config_from_args,
@@ -721,3 +723,179 @@ def test_closing_a_stopped_play_session_records_its_end(tmp_path, fake_sim):
   ended = [e for e in Session.open(controller.session.dir).events()
            if e["kind"] == "session_end"]
   assert ended and ended[-1]["stop_reason"] == "closed from another shell"
+
+
+# A task with no policy yet.
+#
+# `play` was built around a checkpoint, and a checkpoint is what tells it the
+# session, the task and the conditions. A task being *written* has none of
+# those, and looking at it is the cheapest way to find out that it terminates
+# on the first step. These cover the half of that which needs no simulator.
+
+
+def test_zero_actions_are_zero_and_the_right_shape():
+  policy = UntrainedPolicy((4, 12), "cpu", "zero")
+
+  actions = policy()
+
+  assert tuple(actions.shape) == (4, 12)
+  assert float(actions.abs().sum()) == 0.0
+
+
+def test_random_actions_stay_in_the_normalised_span():
+  """mjlab action terms scale and offset a normalised action, so [-1, 1] is the
+  span a policy would emit -- not a guess at joint limits."""
+  policy = UntrainedPolicy((8, 6), "cpu", "random")
+
+  actions = policy()
+
+  assert tuple(actions.shape) == (8, 6)
+  assert bool((actions.abs() <= 1.0).all())
+
+
+def test_an_untrained_policy_needs_a_task():
+  """With no checkpoint there is no session to read the task from, so asking
+  for one is the only honest thing to do."""
+  with pytest.raises(PlayError, match="needs --task"):
+    run_play(PlayConfig(policy="zero"))
+
+
+def test_an_unknown_policy_is_refused_by_name():
+  with pytest.raises(PlayError, match="Unknown policy"):
+    run_play(PlayConfig(policy="borrowed", task="Some-Task"))
+
+
+def test_an_untrained_play_never_looks_for_a_checkpoint(tmp_path, monkeypatch):
+  """The regression this whole change is about: `find_checkpoint` ran first and
+  raised, so a task with no checkpoint could not be opened at all -- whatever
+  else was asked for."""
+  looked = []
+  monkeypatch.setattr("rlmcp.play.find_checkpoint",
+                      lambda target: looked.append(target) or (_ for _ in ()).throw(
+                          AssertionError("looked for a checkpoint")))
+  monkeypatch.setattr("rlmcp.play._choose_gl_backend", lambda cfg: None)
+  monkeypatch.setattr("rlmcp.play.build_env",
+                      lambda cfg, task, session_dir: (_ for _ in ()).throw(
+                          PlayError("stop here: past the checkpoint lookup")))
+
+  with pytest.raises(PlayError, match="stop here"):
+    run_play(PlayConfig(policy="zero", task="Some-Task"))
+
+  assert looked == []
+
+
+def test_the_policy_choice_round_trips_through_the_command_line():
+  import argparse
+
+  parser = add_arguments(argparse.ArgumentParser())
+  args = parser.parse_args(["--task", "Some-Task", "--policy", "random"])
+
+  assert config_from_args(args, {}).policy == "random"
+  assert "checkpoint" in POLICIES
+
+
+# ── holding an environment open, with nothing serving it ─────────────────
+#
+# `--mode hold` is the mode with no viewer: it exists so that everything else
+# rlmcp can do to a session -- attach a view, take a frame, change a weight --
+# works on a task that is merely *built*. None of that needs a simulator to
+# test; what needs testing is the loop, its clock, and how it ends.
+
+class _HeldEnv:
+  """A vec env that counts steps and can ask to be stopped."""
+
+  def __init__(self, stop_after: int = 0):
+    self.stop_after = stop_after
+    self.steps = 0
+
+  def get_observations(self):
+    return "obs"
+
+  def step(self, _action):
+    from rlmcp.core.controller import SessionStopped
+
+    self.steps += 1
+    if self.stop_after and self.steps >= self.stop_after:
+      raise SessionStopped("stop requested")
+    return "obs", 0.0, False, {}
+
+
+class _HeldLab:
+  def __init__(self, dt=0.0, stop_reason=""):
+    self.sim = type("Sim", (), {"step_dt": staticmethod(lambda: dt)})()
+    self.session = type("Session", (), {"dir": "/tmp/session"})()
+    self._reason = stop_reason
+
+  def should_stop(self):
+    return bool(self._reason)
+
+  @property
+  def stop_reason(self):
+    return self._reason
+
+
+def _held(dt=0.0, stop_after=0, seconds=0.0, stop_reason=""):
+  from rlmcp.play import PlayConfig, _hold
+
+  env = type("Env", (), {})()
+  env.rlmcp = _HeldLab(dt=dt, stop_reason=stop_reason)
+  vec = _HeldEnv(stop_after=stop_after)
+  cfg = PlayConfig(task="T", policy="zero", mode="hold", seconds=seconds, quiet=True)
+  return _hold(cfg, env, vec, lambda _obs: "action"), vec
+
+
+def test_hold_is_a_mode():
+  from rlmcp.play import MODES
+
+  assert "hold" in MODES
+
+
+def test_a_held_session_ends_when_somebody_says_stop():
+  """The same SessionStopped the viewers unwind on, at the same boundary."""
+  payload, vec = _held(stop_after=5, stop_reason="stop requested")
+
+  assert payload["held"] is True
+  assert payload["stopped"] is True
+  assert payload["stop_reason"] == "stop requested"
+  # Four steps completed and a fifth interrupted: the count is what the
+  # environment actually finished, not what was attempted.
+  assert payload["steps"] == 4
+  assert vec.steps == 5
+
+
+def test_a_bounded_hold_ends_on_its_own():
+  payload, _vec = _held(seconds=0.05)
+
+  assert payload["stopped"] is False
+  assert payload["steps"] > 0
+
+
+def test_a_hold_runs_at_the_environments_own_clock():
+  """Unpaced, simulated time advances as fast as the CPU integrates it, and
+  anything attached to it shows a robot sprinting."""
+  import time
+
+  started = time.time()
+  payload, _vec = _held(dt=0.02, seconds=0.2)
+  elapsed = time.time() - started
+
+  assert payload["step_dt"] == 0.02
+  # ~10 steps of 20 ms, not thousands.
+  assert payload["steps"] <= 20
+  assert elapsed >= 0.15
+
+
+def test_seconds_defaults_by_mode_because_a_hold_has_no_natural_length():
+  import argparse
+
+  from rlmcp.play import add_arguments, config_from_args
+
+  parser = add_arguments(argparse.ArgumentParser())
+  clip = config_from_args(parser.parse_args(["--task", "T"]), {})
+  hold = config_from_args(parser.parse_args(["--task", "T", "--mode", "hold"]), {})
+  asked = config_from_args(
+      parser.parse_args(["--task", "T", "--mode", "hold", "--seconds", "30"]), {})
+
+  assert clip.seconds == 8.0
+  assert hold.seconds == 0.0        # until `rlmcp stop`
+  assert asked.seconds == 30.0

@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict
 
 import torch
 
-from rlmcp.adapters.mjlab.state.sampling import first_command, is_velocity_command
+from rlmcp.adapters.manager_based.sampling import first_command, is_velocity_command
 
 
 def _try(out: Dict[str, float], fn: Callable[[], None]) -> None:

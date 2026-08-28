@@ -269,6 +269,7 @@ ENVELOPE = "envelope"  # {"ok": ..., "result": ...} / {"ok": false, "error": ...
 
 SHAPES = {
     "sessions": LIST,
+    "tasks": BARE,         # answered from the registry; there may be no session
     "events": LIST,
     "status": BARE,
     "info": BARE,
@@ -285,6 +286,8 @@ SHAPES = {
     "plot": ENVELOPE,
     "shot": ENVELOPE,
     "video": ENVELOPE,
+    "view": ENVELOPE,
+    "check": ENVELOPE,     # stands in for a trainer that does not exist yet
     "play": ENVELOPE,
     "trace": ENVELOPE,
     "diagnose": ENVELOPE,
@@ -324,7 +327,7 @@ _SHAPE_ARGS = {
     # the half a store command can show without a live trainer.
     "recipe": ["build", "404"],
 }
-_REFUSALS = {"play", "analyze", "recipe"}
+_REFUSALS = {"play", "analyze", "check", "recipe"}
 
 # `train` and `serve` hand the line to another program; there is no payload.
 _NO_OUTPUT = {"train", "serve"}

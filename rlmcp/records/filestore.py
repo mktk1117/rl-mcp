@@ -44,7 +44,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator, List, Optional, Tuple
 
-from rlmcp.records.record import Feedback, RunRecord, Lease, slugify
+from rlmcp.records.record import FEEDBACK_KINDS, Feedback, RunRecord, Lease, slugify
 from rlmcp.records.store import ConflictError, MediaStore, SlotUnavailable, StoreError
 
 INDEX_NAME = "index.sqlite"
@@ -578,6 +578,15 @@ class FileStore:
     """
     if not feedback.text.strip():
       raise StoreError("Feedback with no text: there is nothing to record.")
+    if not isinstance(feedback.kind, str) or feedback.kind not in FEEDBACK_KINDS:
+      # Refused here rather than at the index, which is where it used to fail:
+      # by then meta.json had already taken the entry, so the caller was told
+      # the write failed while the record kept it -- and every subsequent write
+      # to that record failed the same way, across restarts, with no way back
+      # through this API. One malformed field destroyed a run's ledger.
+      raise StoreError(
+          f"Feedback kind {feedback.kind!r} is not one of "
+          f"{', '.join(FEEDBACK_KINDS)}.")
 
     def append(fresh: RunRecord) -> None:
       fresh.feedback.append(feedback)

@@ -120,6 +120,23 @@ them without a response is not a dropped ball.
 """
 
 
+def _readable_kind(value: Any) -> str:
+  """A kind that can be stored, whatever was found in the file.
+
+  Records outlive the code that wrote them, and a record that cannot be *read*
+  cannot be repaired either. A kind that is not a string at all -- which a
+  client was able to write, see :meth:`RecordStore.add_feedback` -- would make
+  every later write to that record fail on the index, permanently. So reading
+  is forgiving: the remark survives, and its kind becomes something a person
+  can see is wrong and correct.
+  """
+  if isinstance(value, str):
+    return value
+  if value is None:
+    return "steer"
+  return "observe"
+
+
 @dataclass
 class Feedback:
   """One thing a human said about this run, and what was done about it.
@@ -192,7 +209,7 @@ class Feedback:
     iteration = d.get("iteration")
     return Feedback(
         text=d.get("text", ""),
-        kind=d.get("kind", "steer"),
+        kind=_readable_kind(d.get("kind")),
         author=d.get("author", "user"),
         at=float(d.get("at", time.time())),
         iteration=None if iteration is None else int(iteration),

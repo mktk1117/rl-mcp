@@ -18,7 +18,10 @@ worse outcome than a trajectory that stops and says why.
 
 Configured with one value everywhere (``video_every=``, ``--video-every``,
 ``rlmcp video --every``): ``"double"``, ``"double:100:5000"`` to move the first
-gap and the cap, a plain ``200`` for a flat interval, or ``0`` for no clips.
+gap and the cap, a plain ``200`` for a flat interval, or ``"off"`` for no clips
+at all. ``"none"``, ``"never"``, ``0`` and the empty string are all accepted
+for that last one -- ``"off"`` is the one worth writing, because "every 0"
+reads as "constantly", which is the opposite of what it does.
 """
 
 from __future__ import annotations
@@ -40,12 +43,23 @@ DEFAULT_BUDGET_MB = 200.0
 """Disk one run's clips may take before the schedule stops. ``0`` for no limit."""
 
 
+class CadenceError(ValueError):
+  """A cadence that cannot be read.
+
+  Its own type because the trainer catches it *before* anything expensive
+  starts, to turn a mistyped ``--video-every`` into one line rather than a
+  traceback out of the middle of environment construction. A ``ValueError``
+  subclass so that everything already catching ``ValueError`` around cadence
+  parsing keeps working unchanged.
+  """
+
+
 def _flat(every: int) -> Optional["Cadence"]:
   """A flat interval, or None for zero. A negative one is a typo, not "off":
   reading it as "no clips" would be the silent reinterpretation this parser
   exists to prevent."""
   if every < 0:
-    raise ValueError(f"A clip cadence cannot be negative ({every}); use 0 for none.")
+    raise CadenceError(f"A clip cadence cannot be negative ({every}); use 0 for none.")
   return Cadence(every, every) if every else None
 
 
@@ -59,7 +73,7 @@ class Cadence:
   def __init__(self, first: int = DEFAULT_FIRST,
                max_every: Optional[int] = DEFAULT_MAX_EVERY):
     if int(first) <= 0:
-      raise ValueError(f"A clip cadence needs a positive gap, not {first}.")
+      raise CadenceError(f"A clip cadence needs a positive gap, not {first}.")
     self.first = int(first)
     self.max_every = None if not max_every else max(int(max_every), self.first)
 
@@ -67,17 +81,18 @@ class Cadence:
   def parse(spec: Any) -> Optional["Cadence"]:
     """Read a cadence from ``"double[:first[:cap]]"``, a number, or None.
 
-    ``None`` in means the default; ``None`` out means "no clips" (``0``,
-    ``"off"``), which is an answer rather than an error. Anything else that
-    does not parse raises, because a mistyped schedule quietly becoming a
-    different one is worse than a failed launch.
+    ``None`` in means the default; ``None`` out means "no clips"
+    (``"off"``, and the ``"none"`` / ``"never"`` / ``0`` / ``""`` spellings of
+    it), which is an answer rather than an error. Anything else that does not
+    parse raises, because a mistyped schedule quietly becoming a different one
+    is worse than a failed launch.
     """
     if spec is None:
       return Cadence()
     if isinstance(spec, Cadence):
       return spec
     if isinstance(spec, bool):  # bool is an int; nobody means True here.
-      raise ValueError(f"A cadence is a number or a string, not {spec!r}.")
+      raise CadenceError(f"A cadence is a number or a string, not {spec!r}.")
     if isinstance(spec, (int, float)):
       return _flat(int(spec))
 
@@ -91,9 +106,10 @@ class Cadence:
         return Cadence(*(numbers or [DEFAULT_FIRST]))
       flat = int(parts[0])
     except ValueError:
-      raise ValueError(
+      raise CadenceError(
           f"Could not read '{spec}' as a cadence. Write 'double', "
-          "'double:<first>:<cap>', a flat interval like '200', or '0'."
+          "'double:<first>:<cap>', a flat interval like '200', or 'off' for "
+          "no clips."
       ) from None
     return _flat(flat)
 
