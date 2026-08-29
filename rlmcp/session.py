@@ -157,7 +157,8 @@ def read_jsonl(path: Path, last_n: int | None = None) -> list[Any]:
   if last_n is not None and last_n <= 0:
     return []
   try:
-    lines = path.read_text().splitlines() if last_n is None else _tail_lines(path, last_n)
+    lines = (path.read_bytes().decode("utf-8", errors="replace").splitlines()
+             if last_n is None else _tail_lines(path, last_n))
   except OSError:
     return []
   out: list[Any] = []
