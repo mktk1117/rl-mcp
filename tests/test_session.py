@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from rlmcp.session import Session, iter_sessions
+from rlmcp.session import WIRE_SURFACE, Session, SessionClient, iter_sessions
 
 
 def test_request_response_roundtrip(tmp_path):
@@ -704,3 +704,105 @@ def test_artifacts_are_listable_without_a_live_trainer(tmp_path):
   assert out["ok"] and out["count"] == 2
   assert {r["name"] for r in out["artifacts"]} == {"metrics.png", "clip.mp4"}
   assert all(r["bytes"] > 0 for r in out["artifacts"])
+
+
+# The client surface: what a reader of a run may use, and nothing else.
+
+
+def test_the_local_session_satisfies_the_client_protocol(tmp_path):
+  session = Session(tmp_path / "run" / "rlmcp").create({})
+
+  assert isinstance(session, SessionClient)
+
+
+def test_every_name_on_the_wire_surface_exists(tmp_path):
+  """`WIRE_SURFACE` is the promise; this is the check that it is not fiction."""
+  session = Session(tmp_path / "run" / "rlmcp").create({})
+
+  missing = [name for name in WIRE_SURFACE if not hasattr(session, name)]
+
+  assert missing == []
+
+
+def test_the_wire_surface_does_not_grow_by_accident():
+  """Adding a name here is a decision about the wire, so it is written twice.
+
+  A second implementation lives behind a connection, and every name added to
+  this list is one it has to answer. That should cost a moment's thought and a
+  failing test, not a passing import.
+  """
+  assert set(WIRE_SURFACE) == {
+      "address", "key", "name",
+      "info", "status", "params",
+      "metrics", "metrics_count", "events",
+      "list_artifacts", "read_artifact",
+      "submit", "poll", "wait", "call",
+      "liveness", "liveness_info",
+  }
+
+
+def test_a_session_names_itself_three_ways(tmp_path):
+  session = Session(tmp_path / "2026-01-01_g1" / "rlmcp").create({})
+
+  assert session.address == str(tmp_path / "2026-01-01_g1" / "rlmcp")
+  assert session.key == "2026-01-01_g1/rlmcp"   # tells two runs apart
+  assert session.name == "2026-01-01_g1"        # what a plot title wants
+
+
+def test_key_falls_back_to_the_leaf_at_the_filesystem_root():
+  """A session directly under `/` has no parent name to disambiguate with."""
+  session = Session("/rlmcp")
+
+  assert session.key == "rlmcp"
+  assert session.name == "rlmcp"
+
+
+def test_metrics_count_is_the_total_not_the_window(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  for i in range(5):
+    session.append_metrics(i, {"reward": float(i)})
+
+  assert session.metrics_count() == 5
+  assert len(session.metrics(last_n=2)) == 2
+
+
+def test_metrics_count_of_a_run_that_logged_nothing_is_zero(tmp_path):
+  assert Session(tmp_path / "sess").create({}).metrics_count() == 0
+
+
+def test_list_artifacts_reports_names_sizes_and_newest_first(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  older = session.artifact_path("first.png")
+  older.write_bytes(b"one")
+  newer = session.artifact_path("second.mp4")
+  newer.write_bytes(b"two!")
+  os.utime(older, (1, 1))
+
+  rows = session.list_artifacts()
+
+  assert [r["name"] for r in rows] == ["second.mp4", "first.png"]
+  assert [r["bytes"] for r in rows] == [4, 3]
+
+
+def test_list_artifacts_skips_directories(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  session.artifact_path("keep.png").write_bytes(b"x")
+  (session.artifacts / "traces").mkdir()
+
+  assert [r["name"] for r in session.list_artifacts()] == ["keep.png"]
+
+
+def test_read_artifact_returns_the_bytes(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  session.artifact_path("shot.png").write_bytes(b"\x89PNG")
+
+  assert session.read_artifact("shot.png") == b"\x89PNG"
+
+
+@pytest.mark.parametrize("name", ["../session.json", "/etc/passwd", "sub/shot.png", "", "..", "."])
+def test_read_artifact_refuses_anything_that_is_not_a_bare_name(tmp_path, name):
+  """The argument crosses a network in the remote implementation of this."""
+  session = Session(tmp_path / "sess").create({})
+
+  with pytest.raises(ValueError):
+    session.read_artifact(name)

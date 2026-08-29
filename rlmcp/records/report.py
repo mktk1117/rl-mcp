@@ -112,11 +112,7 @@ def gather_evidence(
       if isinstance(value, (int, float)) and key not in ("iteration", "t"):
         final_values[key] = value
 
-  try:
-    with session.metrics_file.open() as f:
-      num_rows = sum(1 for line in f if line.strip())
-  except OSError:
-    num_rows = len(rows)
+  num_rows = session.metrics_count() or len(rows)
 
   interventions = [
       {
@@ -152,8 +148,7 @@ def gather_evidence(
       if e.get("kind") == "feedback"
   ]
 
-  artifacts = (sorted(p.name for p in session.artifacts.glob("*"))
-               if session.artifacts.exists() else [])
+  artifacts = sorted(a["name"] for a in session.list_artifacts())
 
   return {
       "iterations": final.get("iteration"),
@@ -165,7 +160,7 @@ def gather_evidence(
       "notes": notes,
       "feedback": feedback,
       "artifacts": artifacts,
-      "session": str(session.dir),
+      "session": session.address,
   }
 
 
