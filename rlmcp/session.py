@@ -29,12 +29,18 @@ import math
 import os
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 SCHEMA_VERSION = 1
+
+#: Keys a metrics row carries that are not measurements. Every reader that
+#: asks "what did this run log?" walks the row's keys, so bookkeeping fields
+#: have to be named in one place -- otherwise the next one added shows up as a
+#: metric in the CLI's list, on a plot's axis, and in the studio's headline.
+RESERVED_METRIC_KEYS = ("seq", "iteration", "t")
 
 PLAY_SESSION_KIND = "rlmcp-play-session"
 """``kind`` a play session writes into its session.json.
@@ -166,6 +172,57 @@ def read_jsonl(path: Path, last_n: int | None = None) -> list[Any]:
   return out
 
 
+def last_row(path: Path) -> dict[str, Any] | None:
+  """The last well-formed JSON object in a JSONL file, or None.
+
+  One backward block read, so "where had I got to" costs the same on a
+  day-old metrics log as on an empty one.
+  """
+  for raw in reversed(_tail_lines(path, 2) if path.exists() else []):
+    line = raw.strip()
+    if not line:
+      continue
+    try:
+      row = json.loads(line)
+    except json.JSONDecodeError:
+      continue  # A torn last line; the one before it still counts.
+    if isinstance(row, dict):
+      return row
+  return None
+
+
+def rows_since(path: Path, since_seq: int) -> list[dict[str, Any]]:
+  """Rows whose ``seq`` is greater than ``since_seq``, oldest first.
+
+  The cursor a reader that is not on this machine needs: it holds the last
+  ``seq`` it saw and asks for what came after, instead of refetching a log
+  that only ever grows.
+
+  Sequences are contiguous and one-based, so the last row's ``seq`` is the
+  row count, and the answer is the last ``last - since`` lines -- two backward
+  reads, no scan. Rows are filtered again after reading, because a file
+  written by an older rlmcp has no ``seq`` at all: that history is returned
+  once, to a reader starting from the beginning, and never again to one
+  holding a cursor.
+  """
+  last = last_row(path) or {}
+  latest = last.get("seq")
+  if isinstance(latest, int):
+    want = max(0, latest - max(0, since_seq))
+    rows = read_jsonl(path, last_n=want) if want else []
+  else:
+    rows = read_jsonl(path)  # No cursor to seek by; read it and filter.
+  out = []
+  for row in rows:
+    seq = row.get("seq")
+    if isinstance(seq, int):
+      if seq > since_seq:
+        out.append(row)
+    elif since_seq <= 0:
+      out.append(row)
+  return out
+
+
 @dataclass
 class Request:
   """A command from the agent side to the training loop."""
@@ -280,9 +337,11 @@ class SessionClient(Protocol):
   def info(self) -> dict[str, Any]: ...
   def status(self) -> dict[str, Any]: ...
   def params(self) -> dict[str, Any]: ...
-  def metrics(self, last_n: int | None = ...) -> list[dict[str, Any]]: ...
+  def metrics(self, last_n: int | None = ...,
+              since_seq: int | None = ...) -> list[dict[str, Any]]: ...
   def metrics_count(self) -> int: ...
-  def events(self, last_n: int | None = ...) -> list[dict[str, Any]]: ...
+  def events(self, last_n: int | None = ...,
+             since_seq: int | None = ...) -> list[dict[str, Any]]: ...
   def list_artifacts(self) -> list[dict[str, Any]]: ...
   def read_artifact(self, name: str) -> bytes: ...
   def submit(self, cmd: str, **args: Any) -> Request: ...
@@ -332,6 +391,10 @@ class Session:
     self.dir = Path(session_dir).expanduser().resolve()
     self._cached_pid: int | None = None
     self._last_outbox_prune = 0.0
+    #: Next sequence number for each stream this process writes, filled in
+    #: lazily from what is already on disk so a trainer restarted onto the
+    #: same directory continues the count instead of replaying it.
+    self._next_seq: dict[str, int] = {}
 
   # Identity. Three strings, because callers want three different things and
   # a path answers all of them only while the run is on this machine.
@@ -439,8 +502,30 @@ class Session:
 
   # Trainer side.
 
+  def _seq(self, stream: str, resume_from: Callable[[], int]) -> int:
+    """The next sequence number for ``stream``, counted from disk once."""
+    nxt = self._next_seq.get(stream)
+    if nxt is None:
+      nxt = resume_from() + 1
+    self._next_seq[stream] = nxt + 1
+    return nxt
+
+  def _resume_status_seq(self) -> int:
+    seq = self.status().get("seq")
+    return seq if isinstance(seq, int) else 0
+
+  def _resume_log_seq(self, path: Path) -> int:
+    """Where a log left off: its last ``seq``, else its length."""
+    row = last_row(path)
+    if row is None:
+      return 0
+    seq = row.get("seq")
+    return seq if isinstance(seq, int) else len(read_jsonl(path))
+
   def publish_status(self, status: dict[str, Any]) -> None:
-    _atomic_write_json(self.status_file, {"updated_at": time.time(), **status})
+    seq = self._seq("status", self._resume_status_seq)
+    _atomic_write_json(self.status_file,
+                       {"updated_at": time.time(), "seq": seq, **status})
     # Piggyback outbox hygiene on the heartbeat: responses are deleted by the
     # waiter that consumes them, so anything old enough to prune belongs to a
     # client that vanished. Throttled -- the pause loop publishes ~7x/s.
@@ -453,10 +538,14 @@ class Session:
     _atomic_write_json(self.params_file, schema)
 
   def append_metrics(self, iteration: int, metrics: dict[str, float]) -> None:
-    _append_jsonl(self.metrics_file, {"iteration": iteration, "t": time.time(), **metrics})
+    seq = self._seq("metrics", lambda: self._resume_log_seq(self.metrics_file))
+    _append_jsonl(self.metrics_file,
+                  {"seq": seq, "iteration": iteration, "t": time.time(), **metrics})
 
   def append_event(self, kind: str, detail: dict[str, Any]) -> None:
-    _append_jsonl(self.events_file, {"t": time.time(), "kind": kind, **detail})
+    seq = self._seq("events", lambda: self._resume_log_seq(self.events_file))
+    _append_jsonl(self.events_file,
+                  {"seq": seq, "t": time.time(), "kind": kind, **detail})
 
   def pop_requests(self, max_age_s: float | None = None) -> list[Request]:
     """Claim every pending request, oldest first.
@@ -565,10 +654,18 @@ class Session:
   def params(self) -> dict[str, Any]:
     return _read_json(self.params_file, {}) or {}
 
-  def metrics(self, last_n: int | None = None) -> list[dict[str, Any]]:
+  def metrics(self, last_n: int | None = None,
+              since_seq: int | None = None) -> list[dict[str, Any]]:
+    """Metric rows, newest last. ``since_seq`` reads only what is new."""
+    if since_seq is not None:
+      return rows_since(self.metrics_file, since_seq)
     return read_jsonl(self.metrics_file, last_n=last_n)
 
-  def events(self, last_n: int | None = None) -> list[dict[str, Any]]:
+  def events(self, last_n: int | None = None,
+             since_seq: int | None = None) -> list[dict[str, Any]]:
+    """Session events, oldest first. ``since_seq`` reads only what is new."""
+    if since_seq is not None:
+      return rows_since(self.events_file, since_seq)
     return read_jsonl(self.events_file, last_n=last_n)
 
   def metrics_count(self) -> int:

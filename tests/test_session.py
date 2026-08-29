@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from rlmcp.session import WIRE_SURFACE, Session, SessionClient, iter_sessions
+from rlmcp.session import (
+    RESERVED_METRIC_KEYS,
+    WIRE_SURFACE,
+    Session,
+    SessionClient,
+    iter_sessions,
+)
 
 
 def test_request_response_roundtrip(tmp_path):
@@ -806,3 +812,95 @@ def test_read_artifact_refuses_anything_that_is_not_a_bare_name(tmp_path, name):
 
   with pytest.raises(ValueError):
     session.read_artifact(name)
+
+
+# Sequence numbers: the cursor a reader that is not on this machine needs.
+
+
+def test_status_carries_a_sequence_that_grows(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+
+  seqs = []
+  for i in range(3):
+    session.publish_status({"iteration": i})
+    seqs.append(session.status()["seq"])
+
+  assert seqs == [1, 2, 3]
+
+
+def test_events_and_metrics_are_numbered_from_one(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  session.append_metrics(0, {"reward": 1.0})
+  session.append_metrics(1, {"reward": 2.0})
+  session.append_event("note", {"text": "hello"})
+
+  assert [r["seq"] for r in session.metrics()] == [1, 2]
+  assert [e["seq"] for e in session.events()] == [1]
+
+
+def test_a_second_process_on_the_same_directory_continues_the_count(tmp_path):
+  """A trainer restarted onto a directory must not replay sequence numbers.
+
+  A reader holding `seq=7` would otherwise be handed a different row 8, and
+  would never know it had missed the first one.
+  """
+  first = Session(tmp_path / "sess").create({})
+  first.publish_status({"iteration": 1})
+  first.append_event("note", {"text": "before"})
+  first.append_metrics(0, {"reward": 1.0})
+
+  second = Session(tmp_path / "sess")
+  second.publish_status({"iteration": 2})
+  second.append_event("note", {"text": "after"})
+  second.append_metrics(1, {"reward": 2.0})
+
+  assert second.status()["seq"] == 2
+  assert [e["seq"] for e in second.events()] == [1, 2]
+  assert [r["seq"] for r in second.metrics()] == [1, 2]
+
+
+def test_since_seq_returns_only_what_is_new(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  for i in range(5):
+    session.append_event("note", {"text": str(i)})
+    session.append_metrics(i, {"reward": float(i)})
+
+  fresh = session.events(since_seq=3)
+
+  assert [e["text"] for e in fresh] == ["3", "4"]
+  assert [r["iteration"] for r in session.metrics(since_seq=3)] == [3, 4]
+  assert session.events(since_seq=5) == []
+  assert len(session.events(since_seq=0)) == 5
+
+
+def test_a_log_written_before_sequences_existed_is_read_once(tmp_path):
+  """Old runs have no cursor: a reader starting from scratch gets their
+  history, and one holding a cursor is not handed it again every poll."""
+  session = Session(tmp_path / "sess").create({})
+  session.events_file.write_text(
+      '{"t": 1.0, "kind": "note", "text": "old"}\n'
+  )
+
+  assert [e["text"] for e in session.events(since_seq=0)] == ["old"]
+  assert session.events(since_seq=1) == []
+
+
+def test_a_sequence_never_shows_up_as_a_metric(tmp_path):
+  """`seq` is bookkeeping in a row of measurements, which is a trap.
+
+  Every reader that asks what a run logged walks the row's keys, so a new
+  field lands on the CLI's metric list and the studio's headline unless it is
+  named as reserved.
+  """
+  from rlmcp.cli import _default_metric_names
+
+  # A task whose metrics the CLI has no preferred name for, so the default
+  # selection falls back to "whatever this run logged" -- which is where a
+  # bookkeeping field becomes something a user is offered to plot.
+  session = Session(tmp_path / "sess").create({})
+  session.append_metrics(0, {"cartpole/angle": 1.0})
+
+  names = {k for row in session.metrics() for k in row if k not in RESERVED_METRIC_KEYS}
+
+  assert names == {"cartpole/angle"}
+  assert _default_metric_names(session) == ["cartpole/angle"]

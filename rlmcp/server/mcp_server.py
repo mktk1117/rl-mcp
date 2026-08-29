@@ -39,7 +39,7 @@ from typing import Any
 # ``MCPServer`` in mcp>=2, ``FastMCP`` in mcp 1.x, and the standalone ``fastmcp``
 # package outside the official SDK. The surface we use (tool/resource decorators,
 # Image, run) is the same in all three.
-from rlmcp.session import Session, iter_sessions
+from rlmcp.session import RESERVED_METRIC_KEYS, Session, iter_sessions
 
 SDK_MISSING = (
     "No MCP server SDK found in this interpreter. Install one with "
@@ -170,7 +170,7 @@ def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT,
 
 def _offline_metric_names(session: Session, contains: str | None = None) -> list[str]:
   rows = session.metrics(last_n=1)
-  names = sorted({k for row in rows for k in row if k not in ("iteration", "t")})
+  names = sorted({k for row in rows for k in row if k not in RESERVED_METRIC_KEYS})
   if contains:
     names = [n for n in names if contains.lower() in n.lower()]
   return names

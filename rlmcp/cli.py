@@ -37,7 +37,7 @@ from typing import Any
 
 from rlmcp import cli_output
 from rlmcp.records.record import FEEDBACK_KINDS
-from rlmcp.session import Session, iter_sessions
+from rlmcp.session import RESERVED_METRIC_KEYS, Session, iter_sessions
 
 DEFAULT_ROOTS = ("./logs", "./rlmcp_session", ".")
 
@@ -351,7 +351,7 @@ def _default_metric_names(session: Session, limit: int = 4) -> list[str]:
   cartpole run has no terrain level and no velocity command.
   """
   rows = session.metrics(last_n=1)
-  available = {k for row in rows for k in row if k not in ("iteration", "t")}
+  available = {k for row in rows for k in row if k not in RESERVED_METRIC_KEYS}
   chosen = [
       k for k in ("Train/mean_reward", "Train/mean_episode_length") if k in available
   ]
@@ -402,7 +402,7 @@ def _offline_plot(
   series = _offline_series(session, names, last_n=last_n)
   if not any(series.values()):
     available = sorted(
-        {k for row in session.metrics(last_n=1) for k in row if k not in ("iteration", "t")}
+        {k for row in session.metrics(last_n=1) for k in row if k not in RESERVED_METRIC_KEYS}
     )
     _emit({"ok": False, "error": f"No data for {names}.", "available": available[:40]})
     return 1
@@ -1590,7 +1590,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
   if cmd == "metrics" and args.list:
     rows = session.metrics(last_n=1)
-    names = sorted({k for row in rows for k in row if k not in ("iteration", "t")})
+    names = sorted({k for row in rows for k in row if k not in RESERVED_METRIC_KEYS})
     if args.contains:
       names = [n for n in names if args.contains.lower() in n.lower()]
     _emit({"count": len(names), "metrics": names}, command="list_metrics")
