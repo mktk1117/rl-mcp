@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 SCHEMA_VERSION = 1
 
@@ -226,6 +226,73 @@ class Response:
     )
 
 
+#: Every name a client of a run may use. Frozen on purpose: a reader that
+#: stays inside this list keeps working when the run is on another machine,
+#: and adding to it is a decision about the wire, not a convenience.
+WIRE_SURFACE = (
+    "address", "key", "name",
+    "info", "status", "params",
+    "metrics", "metrics_count", "events",
+    "list_artifacts", "read_artifact",
+    "submit", "poll", "wait", "call",
+    "liveness", "liveness_info",
+)
+
+
+@runtime_checkable
+class SessionClient(Protocol):
+  """What reaching a run requires, and the whole of it.
+
+  :class:`Session` is one implementation -- the local one, where reaching a run
+  means reading its directory. It is the only one today and the right default
+  on a single machine: no socket, nothing to crash, and ``cat`` still works
+  when something is wrong.
+
+  This exists because it will not be the only one. A run on a GPU box the
+  reader cannot see needs a second implementation over a connection, and the
+  cost of that is decided here: **everything above this protocol -- the CLI,
+  the MCP server, rl-mcp-studio -- is written against these names and no
+  others**, so the second implementation changes one layer instead of every
+  caller.
+
+  Which is why the two things a filesystem gives away for free are methods
+  rather than paths. ``list_artifacts`` and ``read_artifact`` exist because a
+  caller that reaches a plot by joining ``session.dir / "artifacts"`` compiles
+  fine, works locally, and cannot be made to work at all when the file is on
+  another machine.
+
+  ``address`` is the string that names this run to a person and to
+  ``--session``; today a path, later a URL. Nothing may parse it.
+  """
+
+  @property
+  def address(self) -> str:
+    """Where this run is, in whatever way the transport addresses it."""
+
+  @property
+  def key(self) -> str:
+    """Short identity carried in payloads: ``<run>/<session>``."""
+
+  @property
+  def name(self) -> str:
+    """The run's own name, for titles."""
+
+  def info(self) -> dict[str, Any]: ...
+  def status(self) -> dict[str, Any]: ...
+  def params(self) -> dict[str, Any]: ...
+  def metrics(self, last_n: int | None = ...) -> list[dict[str, Any]]: ...
+  def metrics_count(self) -> int: ...
+  def events(self, last_n: int | None = ...) -> list[dict[str, Any]]: ...
+  def list_artifacts(self) -> list[dict[str, Any]]: ...
+  def read_artifact(self, name: str) -> bytes: ...
+  def submit(self, cmd: str, **args: Any) -> Request: ...
+  def poll(self, req_id: str, consume: bool = ...) -> Response | None: ...
+  def wait(self, req_id: str, timeout: float = ..., interval: float = ...) -> Response: ...
+  def call(self, cmd: str, timeout: float = ..., **args: Any) -> Response: ...
+  def liveness(self) -> str: ...
+  def liveness_info(self) -> dict[str, Any]: ...
+
+
 class Session:
   """Filesystem handle on one training session.
 
@@ -265,6 +332,30 @@ class Session:
     self.dir = Path(session_dir).expanduser().resolve()
     self._cached_pid: int | None = None
     self._last_outbox_prune = 0.0
+
+  # Identity. Three strings, because callers want three different things and
+  # a path answers all of them only while the run is on this machine.
+
+  @property
+  def address(self) -> str:
+    """The directory, as the string ``--session`` takes."""
+    return str(self.dir)
+
+  @property
+  def key(self) -> str:
+    """``<run>/<session>`` -- what payloads name the session by.
+
+    Short enough to read in a table, specific enough to tell two runs apart,
+    and it survives the run moving: the last two segments are the run's, not
+    the machine's.
+    """
+    parent = self.dir.parent.name
+    return f"{parent}/{self.dir.name}" if parent else self.dir.name
+
+  @property
+  def name(self) -> str:
+    """The run's own name -- the log directory, not the ``rlmcp`` inside it."""
+    return self.dir.parent.name or self.dir.name
 
   # Paths.
 
@@ -479,6 +570,60 @@ class Session:
 
   def events(self, last_n: int | None = None) -> list[dict[str, Any]]:
     return read_jsonl(self.events_file, last_n=last_n)
+
+  def metrics_count(self) -> int:
+    """How many metric rows the run has logged.
+
+    A separate question from ``len(metrics(last_n=N))``: a report wants the
+    total while reading only a window of it, and counting lines here keeps the
+    caller from opening the file to find out.
+    """
+    try:
+      with self.metrics_file.open("rb") as f:
+        return sum(1 for line in f if line.strip())
+    except OSError:
+      return 0
+
+  def list_artifacts(self) -> list[dict[str, Any]]:
+    """Files this run produced -- newest first.
+
+    ``name``, ``bytes`` and ``modified_at`` are the contract. ``path`` is
+    present only because this transport has one, and a caller that requires it
+    is a caller that cannot read a run on another machine.
+    """
+    rows: list[dict[str, Any]] = []
+    if not self.artifacts.exists():
+      return rows
+    for path in self.artifacts.iterdir():
+      try:
+        stat = path.stat()
+      except OSError:
+        continue
+      if not path.is_file():
+        continue
+      rows.append({
+          "name": path.name,
+          "path": str(path),
+          "bytes": stat.st_size,
+          "modified_at": stat.st_mtime,
+      })
+    rows.sort(key=lambda r: r["modified_at"], reverse=True)
+    return rows
+
+  def read_artifact(self, name: str) -> bytes:
+    """The bytes of one artifact, by the ``name`` :meth:`list_artifacts` gave.
+
+    Only a name: no separators, no ``..``, no absolute paths. The check is
+    here rather than in each caller because this method is the one a remote
+    transport re-implements, and there the same argument crosses a network
+    from wherever the studio got it.
+    """
+    if not name or name != Path(name).name or name in (".", ".."):
+      raise ValueError(
+          f"'{name}' is not an artifact name. Pass the `name` from "
+          "list_artifacts(), not a path."
+      )
+    return (self.artifacts / name).read_bytes()
 
   def submit(self, cmd: str, **args: Any) -> Request:
     """Queue a command for the training loop (does not wait)."""

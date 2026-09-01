@@ -35,6 +35,7 @@ except PackageNotFoundError:  # A source tree that was never installed.
 _LAZY = {
     # Session protocol (dependency-free).
     "Session": "rlmcp.session",
+    "SessionClient": "rlmcp.session",
     "Request": "rlmcp.session",
     "Response": "rlmcp.session",
     # Core controller and parameter model.

@@ -112,26 +112,16 @@ class _SessionHandle:
       self._pinned = found
     else:
       self._pinned = Session.open(target)
-    self.explicit = str(self._pinned.dir)
+    self.explicit = self._pinned.address
     return self._pinned
-
-
-def _session_key(session: Session) -> str:
-  """Short id stamped into every payload: enough to tell runs apart.
-
-  Session directories are conventionally ``<run_dir>/rlmcp``, so the basename
-  alone would name every run the same; the parent disambiguates.
-  """
-  parent = session.dir.parent.name
-  return f"{parent}/{session.dir.name}" if parent else session.dir.name
 
 
 def _dead_error(session: Session, live: dict[str, Any], cmd: str) -> dict[str, Any]:
   """What a live-command tool answers once the pinned trainer is gone."""
   out = {
       "ok": False,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "error": (
           f"The training process for this session is dead; '{cmd}' needs a "
           "live trainer and will not be serviced."
@@ -168,8 +158,8 @@ def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT,
     result = response.result if isinstance(response.result, dict) else {"result": response.result}
     # "session" is reserved: the server's identity stamp must win over any
     # same-named key a command result carries.
-    return {"ok": True, **result, "session": _session_key(session)}
-  return {"ok": False, "session": _session_key(session), "error": response.error}
+    return {"ok": True, **result, "session": session.key}
+  return {"ok": False, "session": session.key, "error": response.error}
 
 
 # Post-mortem: once the trainer is dead, everything worth asking is still on
@@ -194,7 +184,7 @@ def _offline_metrics_payload(
   chosen = list(names) if names else _default_metric_names(session)
   payload: dict[str, Any] = {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "metrics.jsonl",
       "metrics": _offline_series(session, chosen, last_n=last_n),
@@ -226,7 +216,7 @@ def _offline_plot_payload(
   except ImportError as exc:
     return {
         "ok": False,
-        "session": _session_key(session),
+        "session": session.key,
         "error": f"Offline plotting needs matplotlib in the server's interpreter ({exc}).",
     }
   chosen = list(names) if names else _default_metric_names(session)
@@ -234,7 +224,7 @@ def _offline_plot_payload(
   if not any(series.values()):
     return {
         "ok": False,
-        "session": _session_key(session),
+        "session": session.key,
         "error": f"No data for {chosen}.",
         "available": _offline_metric_names(session)[:40],
     }
@@ -245,7 +235,7 @@ def _offline_plot_payload(
   ]
   png = plot_metric_series(
       {k: [tuple(p) for p in v] for k, v in series.items()},
-      title=title or f"{session.dir.parent.name} (offline)",
+      title=title or f"{session.name} (offline)",
       smooth_window=max(1, smooth),
       markers=markers,
   )
@@ -253,7 +243,7 @@ def _offline_plot_payload(
   path.write_bytes(png)
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "metrics.jsonl",
       "image_path": str(path),
@@ -273,7 +263,7 @@ def _offline_parameters_payload(
   }
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "params.json",
       "count": len(items),
@@ -286,8 +276,8 @@ def _status_payload(handle: _SessionHandle) -> dict[str, Any]:
   live = session.liveness_info()
   return {
       "ok": True,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "state": live["state"],
       "alive": live["pid_alive"],
       "heartbeat_age_s": live["heartbeat_age_s"],
@@ -300,31 +290,17 @@ def _events_payload(session: Session, last_n: int) -> dict[str, Any]:
   rows = session.events(last_n=last_n)
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "count": len(rows),
       "events": rows,
   }
 
 
 def _artifacts_payload(session: Session) -> dict[str, Any]:
-  rows = []
-  if session.artifacts.exists():
-    for path in session.artifacts.iterdir():
-      try:
-        stat = path.stat()
-      except OSError:
-        continue
-      if path.is_file():
-        rows.append({
-            "name": path.name,
-            "path": str(path),
-            "bytes": stat.st_size,
-            "modified_at": stat.st_mtime,
-        })
-  rows.sort(key=lambda r: r["modified_at"], reverse=True)
+  rows = session.list_artifacts()
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "count": len(rows),
       "artifacts": rows,
   }
@@ -333,20 +309,20 @@ def _artifacts_payload(session: Session) -> dict[str, Any]:
 def _sessions_payload(handle: _SessionHandle) -> list[dict[str, Any]]:
   pinned: str | None = None
   if handle._pinned is not None:
-    pinned = str(handle._pinned.dir)
+    pinned = handle._pinned.address
   out = []
   for session in iter_sessions(handle.root):  # Newest first, by started_at.
     info = session.info()
     live = session.liveness_info()
     out.append({
-        "session_dir": str(session.dir),
-        "session": _session_key(session),
+        "session_dir": session.address,
+        "session": session.key,
         "task": info.get("task"),
         "num_envs": info.get("num_envs"),
         "started_at": info.get("started_at"),
         "state": live["state"],
         "iteration": session.status().get("iteration"),
-        "pinned": str(session.dir) == pinned,
+        "pinned": session.address == pinned,
     })
   return out
 
@@ -359,8 +335,8 @@ def _switch_payload(handle: _SessionHandle, target: str) -> dict[str, Any]:
   info = session.info()
   return {
       "ok": True,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "state": session.liveness(),
       "task": info.get("task"),
       "started_at": info.get("started_at"),
@@ -376,7 +352,7 @@ def _list_metrics_impl(handle: _SessionHandle, contains: str | None) -> dict[str
   session = handle.get()
   if session.liveness() == "dead":
     names = _offline_metric_names(session, contains=contains)
-    return {"ok": True, "session": _session_key(session), "live": False,
+    return {"ok": True, "session": session.key, "live": False,
             "count": len(names), "metrics": names}
   return _call(handle, "list_metrics", contains=contains)
 
@@ -550,7 +526,7 @@ def create_mcp_server(
                       session_dir=str(pinned.dir) if pinned else None)
 
   try:
-    print(f"[rlmcp-server] pinned session: {handle.get().dir}", file=sys.stderr)
+    print(f"[rlmcp-server] pinned session: {handle.get().address}", file=sys.stderr)
   except (FileNotFoundError, RuntimeError) as exc:
     # No run yet; the first tool call (or switch_session) pins one.
     print(f"[rlmcp-server] no session pinned yet: {exc}", file=sys.stderr)

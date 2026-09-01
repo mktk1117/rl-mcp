@@ -80,7 +80,7 @@ def _resolve_session(args: argparse.Namespace) -> Session:
       print(
           cli_output.note(
               f"[rlmcp] no session under {Path.cwd()}; "
-              f"using {found.dir} ({how})"
+              f"using {found.address} ({how})"
           ),
           file=sys.stderr,
       )
@@ -313,7 +313,7 @@ def _call(session: Session, cmd: str, timeout: float, **args: Any) -> int:
         {
             "ok": False,
             "error": "The training process for this session is not running.",
-            "session": str(session.dir),
+            "session": session.address,
             **({"note": live["note"]} if "note" in live else {}),
             "hint": "Read status.json / metrics.jsonl for the final state.",
         },
@@ -416,7 +416,7 @@ def _offline_plot(
   ]
   png = plot_metric_series(
       {k: [tuple(p) for p in v] for k, v in series.items()},
-      title=f"{session.dir.parent.name} (offline)",
+      title=f"{session.name} (offline)",
       smooth_window=max(1, smooth),
       markers=markers,
   )
@@ -1442,14 +1442,14 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     def add(session: Session) -> None:
       nonlocal newest, newest_started
-      if str(session.dir) in seen:
+      if session.address in seen:
         return
-      seen.add(str(session.dir))
+      seen.add(session.address)
       info = session.info()
       live = session.liveness_info()
       rows.append(
           {
-              "session": str(session.dir),
+              "session": session.address,
               "task": info.get("task"),
               "num_envs": info.get("num_envs"),
               "started_at": info.get("started_at"),
@@ -1534,7 +1534,7 @@ def _dispatch(args: argparse.Namespace) -> int:
   if cmd == "status":
     live = session.liveness_info()
     _emit({
-        "session": str(session.dir),
+        "session": session.address,
         "state": live["state"],
         "alive": live["pid_alive"],
         "heartbeat_age_s": live["heartbeat_age_s"],
@@ -1543,7 +1543,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     }, command="status")
     return 0
   if cmd == "info":
-    _emit({"session": str(session.dir), **session.info()}, command="info")
+    _emit({"session": session.address, **session.info()}, command="info")
     return 0
   if cmd == "events":
     if args.interventions:

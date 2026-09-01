@@ -33,6 +33,45 @@ Commands that need the robot to move (video, traces, diagnosis) are deferred:
 the request stays open, `on_step` feeds it frames, and the response is written
 when the job completes. Everything else answers within one iteration.
 
+## The client surface is the protocol
+
+The directory is how the two sides talk *today*. What they are allowed to say
+is a smaller thing, and it has a name: `SessionClient` in
+[`rlmcp/session.py`](../rlmcp/session.py). Seventeen names, listed in
+`WIRE_SURFACE`:
+
+```
+address  key  name                       what to call this run
+info  status  params                     static, live, tunable
+metrics  metrics_count  events           history
+list_artifacts  read_artifact            what it produced
+submit  poll  wait  call                 commands
+liveness  liveness_info                  is anyone home
+```
+
+`Session` is one implementation of it — the local one, where reaching a run
+means reading its directory. It is the only one today, and on a single machine
+it is the right default: no socket, nothing to crash, and `cat` still works
+when something is wrong.
+
+It exists because it will not be the only one. A run on a GPU box that the
+reader cannot see needs a second implementation over a connection, and the cost
+of writing that is decided here rather than then: **the CLI, the MCP server and
+rl-mcp-studio are written against these names and no others**, so a second
+transport changes one layer instead of every caller.
+
+Which is why two things a filesystem gives away for free are methods:
+`list_artifacts` and `read_artifact`. A caller that reaches a plot by joining
+`session.dir / "artifacts"` compiles, works locally, and cannot be made to work
+at all once the file is on another machine. The same reasoning makes `address`
+opaque: it is a path today and a URL later, and nothing may parse it.
+
+What is still path-shaped, honestly: the trainer side (which owns its
+directory, and should), the registry (machine-local by definition),
+`core/replay.py` and `records/link.py`, which read `events.jsonl` and
+`session.json` directly, and `play`, which needs a real checkpoint file. Those
+are the next things to move, not things that are fine.
+
 ## Where the code is
 
 ```
