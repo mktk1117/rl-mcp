@@ -85,9 +85,12 @@ in the studio's headline.
 
 What is still path-shaped, honestly: the trainer side (which owns its
 directory, and should), the registry (machine-local by definition),
-`core/replay.py` and `records/link.py`, which read `events.jsonl` and
-`session.json` directly, and `play`, which needs a real checkpoint file. Those
-are the next things to move, not things that are fine.
+`read_ladder` in `core/replay.py` (a run's `curriculum.json`, which is config
+rather than telemetry and has no home on the protocol yet), `task_from_session`
+in `records/link.py` (deliberate -- it runs on the training process's critical
+path, where a half-written session file must cost the field and not the run),
+and `play`, which needs a real checkpoint file. Those are the next things to
+move, not things that are fine.
 
 ## Where the code is
 

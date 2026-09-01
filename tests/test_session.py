@@ -904,3 +904,43 @@ def test_a_sequence_never_shows_up_as_a_metric(tmp_path):
 
   assert names == {"cartpole/angle"}
   assert _default_metric_names(session) == ["cartpole/angle"]
+
+
+def test_a_picture_is_fetched_through_the_session_not_the_path(tmp_path):
+  """`read_artifact` is the route that survives the trainer being elsewhere."""
+  srv = _server_module()
+  session = Session(tmp_path / "sess").create({})
+  _write_png(session.artifact_path("shot.png"))
+  asked = []
+
+  class Watching(Session):
+    def read_artifact(self, name):
+      asked.append(name)
+      return super().read_artifact(name)
+
+  out = srv._image_result({"ok": True, "image_path": str(session.artifact_path("shot.png"))},
+                          session=Watching(session.dir))
+
+  assert asked == ["shot.png"]
+  assert isinstance(out, list) and len(out) == 2
+
+
+def test_a_picture_outside_the_artifacts_directory_still_arrives(tmp_path):
+  """Not every image a tool returns is one of the run's artifacts."""
+  srv = _server_module()
+  session = Session(tmp_path / "sess").create({})
+  elsewhere = tmp_path / "somewhere" / "frame.png"
+  elsewhere.parent.mkdir()
+  _write_png(elsewhere)
+
+  out = srv._image_result({"ok": True, "image_path": str(elsewhere)}, session=session)
+
+  assert isinstance(out, list) and len(out) == 2
+
+
+def test_a_picture_that_is_nowhere_leaves_the_numbers_alone(tmp_path):
+  srv = _server_module()
+  session = Session(tmp_path / "sess").create({})
+  payload = {"ok": True, "image_path": str(tmp_path / "gone.png")}
+
+  assert srv._image_result(payload, session=session) is payload

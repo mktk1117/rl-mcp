@@ -379,7 +379,7 @@ def _plot_metrics_impl(
   else:
     payload = _call(handle, "plot_metrics", names=names, last_n=last_n,
                     smooth=smooth, title=title)
-  return _image_result(payload)
+  return _image_result(payload, session=session)
 
 
 def _list_parameters_impl(
@@ -409,18 +409,26 @@ def _image_format(suffix: str) -> str:
 
 
 def _prepare_image(
-    path: Path, byte_limit: int = IMAGE_BYTE_LIMIT, max_dim: int = IMAGE_MAX_DIM
+    source: Path | bytes, byte_limit: int = IMAGE_BYTE_LIMIT,
+    max_dim: int = IMAGE_MAX_DIM, suffix: str = "",
 ) -> tuple[bytes | None, str, str | None]:
-  """Read an image, re-encoding it when it would blow the reply budget.
+  """Size an image for the reply, re-encoding it when it would blow the budget.
 
-  Returns ``(data, format, note)``. Files at or under ``byte_limit`` pass
+  Takes bytes, or a path to read them from -- bytes, because the picture may
+  have arrived through the session rather than off this filesystem, and
+  nothing about fitting it in a reply depends on where it came from. With
+  bytes, pass ``suffix`` so the format is known.
+
+  Returns ``(data, format, note)``. Images at or under ``byte_limit`` pass
   through untouched. Larger ones are downscaled to ``max_dim`` on the longest
   side and re-encoded (PNG first for PNG sources, then JPEG). When even that
   cannot fit the budget, ``data`` is ``None`` and ``note`` says why, so the
   caller can fall back to the file path.
   """
-  fmt = _image_format(path.suffix)
-  data = path.read_bytes()
+  if isinstance(source, (bytes, bytearray)):
+    data, fmt = bytes(source), _image_format(suffix)
+  else:
+    data, fmt = source.read_bytes(), _image_format(source.suffix)
   if len(data) <= byte_limit:
     return data, fmt, None
   original_kb = len(data) // 1024
@@ -456,23 +464,48 @@ def _prepare_image(
   )
 
 
-def _image_result(payload: dict[str, Any], key: str = "image_path") -> Any:
+def _image_bytes(session: Session | None, file: Path) -> bytes | None:
+  """The picture the trainer just wrote, through the session where possible.
+
+  The session first, because ``read_artifact`` is the way that still works
+  when the trainer is on another machine and the path in the payload names a
+  file this process cannot open. The filesystem second, for a picture written
+  somewhere other than the run's artifacts -- and it is what answers when the
+  two disagree about existence, not about content: every tool that returns an
+  ``image_path`` writes into ``artifacts/``.
+  """
+  if session is not None:
+    try:
+      return session.read_artifact(file.name)
+    except (OSError, ValueError):
+      pass
+  try:
+    return file.read_bytes()
+  except OSError:
+    return None
+
+
+def _image_result(payload: dict[str, Any], key: str = "image_path",
+                  session: Session | None = None) -> Any:
   """Attach the picture to a payload without dropping the numbers around it.
 
   Returns ``[payload, Image]``; every supported SDK generation converts that
   list into a JSON text block plus an image block, so the agent sees the
   structured result *and* the frame. Oversized files are downscaled first;
-  when even that is not enough, or the file cannot be decoded, the payload
-  comes back alone with an ``image_note`` explaining why.
+  when even that is not enough, or the picture cannot be read, the payload
+  comes back alone -- with an ``image_note`` when something went wrong that a
+  reader would otherwise have to guess at.
   """
   path = payload.get(key)
   if not payload.get("ok") or not path:
     return payload
   file = Path(path)
-  if not file.exists():
+  data = _image_bytes(session, file)
+  if data is None:
     return payload
   try:
-    data, fmt, note = _prepare_image(file, byte_limit=IMAGE_BYTE_LIMIT, max_dim=IMAGE_MAX_DIM)
+    data, fmt, note = _prepare_image(data, byte_limit=IMAGE_BYTE_LIMIT,
+                                     max_dim=IMAGE_MAX_DIM, suffix=file.suffix)
   except Exception as exc:  # A corrupt file must not eat the numeric result.
     return {**payload, "image_note": f"could not read {file.name}: {exc}"}
   if data is None:
@@ -681,7 +714,8 @@ def create_mcp_server(
         "level": 2} on a locomotion task. See ``get_training_status`` for what
         this environment supports.
     """
-    return _image_result(_call(handle, "screenshot", env_id=env_id, where=where))
+    return _image_result(_call(handle, "screenshot", env_id=env_id, where=where),
+                         session=handle.get())
 
   @mcp.tool()
   def record_video(
@@ -811,7 +845,8 @@ def create_mcp_server(
       components: substring filter on joint names, e.g. ["knee", "ankle"].
     """
     return _image_result(
-        _call(handle, "plot_trace", channels=channels, components=components, title=title)
+        _call(handle, "plot_trace", channels=channels, components=components, title=title),
+        session=handle.get(),
     )
 
   # Extension commands and curriculum.
@@ -836,7 +871,7 @@ def create_mcp_server(
       args: keyword arguments for it, e.g. {"terrains": ["flat"], "max_level": 4}.
     """
     result = _call(handle, cmd, timeout=600.0, **(args or {}))
-    return _image_result(result)
+    return _image_result(result, session=handle.get())
 
   @mcp.tool()
   def curriculum_status() -> dict[str, Any]:

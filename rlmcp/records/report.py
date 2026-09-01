@@ -95,11 +95,11 @@ def gather_evidence(
   -- "undecidable" at close-out -- when the run did measure it. The window
   actually merged is recorded in the evidence as ``metrics_window``.
   """
-  if not session_dir or not Path(session_dir).exists():
+  if not session_dir:
     return {}
   try:
     session = Session.open(session_dir)
-  except FileNotFoundError:
+  except (FileNotFoundError, OSError):
     return {}
 
   rows = session.metrics(last_n=window)
