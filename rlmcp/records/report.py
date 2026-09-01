@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from rlmcp.records.record import OWED_A_RESPONSE, RunRecord, fold_recipe
-from rlmcp.session import Session
+from rlmcp.session import RESERVED_METRIC_KEYS, Session
 
 _PLAN_PROMPTS = {
     "hypothesis": "One sentence, mechanistic. Not \"this should work better\".",
@@ -109,7 +109,7 @@ def gather_evidence(
   final_values: dict[str, float] = {}
   for row in rows:  # oldest first, so the newest logged value wins.
     for key, value in row.items():
-      if isinstance(value, (int, float)) and key not in ("iteration", "t"):
+      if isinstance(value, (int, float)) and key not in RESERVED_METRIC_KEYS:
         final_values[key] = value
 
   num_rows = session.metrics_count() or len(rows)

@@ -66,6 +66,23 @@ Which is why two things a filesystem gives away for free are methods:
 at all once the file is on another machine. The same reasoning makes `address`
 opaque: it is a path today and a URL later, and nothing may parse it.
 
+Three streams carry a `seq`: `status.json`, and every row of `metrics.jsonl`
+and `events.jsonl`. It is what lets a reader ask for *what is new* --
+`metrics(since_seq=n)`, `events(since_seq=n)` -- instead of refetching a log
+that only grows, which is the difference between polling a directory and
+polling a network. Numbers are contiguous and one-based, so the last row's
+`seq` is the row count and a cursor read costs two backward block reads rather
+than a scan. A trainer restarted onto the same directory continues the count
+instead of replaying it, because a reader holding `seq=7` must never be handed
+a *different* row 8.
+
+`seq` in a metrics row is bookkeeping sitting in a row of measurements, which
+is a trap: every reader that asks what a run logged walks the row's keys. So
+the non-measurements are named once, in `RESERVED_METRIC_KEYS`, and the four
+places that walked those keys use it. Adding a field to a metrics row without
+adding it there puts that field on the CLI's metric list, on a plot axis, and
+in the studio's headline.
+
 What is still path-shaped, honestly: the trainer side (which owns its
 directory, and should), the registry (machine-local by definition),
 `core/replay.py` and `records/link.py`, which read `events.jsonl` and
