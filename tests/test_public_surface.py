@@ -116,3 +116,15 @@ def test_the_trainer_names_itself_after_the_command_that_was_typed(
 
   monkeypatch.setattr("sys.argv", [argv0])
   assert train._prog_name("rlmcp train") == expected
+
+
+def test_wrap_and_the_exception_it_raises_are_exported_together():
+  """`wrap` tells the training entrypoint to catch `TrainingStopped`.
+
+  Exporting one without the other means a script can call the thing at the top
+  level and then has to reach into `rlmcp.adapters.<backend>` to catch what it
+  raises. Found writing the Go1 example, which did exactly what the docstring
+  says and failed on `rlmcp.TrainingStopped`.
+  """
+  assert issubclass(rlmcp.TrainingStopped, Exception)
+  assert issubclass(rlmcp.TrainingStopped, rlmcp.SessionStopped)

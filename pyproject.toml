@@ -94,7 +94,16 @@ target-version = "py310"
 # segment of that name and quietly stop linting the rlmcp/records/ package.
 # This is the scratch records/ that appears when somebody runs a record
 # command with $RLMCP_RECORDS unset.
-extend-exclude = ["/records", "/.venv", "/.venv-server"]
+# examples/go1_flat/genesis_env.py is carried from Genesis with one marked
+# change (Apache 2.0, attributed in its header). Restyling vendored upstream
+# code to this tree's two spaces would make every future diff against upstream
+# unreadable for no gain, so it keeps the shape it arrived in.
+extend-exclude = [
+    "/records",
+    "/.venv",
+    "/.venv-server",
+    "examples/go1_flat/genesis_env.py",
+]
 
 [tool.ruff.lint]
 # E1 (indentation) is absent on purpose: those rules assume four spaces.

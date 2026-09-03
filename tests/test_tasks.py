@@ -183,9 +183,16 @@ def test_the_backends_are_named_even_when_the_task_list_is_full(fake_backend, mo
   assert answer["backends"][0]["tasks"] == 1
 
 
-def test_the_real_backend_table_covers_both_simulators():
-  """The table is the seam a third backend is added to, so it is pinned."""
-  assert [spec["backend"] for spec in tasks.BACKENDS] == ["mjlab", "isaaclab"]
+def test_the_real_backend_table_covers_every_simulator():
+  """The table is the seam a backend is added to, so it is pinned.
+
+  Genesis was the third, and it arrived without a row -- which left a
+  Genesis-only machine being told about the two backends it did not have and
+  nothing about the one it did. tests/test_backend_isolation.py checks the
+  general rule against the adapter packages on disk; this pins the order and
+  the exact membership.
+  """
+  assert [spec["backend"] for spec in tasks.BACKENDS] == ["mjlab", "isaaclab", "genesis"]
   for spec in tasks.BACKENDS:
     assert callable(spec["ids"]) and callable(spec["describe"])
 

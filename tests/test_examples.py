@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 
-EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "train_g1_rough_curriculum.py"
+EXAMPLES = sorted((Path(__file__).resolve().parent.parent / "examples").rglob("train_*.py"))
+"""Every example, found rather than listed -- a new one is checked the day it
+lands rather than the day somebody remembers to add it here."""
 
 _HEAVY = ("torch", "mjlab")
 
@@ -45,16 +47,30 @@ def _import(module: str):
     raise
 
 
-IMPORTS = rlmcp_imports(EXAMPLE)
+IMPORTS = [
+    (path.name, module, names)
+    for path in EXAMPLES
+    for module, names in rlmcp_imports(path)
+]
+"""``(example, module, imported names)`` for every rlmcp import in every
+example."""
 
 
-def test_the_example_still_imports_rlmcp():
-  """Guards the guard: a rewrite that drops every rlmcp import must show up here."""
-  assert IMPORTS
+def test_every_example_imports_rlmcp():
+  """Guards the guard.
+
+  An example that imports no rlmcp at all is either a rewrite that dropped it
+  or a file in the wrong directory, and either way nothing below would notice.
+  """
+  covered = {example for example, _, _ in IMPORTS}
+  missing = sorted(p.name for p in EXAMPLES if p.name not in covered)
+  assert not missing, f"examples with no rlmcp import: {missing}"
 
 
-@pytest.mark.parametrize("module, names", IMPORTS, ids=[m for m, _ in IMPORTS])
-def test_example_rlmcp_imports_resolve(module: str, names: list[str]):
+@pytest.mark.parametrize(
+    "example, module, names", IMPORTS,
+    ids=[f"{e}:{m}" for e, m, _ in IMPORTS])
+def test_example_rlmcp_imports_resolve(example: str, module: str, names: list[str]):
   """Each ``import rlmcp...`` line in the example names things that exist."""
   mod = _import(module)
   for name in names:

@@ -57,6 +57,12 @@ _LAZY = {
     "MjlabRunnerAdapter": "rlmcp.adapters.mjlab",
     "RlMcpEnvWrapper": "rlmcp.adapters.mjlab",
     "wrap": "rlmcp.adapters.mjlab",
+    # Exported beside wrap() because they are a pair: wrap()'s own docstring
+    # tells the training entrypoint to catch this, and `rlmcp.wrap` without
+    # `rlmcp.TrainingStopped` means calling the thing and importing from
+    # somewhere else to catch what it raises.
+    "TrainingStopped": "rlmcp.adapters.mjlab",
+    "SessionStopped": "rlmcp.core.controller",
     # Server.
     "create_mcp_server": "rlmcp.server.mcp_server",
 }

@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import torch
 
 from rlmcp.adapters.base import (
     CHANNEL_ACTION,
@@ -341,3 +342,173 @@ def fake_terrain(fake_sim) -> FakeTerrainExtension:
 @pytest.fixture
 def fake_runner() -> FakeRunnerAdapter:
   return FakeRunnerAdapter()
+
+
+# A legged-gym-shaped environment, for the second adapter family.
+
+
+class FakeFlatEnv:
+  """A Go2Env-shaped environment, down to the traps."""
+
+  def __init__(self, num_envs: int = 4):
+    self.num_envs = num_envs
+    self.dt = 0.02
+
+    self.env_cfg = {
+        "num_actions": 12,
+        "action_scale": 0.25,
+        "clip_actions": 100.0,
+        "episode_length_s": 20.0,
+        "resampling_time_s": 4.0,
+        "termination_if_pitch_greater_than": 10.0,
+        "termination_if_roll_greater_than": 10.0,
+        "kp": 20.0,
+        "kd": 0.5,
+        "joint_names": ["FL_hip", "FL_thigh"],
+        "base_init_pos": [0.0, 0.0, 0.42],
+    }
+    self.reward_cfg = {
+        "tracking_sigma": 0.25,
+        "base_height_target": 0.3,
+        "reward_scales": {
+            "tracking_lin_vel": 1.0,
+            "lin_vel_z": -1.0,
+            "action_rate": -0.005,
+        },
+    }
+    self.command_cfg = {
+        "num_commands": 3,
+        "lin_vel_x_range": [0.5, 1.5],
+        "lin_vel_y_range": [-0.5, 0.5],
+        "ang_vel_range": [-1.0, 1.0],
+    }
+    self.obs_cfg = {"obs_scales": {"lin_vel": 2.0}}
+
+    # Exactly what Go2Env.__init__ does, in the order it does it.
+    self.reward_scales = self.reward_cfg["reward_scales"]
+    self.commands_limits = tuple(
+        torch.tensor(values, dtype=torch.float32)
+        for values in zip(
+            self.command_cfg["lin_vel_x_range"],
+            self.command_cfg["lin_vel_y_range"],
+            self.command_cfg["ang_vel_range"],
+            strict=True,
+        )
+    )
+    self.reward_functions, self.episode_sums = {}, {}
+    for name in self.reward_scales:
+      self.reward_scales[name] *= self.dt
+      self.reward_functions[name] = lambda: torch.ones(self.num_envs)
+      self.episode_sums[name] = torch.zeros(num_envs)
+
+    # The per-step buffers step() writes, which is where traces read from.
+    n, j = num_envs, len(self.env_cfg["joint_names"])
+    self.dof_pos = torch.zeros(n, j)
+    self.dof_vel = torch.zeros(n, j)
+    self.actions = torch.zeros(n, j)
+    self.last_actions = torch.zeros(n, j)
+    self.base_lin_vel = torch.zeros(n, 3)
+    self.base_ang_vel = torch.zeros(n, 3)
+    self.base_pos = torch.zeros(n, 3)
+    self.projected_gravity = torch.tensor([[0.0, 0.0, -1.0]] * n)
+    self.rew_buf = torch.zeros(n)
+    self.commands = torch.zeros(n, 3)
+    self.episode_length_buf = torch.zeros(n, dtype=torch.long)
+    self.max_episode_length = 1000
+    self.extras = {}
+
+  def total_reward(self) -> float:
+    """One step's reward, computed the way the env computes it."""
+    return float(
+        sum(fn() * self.reward_scales[name]
+            for name, fn in self.reward_functions.items())[0]
+    )
+
+  def sample_command(self, channel: int) -> tuple:
+    """The bounds the resampler would draw channel ``channel`` from."""
+    lower, upper = self.commands_limits
+    return float(lower[channel]), float(upper[channel])
+
+
+@pytest.fixture
+def flat_env() -> FakeFlatEnv:
+  """A Go2Env-shaped environment: dict configs, flat buffers, and the traps
+  that come with both. See tests/test_flat_env_access.py for what they are."""
+  return FakeFlatEnv()
+
+
+# A Genesis environment: the flat fake, plus a scene with cameras.
+
+
+class FakeCamera:
+  """A Genesis camera, as much of one as rendering uses."""
+
+  def __init__(self, debug: bool = False, res=(8, 6), batched: bool = False):
+    self.debug = debug
+    self.res = res
+    self.pos = (2.0, 0.0, 2.5)
+    self.lookat = (0.0, 0.0, 0.5)
+    self.batched = batched
+    self.poses = []
+
+  def set_pose(self, transform=None, pos=None, lookat=None, up=None,
+               envs_idx=None):
+    if pos is not None:
+      self.pos = tuple(pos)
+    if lookat is not None:
+      self.lookat = tuple(lookat)
+    self.poses.append((self.pos, self.lookat))
+
+  def render(self, rgb=True, depth=False, segmentation=False,
+             colorize_seg=False, normal=False, antialiasing=False,
+             force_render=False):
+    width, height = self.res
+    # The frame encodes where the camera was, so a test can tell one env's
+    # picture from another's.
+    frame = np.full((height, width, 3), int(abs(self.lookat[0])) % 256,
+                    dtype=np.uint8)
+    if self.batched:
+      frame = np.stack([frame, frame])
+    return frame, None, None, None
+
+
+class FakeVisualizer:
+  def __init__(self, cameras):
+    self.cameras = list(cameras)
+
+
+class FakeScene:
+  """Genesis keeps the drawn-env list in two places that can disagree.
+
+  ``vis_options`` is what the script asked for; the visualizer's ``context`` is
+  what the renderer reads. ``options_say`` lets a test set them apart, which is
+  how a real run turned `shot --env-id 2` away from an env it was drawing.
+  """
+
+  def __init__(self, cameras=(), rendered_envs_idx=None, options_say=None):
+    self.visualizer = FakeVisualizer(cameras)
+    self.visualizer.context = type(
+        "Context", (), {"rendered_envs_idx": rendered_envs_idx})()
+    self.vis_options = type(
+        "VisOptions", (),
+        {"rendered_envs_idx": options_say if options_say is not None
+         else rendered_envs_idx})()
+
+
+@pytest.fixture
+def genesis_env(flat_env):
+  """The flat fake, plus the scene and reset a Genesis env would have."""
+  flat_env.scene = FakeScene(cameras=[FakeCamera(debug=True)],
+                             rendered_envs_idx=list(range(flat_env.num_envs)))
+  flat_env.device = None
+  flat_env.reset_calls = []
+
+  def _reset_idx(mask=None):
+    flat_env.reset_calls.append(mask)
+
+  flat_env._reset_idx = _reset_idx
+  # Envs sit at spaced world origins, which is what makes per-env framing a
+  # pose change rather than an anchor negotiation.
+  for i in range(flat_env.num_envs):
+    flat_env.base_pos[i, 0] = 10.0 * i
+  return flat_env

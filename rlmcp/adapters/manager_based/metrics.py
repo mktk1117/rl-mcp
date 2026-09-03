@@ -51,10 +51,20 @@ def summary_metrics(env: Any, robot_name: str) -> dict[str, float]:
     _, term, command = resolved
     if not is_velocity_command(term, command):
       return
-    error = torch.linalg.norm(data.root_link_lin_vel_b[:, :2] - command[:, :2], dim=1)
+    measured = data.root_link_lin_vel_b[:, :2]
+    error = torch.linalg.norm(measured - command[:, :2], dim=1)
     out["rlmcp/lin_vel_error_mean"] = float(torch.mean(error).item())
     out["rlmcp/commanded_speed_mean"] = float(
         torch.mean(torch.linalg.norm(command[:, :2], dim=1)).item()
+    )
+    # The do-nothing detector, and it belongs on every backend rather than the
+    # one it was first needed on. Ask of any locomotion run: if the policy
+    # learned to stand still, which logged number would go down? Not reward --
+    # a standing robot keeps collecting posture rewards and stops falling over,
+    # so reward and episode length both rise. Measured ground speed is the one
+    # that goes to zero.
+    out["rlmcp/achieved_speed_mean"] = float(
+        torch.mean(torch.linalg.norm(measured, dim=1)).item()
     )
 
   def episode_progress() -> None:
