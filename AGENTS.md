@@ -214,6 +214,23 @@ So:
   check out `origin/main`'s source with your new test in place and watch it
   fail, or the test is not pinning what you think it is.
 
+## Releasing: a GitHub release is the whole procedure
+
+`pip install rl-mcp` resolves against PyPI, and PyPI gets a version from
+`.github/workflows/publish.yml`, which runs when a GitHub release is published.
+The tag is the version with a `v` in front, and it must agree with
+`pyproject.toml` or the workflow stops before building. So a release is:
+
+```bash
+# bump `version` in pyproject.toml on main first
+gh release create v0.3.1 --generate-notes
+```
+
+No token is involved: PyPI trusts the workflow's OIDC identity (trusted
+publishing), registered once under the project's Publishing settings on
+pypi.org. Between releases, `main` is installable as
+`pip install 'rl-mcp @ git+https://github.com/mktk1117/rl-mcp'`.
+
 ## Tests
 
 See the Tests section of `README.md` for the current incantation. The suite runs

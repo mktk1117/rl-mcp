@@ -56,3 +56,30 @@ jobs:
           --with pytest --with numpy --with matplotlib --with pillow
           --with imageio --with torch ${{ matrix.deps.extra }}
           python -m pytest tests -q
+
+  package:
+    # What `pip install rl-mcp` gets is the wheel, and the wheel is built from
+    # the package-data list in pyproject.toml, not from git. The record graph's
+    # vendored JavaScript was in every checkout and in no wheel, and the test
+    # suite — which runs in the source tree — could not tell. So: build the
+    # wheel, install it somewhere empty, step off the source tree so an import
+    # cannot fall back to it, and use the thing.
+    runs-on: ubuntu-latest
+    name: package (the wheel installs and runs)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Build
+        run: uv build
+      - name: Install the wheel into an empty environment and use it
+        run: |
+          uv venv "$RUNNER_TEMP/wheel-venv"
+          uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" dist/*.whl
+          cd "$RUNNER_TEMP"
+          wheel-venv/bin/rlmcp --help > /dev/null
+          wheel-venv/bin/python - <<'PY'
+          from rlmcp.records import views
+          assert views.vendored(), f"graph libraries missing from the wheel: {views.VENDOR}"
+          assert (views.TEMPLATES / "records_cytoscape.html").exists(), views.TEMPLATES
+          print("wheel ok:", views.VENDOR)
+          PY

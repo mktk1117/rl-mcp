@@ -1,0 +1,67 @@
+# Uploads a release to PyPI, which is what makes `pip install rl-mcp` true.
+#
+# Trigger: a GitHub release being published. The tag is the version with a `v`
+# in front (`v0.3.0`), and it has to agree with pyproject.toml — checked before
+# anything is built, so a release that forgot the bump fails here with a
+# one-line reason instead of at upload with a 400.
+#
+# Auth: PyPI trusted publishing. No token lives in this repository. PyPI is
+# told once, in the project's "Publishing" settings, to trust the OIDC identity
+# of this workflow file, in this repository, running in the `pypi` environment;
+# the `id-token: write` permission below is what lets the job present that
+# identity. Everything else stays read-only.
+#
+# `workflow_dispatch` is the dry run: it builds and checks the wheel exactly as
+# a release would and then stops, so the build can be exercised without a tag.
+
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The tag is the version
+        if: github.event_name == 'release'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::release tag is v$tag but pyproject.toml says $version — bump one of them"
+            exit 1
+          fi
+      - name: Build
+        run: uv build
+      - name: Install the wheel into an empty environment and use it
+        # The same check as ci.yml's package job. Repeated rather than depended
+        # on: a release should not be able to ship a wheel nobody installed.
+        run: |
+          uv venv "$RUNNER_TEMP/wheel-venv"
+          uv pip install --python "$RUNNER_TEMP/wheel-venv/bin/python" dist/*.whl
+          cd "$RUNNER_TEMP"
+          wheel-venv/bin/rlmcp --help > /dev/null
+          wheel-venv/bin/python -c "from rlmcp.records import views; assert views.vendored(), views.VENDOR"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -69,8 +69,18 @@ viser = [
 where = ["."]
 include = ["rlmcp*"]
 
+# Everything the package reads off its own directory at runtime. A wheel is
+# built from this list, not from git: the record graph's vendored libraries
+# and its template were in every checkout and in no install until they were
+# named here, and `rlmcp record` in an installed copy quietly fell back to the
+# plain engine. CI's `package` job installs the wheel and checks for them.
 [tool.setuptools.package-data]
-rlmcp = ["py.typed"]
+rlmcp = [
+    "py.typed",
+    "records/vendor/*.js",
+    "records/vendor/README.md",
+    "records/templates/*.html",
+]
 
 # ----------------------------------------------------------------------------
 # Style. Two spaces, one hundred columns, checked by ruff.

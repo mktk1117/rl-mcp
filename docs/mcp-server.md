@@ -11,7 +11,7 @@ an agent needs to know, and a worked session.
 ## Setup
 
 ```bash
-pip install -e '.[server]'      # adds the MCP SDK; mcp>=2 and 1.x both work
+pip install 'rl-mcp[server]'    # adds the MCP SDK; mcp>=2 and 1.x both work
 ```
 
 Register it with Claude Code, or any MCP client:

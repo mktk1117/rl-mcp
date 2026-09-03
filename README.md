@@ -165,9 +165,19 @@ view for what changed across runs. More in [docs/records.md](docs/records.md).
 ## Install
 
 ```bash
-pip install -e .                # training side: numpy, matplotlib, pillow, imageio
-pip install -e '.[server]'      # adds the MCP SDK for the agent side
+pip install rl-mcp              # training side: numpy, matplotlib, pillow, imageio
+pip install 'rl-mcp[server]'    # adds the MCP SDK for the agent side
 ```
+
+`uv pip install` takes the same lines. For what is on `main` right now, or to
+skip installing altogether and run the CLI straight from GitHub:
+
+```bash
+pip install 'rl-mcp[server] @ git+https://github.com/mktk1117/rl-mcp'
+uvx --from 'rl-mcp[server] @ git+https://github.com/mktk1117/rl-mcp' rlmcp sessions
+```
+
+A checkout installs as `pip install -e '.[server]'`.
 
 The MCP SDK is optional on purpose. The training process does not need it, and
 the server does not need a simulator. Both `mcp>=2` and `mcp` 1.x work.
