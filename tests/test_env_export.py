@@ -346,3 +346,108 @@ def test_a_run_that_captured_nothing_says_so_rather_than_writing_junk(tmp_path):
   assert "nothing to export" in payload["error"]
   assert not (tmp_path / "out").exists()
   assert "nothing to export" in env_export.describe(payload)
+
+
+# A term is not its function alone. Reproduced on a real mjlab task first:
+# `import mdp_terms` raised NameError on `_CART_CFG`, a module constant the
+# term used as a default argument.
+
+
+def _write_module(tmp_path, name: str, text: str):
+  """A real importable module, so inspect.getsource has a file to read."""
+  root = tmp_path / "pkgs"
+  root.mkdir(exist_ok=True)
+  (root / f"{name}.py").write_text(text)
+  if str(root) not in sys.path:
+    sys.path.insert(0, str(root))
+  sys.modules.pop(name, None)
+  return importlib.import_module(name)
+
+
+TASK_MODULE = '''
+"""A task's mdp module, the way real ones look."""
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING
+
+import torch
+
+if TYPE_CHECKING:
+  from typing import Any
+
+_SCALE = 2.0
+_UNUSED = "not reached by any term"
+
+
+def _tolerance(x: torch.Tensor, margin: float) -> torch.Tensor:
+  return torch.exp(-(x / margin) ** 2)
+
+
+def centered(env: Any, margin: float = _SCALE) -> torch.Tensor:
+  """Reaches a helper, a constant (as a default) and an imported module."""
+  return _tolerance(torch.zeros(env.num_envs), margin) * math.e / math.e
+'''
+
+
+def test_a_term_is_exported_with_the_module_names_it_reaches(tmp_path):
+  mod = _write_module(tmp_path, "task_a_mdp", TASK_MODULE)
+  env = _Env(rewards={"center": RewardTermCfg(func=mod.centered, weight=1.0)})
+  s = Session(tmp_path / "s").create({"task": "T"})
+  s.publish_env_terms(capture_env_terms(env))
+
+  out = tmp_path / "exported"
+  payload = env_export.export_env(s, out)
+  terms = _import_export(out, env_export.TERMS_STEM)
+  cfg = _import_export(out, env_export.CFG_STEM)
+
+  value = cfg.RewardsCfg().center.func(env)
+  assert value.shape == (NUM_ENVS,) and float(value[0]) == 1.0
+  text = (out / f"{env_export.TERMS_STEM}.py").read_text()
+  assert "_SCALE = 2.0" in text and "def _tolerance" in text
+  assert "_UNUSED" not in text                       # only what the term reaches
+  assert "import math" in text
+  assert "math" in payload["still_imports"]
+  assert "still imports" in (out / "README.md").read_text()
+  assert terms.centered is cfg.RewardsCfg().center.func
+
+
+def test_same_named_functions_from_two_modules_keep_their_own_bodies(tmp_path):
+  """Two modules' `track` used to be written into one file, the second
+  shadowing the first, and both config lines pointed at the survivor."""
+  a = _write_module(tmp_path, "task_a",
+                    "import torch\ndef track(env):\n  return torch.ones(env.num_envs)\n")
+  b = _write_module(tmp_path, "task_b",
+                    "import torch\ndef track(env):\n  return torch.zeros(env.num_envs)\n")
+  env = _Env(rewards={"track_a": RewardTermCfg(func=a.track, weight=1.0),
+                      "track_b": RewardTermCfg(func=b.track, weight=1.0)})
+  s = Session(tmp_path / "s").create({"task": "T"})
+  s.publish_env_terms(capture_env_terms(env))
+
+  out = tmp_path / "exported"
+  env_export.export_env(s, out)
+  cfg = _import_export(out, env_export.CFG_STEM)
+
+  rewards = cfg.RewardsCfg()
+  assert float(rewards.track_a.func(env)[0]) == 1.0
+  assert float(rewards.track_b.func(env)[0]) == 0.0
+  assert rewards.track_b.func.__name__ == "track__task_b"
+
+
+def test_a_term_with_no_source_leaves_the_config_constructible(tmp_path):
+  """The config used to reference `mdp_terms.builtin_function_or_method`, so
+  RewardsCfg() raised AttributeError -- the opposite of 'left out'."""
+  env = _Env(rewards={
+      "alive": RewardTermCfg(func=alive_bonus, weight=1.0),
+      "builtin": RewardTermCfg(func=len, weight=1.0),
+  })
+  s = Session(tmp_path / "s").create({"task": "T"})
+  s.publish_env_terms(capture_env_terms(env))
+
+  out = tmp_path / "exported"
+  env_export.export_env(s, out)
+  cfg = _import_export(out, env_export.CFG_STEM)
+
+  rewards = cfg.RewardsCfg()
+  assert hasattr(rewards, "alive") and not hasattr(rewards, "builtin")
+  assert "# builtin: source unavailable" in (out / f"{env_export.CFG_STEM}.py").read_text()

@@ -13,12 +13,16 @@ with the checkpoint:
       env_cfg.py     RewardsCfg / ObservationsCfg / ActionsCfg over those
       README.md      what this is, what it pairs with, what did not survive
 
-**Self-contained on purpose.** The implementations are inlined rather than
-imported, so the export runs without the task package installed at the version
-the run used. The cost is honest and worth stating: this is a *fork*, not a
-reference. It will not pick up later fixes to those terms, and it is a snapshot
-for pairing with one checkpoint rather than a package to develop in. When what
-you want is the living package at the run's commit, that is what
+**Inlined, with what each term reaches.** A term's source alone does not run:
+it reads its module's constants and helpers and the names its module imported.
+So each term is cut out of its module with that closure -- see
+:mod:`rlmcp.source_bundle` -- and what the module imported from *elsewhere* is
+still imported, and listed in the README so the reader knows what has to be
+installed: a backend such as mjlab is one thing, a sibling module of the task
+package is another. The cost is honest and worth stating: this is a *fork*,
+not a reference. It will not pick up later fixes to those terms, and it is a
+snapshot for pairing with one checkpoint rather than a package to develop in.
+When what you want is the living package at the run's commit, that is what
 ``rlmcp recipe build`` gives you.
 
 **Weights are the ones the run ended on.** A term added at 0.5 and tuned to 3.0
@@ -57,6 +61,15 @@ class Rendered:
   imports: list[str] = field(default_factory=list)
   unrendered: list[str] = field(default_factory=list)
   missing_source: list[str] = field(default_factory=list)
+  symbols: dict[tuple[str, str], str] = field(default_factory=dict)
+  """``(module, name)`` of a captured term -> the name it has in mdp_terms.py.
+  Differs from ``name`` only when two modules defined the same name."""
+  still_imports: list[str] = field(default_factory=list)
+  """Modules the export imports because the terms' modules did."""
+  no_context: list[str] = field(default_factory=list)
+  """Modules whose source was not captured, so their terms are inlined bare."""
+  unbound: list[str] = field(default_factory=list)
+  """Names a term reaches that its module does not bind (bundler could not follow)."""
 
 
 class _Imports:
@@ -181,13 +194,21 @@ def _source_of(term: dict[str, Any], missing: list[str], label: str) -> str | No
 
 def render_terms_module(
     snapshot: dict[str, Any], rendered: Rendered) -> str:
-  """Every implementation, inlined once even when several terms share it."""
+  """Every implementation, with the module-level names it reaches.
+
+  Terms are grouped by the module they came from, and each module contributes
+  the closure of its terms: the functions, the constants and helpers they use,
+  and the imports that bind the rest. Two modules that define the same name
+  differently do not shadow each other -- the second is renamed with its
+  module's slug, and the config refers to the renamed symbol.
+  """
   lines = [
       '"""Implementations of every term this policy trained under.',
       "",
       "Written by `rlmcp env export`. Each function is the source that was",
-      "running in the training process, captured from the live managers -- not",
-      "an import, so this module does not need the task package installed.",
+      "running in the training process, captured from the live managers, with",
+      "the module-level names it reaches. What its module imported from",
+      "elsewhere is imported here too; README.md lists what that needs.",
       "",
       "It is a snapshot, not a package: it will not pick up later fixes to",
       "these terms. Pair it with the checkpoint it was exported beside.",
@@ -195,22 +216,182 @@ def render_terms_module(
   if snapshot.get("task"):
     lines += ["", f"task: {snapshot['task']}"]
   lines += ['"""', "", "from __future__ import annotations", "",
-            "import torch  # noqa: F401 - terms are written against it.", ""]
+            "import torch  # noqa: F401 - agent-written terms are compiled against it.",
+            ""]
+
+  # Which top-level names each module has to contribute. Actions are absent:
+  # an action term is a backend class named by its config, not a function
+  # with source of its own.
+  wanted: dict[str, list[str]] = {}
+  bare: list[tuple[str, dict[str, Any]]] = []
+  for label, term in _source_terms(snapshot):
+    info = term.get("func") or {}
+    if not info.get("available") or not info.get("source"):
+      _source_of(term, rendered.missing_source, label)
+      continue
+    module = str(info.get("module") or "")
+    top = str(info.get("qualname") or info.get("name") or "").split(".")[0]
+    if info.get("origin") == "agent" or module not in (snapshot.get("modules") or {}):
+      bare.append((label, term))
+      continue
+    wanted.setdefault(module, [])
+    if top and top not in wanted[module]:
+      wanted[module].append(top)
 
   body: list[str] = []
-  seen: set = set()
-  # Actions are deliberately absent: an action term is a backend class named
-  # by its config, not a function with source of its own, so there is nothing
-  # here to inline and nothing missing when there is no `func`.
-  for term in _iter_terms(snapshot, "rewards"):
-    _emit_source(term, "reward", body, seen, rendered)
-  for group, spec in (snapshot.get("observations") or {}).items():
-    for term in spec.get("terms") or []:
-      _emit_source(term, f"observation {group}", body, seen, rendered)
+  emitted: dict[str, tuple[str, str]] = {}   # name -> (module, statement text)
+  modules = snapshot.get("modules") or {}
+  for module, names in wanted.items():
+    _emit_module(module, names, modules[module], body, emitted, rendered)
+  for label, term in bare:
+    _emit_bare(label, term, body, emitted, rendered, snapshot)
 
   if not body:
     body = ["# No term source was captured for this run.", ""]
   return "\n".join([*lines, "", *body]).rstrip() + "\n"
+
+
+def _source_terms(snapshot: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+  """Every reward and observation term, with a label for the README."""
+  out: list[tuple[str, dict[str, Any]]] = []
+  for term in _iter_terms(snapshot, "rewards"):
+    out.append((f"reward '{term.get('name')}'", term))
+  for group, spec in (snapshot.get("observations") or {}).items():
+    for term in spec.get("terms") or []:
+      out.append((f"observation {group} '{term.get('name')}'", term))
+  return out
+
+
+def _slug(module: str) -> str:
+  return "".join(c if c.isalnum() else "_" for c in module)
+
+
+def _emit_module(
+    module: str, names: list[str], captured: dict[str, Any], body: list[str],
+    emitted: dict[str, tuple[str, str]], rendered: Rendered) -> None:
+  """One module's closure into the body, renaming on collision."""
+  from rlmcp.source_bundle import bundle_module
+
+  try:
+    bundle = bundle_module(captured.get("source") or "", captured.get("package"),
+                           list(names))
+  except SyntaxError as exc:
+    rendered.no_context.append(f"{module}: its source does not parse ({exc})")
+    for name in names:
+      rendered.symbols[(module, name)] = name
+    return
+  rendered.unbound += [f"{module}: {name}" for name in bundle.missing]
+  rendered.still_imports += [
+      m for m in bundle.imported_modules if m not in rendered.still_imports]
+
+  # A definition that another module already contributed under the same name
+  # with different text is renamed. An *import* of the same name is not: two
+  # modules importing `Entity` from the backend mean the same object, and a
+  # rename would rewrite the import line itself into a name that does not
+  # exist.
+  renames: dict[str, str] = {}
+  statements = list(bundle.statements)
+  for text in statements:
+    if _is_import(text):
+      continue
+    for bound in _bound_in(text):
+      previous = emitted.get(bound)
+      if previous is not None and previous[0] != module and previous[1] != text:
+        renames[bound] = f"{bound}__{_slug(module)}"
+  if renames:
+    statements = [_rename(text, renames) for text in statements]
+
+  section: list[str] = []
+  for text in statements:
+    bound = _bound_in(text)
+    if bound and all(b in emitted and emitted[b][1] == text for b in bound):
+      continue  # the same statement, already there from another module
+    for b in bound:
+      emitted.setdefault(b, (module, text))
+    section.append(text.rstrip("\n"))
+  for name in names:
+    rendered.symbols[(module, name)] = renames.get(name, name)
+  if section:
+    body.append(f"# ---- from {module} ----")
+    body += [s + "\n" if not s.endswith("\n") else s for s in section]
+    body.append("")
+
+
+def _emit_bare(
+    label: str, term: dict[str, Any], body: list[str],
+    emitted: dict[str, tuple[str, str]], rendered: Rendered,
+    snapshot: dict[str, Any]) -> None:
+  """A term whose module was not captured: its own source, and a note."""
+  info = term.get("func") or {}
+  module = str(info.get("module") or "")
+  name = str(info.get("qualname") or info.get("name") or "").split(".")[0]
+  source = str(info.get("source") or "")
+  if info.get("origin") != "agent":
+    note = f"{module}: not captured, so {label} is inlined without its module's names"
+    if note not in rendered.no_context:
+      rendered.no_context.append(note)
+  previous = emitted.get(name)
+  if previous is not None and previous[1] == source:
+    rendered.symbols[(module, name)] = name
+    return
+  symbol = name
+  if previous is not None:
+    symbol = f"{name}__{_slug(module)}"
+    source = _rename(source, {name: symbol})
+  emitted[symbol] = (module, source)
+  rendered.symbols[(module, name)] = symbol
+  origin = " (written by the agent during the run)" if info.get(
+      "origin") == "agent" else ""
+  body.append(f"# from {module}{origin}")
+  body.append(source.rstrip())
+  body.append("")
+
+
+def _is_import(statement: str) -> bool:
+  """Whether a statement's text is an import (bare, or inside an if/try)."""
+  import ast
+
+  try:
+    tree = ast.parse(statement)
+  except SyntaxError:
+    return False
+  for node in tree.body:
+    inner = [node]
+    if isinstance(node, (ast.If, ast.Try, ast.With)):
+      inner = [c for c in ast.walk(node) if isinstance(c, ast.stmt) and c is not node]
+    if any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in inner):
+      return True
+  return False
+
+
+def _bound_in(statement: str) -> list[str]:
+  """Top-level names one statement's text binds."""
+  import ast
+
+  from rlmcp.source_bundle import _bound_names
+
+  try:
+    tree = ast.parse(statement)
+  except SyntaxError:
+    return []
+  names: list[str] = []
+  for node in tree.body:
+    names.extend(_bound_names(node))
+  return names
+
+
+def _rename(text: str, renames: dict[str, str]) -> str:
+  """Rename bare identifiers in one module's statements.
+
+  Textual, on word boundaries and not after a dot, so `obj.track` is left
+  alone and `track(`, `def track`, `= track` are renamed. Good enough for the
+  rare collision this exists for; the README names every rename.
+  """
+  import re
+
+  for old, new in renames.items():
+    text = re.sub(rf"(?<![\w.]){re.escape(old)}\b", new, text)
+  return text
 
 
 def _iter_terms(snapshot: dict[str, Any], section: str) -> list[dict[str, Any]]:
@@ -243,8 +424,8 @@ def render_config_module(snapshot: dict[str, Any], session: Session,
   final = _final_reward_values(session)
 
   blocks: list[str] = []
-  blocks.append(_render_rewards(snapshot, final, imports, unrendered))
-  blocks.append(_render_observations(snapshot, imports, unrendered))
+  blocks.append(_render_rewards(snapshot, final, imports, unrendered, rendered))
+  blocks.append(_render_observations(snapshot, imports, unrendered, rendered))
   blocks.append(_render_actions(snapshot, imports, unrendered))
 
   # The backend's own term-config classes, recorded at capture. Emitting the
@@ -285,7 +466,7 @@ def render_config_module(snapshot: dict[str, Any], session: Session,
   return "\n".join(header + blocks).rstrip() + "\n"
 
 
-def _render_rewards(snapshot, final, imports, unrendered) -> str:
+def _render_rewards(snapshot, final, imports, unrendered, rendered) -> str:
   terms = _iter_terms(snapshot, "rewards")
   lines = ["@dataclass", "class RewardsCfg:",
            '  """What the policy was paid for."""', ""]
@@ -300,15 +481,34 @@ def _render_rewards(snapshot, final, imports, unrendered) -> str:
     if configured is not None:
       lines.append(
           f"  # configured at {configured!r}; the run ended at {weight!r}.")
-    func = (term.get("func") or {}).get("name") or name
+    func = _symbol(term, rendered)
     extra = f", params={params}" if params not in ("{}", "None") else ""
-    lines.append(
-        f"  {name}: RewTerm = field(default_factory=lambda: RewTerm("
-        f"func={TERMS_STEM}.{func}, weight={weight!r}{extra}))")
+    line = (f"  {name}: RewTerm = field(default_factory=lambda: RewTerm("
+            f"func={TERMS_STEM}.{func}, weight={weight!r}{extra}))")
+    if func is None:
+      # No source to point at. A line naming a function that is not there
+      # would make RewardsCfg() raise; a commented one says what is missing.
+      reason = (term.get("func") or {}).get("reason", "no source captured")
+      lines.append(f"  # {name}: source unavailable ({reason}); supply it by hand:")
+      lines.append("  #" + line.replace(f"{TERMS_STEM}.None", f"{TERMS_STEM}.<{name}>")[1:])
+      continue
+    lines.append(line)
+  if all(row.lstrip().startswith("#") or not row.strip() for row in lines[4:]):
+    lines.append("  pass")
   return "\n".join(lines) + "\n\n"
 
 
-def _render_observations(snapshot, imports, unrendered) -> str:
+def _symbol(term: dict[str, Any], rendered: Rendered) -> str | None:
+  """The name in mdp_terms.py this term's func has, or None when it has none."""
+  info = term.get("func") or {}
+  if not info.get("available") or not info.get("source"):
+    return None
+  module = str(info.get("module") or "")
+  top = str(info.get("qualname") or info.get("name") or "").split(".")[0]
+  return rendered.symbols.get((module, top), top)
+
+
+def _render_observations(snapshot, imports, unrendered, rendered) -> str:
   groups = snapshot.get("observations") or {}
   lines = ["@dataclass", "class ObservationsCfg:",
            '  """What the policy saw. Order is the input vector\'s order."""',
@@ -325,7 +525,11 @@ def _render_observations(snapshot, imports, unrendered) -> str:
       body.append("    pass")
     for term in terms:
       name = term.get("name")
-      func = (term.get("func") or {}).get("name") or name
+      func = _symbol(term, rendered)
+      if func is None:
+        reason = (term.get("func") or {}).get("reason", "no source captured")
+        body.append(f"    # {name}: source unavailable ({reason}); supply it by hand.")
+        continue
       pieces = [f"func={TERMS_STEM}.{func}"]
       params = render_value(term.get("params") or {}, imports, unrendered,
                             where=f"observation '{group}.{name}' params")
@@ -413,9 +617,33 @@ def render_readme(snapshot: dict[str, Any], session: Session,
       "Nothing here was executed. Import it once against your backend before",
       "pairing it with a checkpoint.",
   ]
+  if rendered.still_imports:
+    task_top = {str((t.get("func") or {}).get("module") or "").split(".")[0]
+                for _, t in _source_terms(snapshot)} - {""}
+    own = [m for m in rendered.still_imports if m.split(".")[0] in task_top]
+    other = [m for m in rendered.still_imports if m not in own]
+    lines += ["", "## What it still imports", "",
+              "The terms' modules imported these, and the export imports them",
+              "too. They have to be importable where this runs:", ""]
+    if other:
+      lines += [f"- `{m}`" for m in other]
+    if own:
+      lines += ["", "From the task package itself, which therefore still has",
+                "to be installed (the recipe's `package/` is the version that ran):", ""]
+      lines += [f"- `{m}`" for m in own]
+  if rendered.no_context:
+    lines += ["", "## Terms inlined without their module", "",
+              "The module's source was not captured, so only the function is",
+              "here; a name it reads from its module will be undefined:", ""]
+    lines += [f"- {entry}" for entry in rendered.no_context]
+  if rendered.unbound:
+    lines += ["", "## Names the bundler could not follow", "",
+              "Read by a term but bound nowhere in its module (a builtin, or",
+              "injected at runtime):", ""]
+    lines += [f"- {entry}" for entry in rendered.unbound]
   if rendered.missing_source:
     lines += ["", "## Terms whose source could not be captured", "",
-              "These are **missing from the export** and must be supplied by",
+              "These are **commented out in the config** and must be supplied by",
               "hand, from the task package:", ""]
     lines += [f"- {entry}" for entry in rendered.missing_source]
   if rendered.unrendered:
@@ -489,6 +717,8 @@ def export_env(session: Session, out_dir: Path | str) -> dict[str, Any]:
       },
       "missing_source": rendered.missing_source,
       "unrendered": rendered.unrendered,
+      "still_imports": rendered.still_imports,
+      "no_context": rendered.no_context,
       "problems": snapshot.get("problems") or [],
   }
 

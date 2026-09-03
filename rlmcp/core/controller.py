@@ -1342,10 +1342,20 @@ class RlMcp:
       namespace["torch"] = torch
     except Exception:  # pragma: no cover - torch is present wherever a sim is.
       pass
+    # No backend hangs its mdp module off the env, so it is found the way the
+    # terms themselves know it: the module an existing reward term lives in.
+    import sys
+
     env = getattr(self.sim, "env", None)
-    for attr in ("mdp", "_mdp"):
-      module = getattr(env, attr, None)
-      if module is not None:
+    manager = getattr(env, "reward_manager", None)
+    for name in list(getattr(manager, "active_terms", []) or []):
+      try:
+        func = manager.get_term_cfg(name).func
+      except Exception:
+        continue
+      target = func if callable(func) and hasattr(func, "__module__") else type(func)
+      module = sys.modules.get(getattr(target, "__module__", "") or "")
+      if module is not None and getattr(module, "__name__", "") != "builtins":
         namespace["mdp"] = module
         break
     return namespace
@@ -1377,7 +1387,8 @@ class RlMcp:
         f"digest:    {compiled.digest}",
     ]
     if rationale:
-      header += ["", f"rationale: {rationale}"]
+      # Inside a docstring, so a rationale that quotes one must not end it.
+      header += ["", f"rationale: {rationale.replace(chr(34) * 3, chr(92) + chr(34) * 3)}"]
     header += ['"""', "", ""]
     path = directory / f"{compiled.name}.py"
     path.write_text("\n".join(header) + compiled.source)

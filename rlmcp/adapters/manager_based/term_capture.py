@@ -23,6 +23,13 @@ installed at the version the run used; source is the thing itself. Where source
 cannot be read -- a builtin, a lambda in a REPL -- the term is recorded as
 unavailable with its module and qualname, and nothing pretends otherwise.
 
+A term's source alone does not run: it reaches for its module's constants,
+helpers and imports. So the source of every module a term came from is kept
+too, under ``modules``, and the export cuts each term's closure out of it (see
+:mod:`rlmcp.source_bundle`). Whole modules rather than closures at capture
+time, because capture runs inside the training process and must stay cheap
+and unable to fail; the AST work happens offline.
+
 Values are encoded rather than repr'd. A reward param is routinely a
 ``SceneEntityCfg``, which is a dataclass, and ``repr`` of one is neither
 guaranteed to round-trip nor to carry the import it needs. :func:`encode_value`
@@ -43,12 +50,15 @@ from typing import Any
 
 from rlmcp.core.reward_source import SOURCE_ATTR
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MAX_SOURCE_BYTES = 200_000
 """Ceiling on one term's captured source. A term whose source is larger than
 this is almost certainly a whole module misidentified as a function; recording
 it would bloat every session for no gain."""
+
+MAX_MODULE_BYTES = 2_000_000
+"""Ceiling on one module's captured source, for the same reason."""
 
 
 def capture_env_terms(env: Any) -> dict[str, Any]:
@@ -69,7 +79,52 @@ def capture_env_terms(env: Any) -> dict[str, Any]:
   # The exact term-config classes this backend uses, so the export can import
   # them rather than make the reader choose between two commented guesses.
   snapshot["term_cfg_types"] = _capture_cfg_types(snapshot)
+  snapshot["modules"] = _capture_modules(snapshot, problems)
   return snapshot
+
+
+def _capture_modules(snapshot: dict[str, Any], problems: list[str]) -> dict[str, Any]:
+  """The source of every module a captured term was defined in.
+
+  Keyed by module name. A module that cannot be read (compiled from a string,
+  a builtin, too large) is left out and named in ``problems``; the export then
+  falls back to the term's own source and says what it could not inline.
+  """
+  import sys
+
+  wanted: list[str] = []
+  for term in snapshot.get("rewards") or []:
+    wanted.append(_module_of(term))
+  for spec in (snapshot.get("observations") or {}).values():
+    for term in spec.get("terms") or []:
+      wanted.append(_module_of(term))
+  out: dict[str, Any] = {}
+  for name in dict.fromkeys(n for n in wanted if n):
+    module = sys.modules.get(name)
+    if module is None:
+      problems.append(f"module '{name}' is not in sys.modules; its source was not kept")
+      continue
+    try:
+      source = inspect.getsource(module)
+    except (OSError, TypeError) as exc:
+      problems.append(f"module '{name}': source unavailable ({type(exc).__name__}: {exc})")
+      continue
+    if len(source) > MAX_MODULE_BYTES:
+      problems.append(f"module '{name}': {len(source)} bytes, over the cap; not kept")
+      continue
+    out[name] = {
+        "source": source,
+        "package": getattr(module, "__package__", None),
+        "file": getattr(module, "__file__", None),
+    }
+  return out
+
+
+def _module_of(term: dict[str, Any]) -> str:
+  info = term.get("func") or {}
+  if not info.get("available") or info.get("origin") == "agent":
+    return ""
+  return str(info.get("module") or "")
 
 
 def _capture_cfg_types(snapshot: dict[str, Any]) -> dict[str, Any]:
