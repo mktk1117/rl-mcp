@@ -66,6 +66,20 @@ Which is why two things a filesystem gives away for free are methods:
 at all once the file is on another machine. The same reasoning makes `address`
 opaque: it is a path today and a URL later, and nothing may parse it.
 
+The second implementation exists now: [`rlmcp/wire.py`](../rlmcp/wire.py)'s
+`WireSession` reaches a run through `rlmcp hostd`
+([`rlmcp/hostd.py`](../rlmcp/hostd.py)) on the machine the run is on, over
+plain HTTP from the standard library, and answers the same seventeen names.
+`wire.connect(address)` is where the two transports meet: a directory gives a
+`Session`, a URL (`http://host:8740/v1/sessions/<run>/<session>`) a
+`WireSession`. The daemon adds the two faces a filesystem never needed --
+**jobs** (start a process on the host, poll it, stop it, read its log) and
+**host** (who this machine is, its GPUs, its disk) -- and nothing else; it
+never imports torch, and if it dies, telemetry delivery stops and training
+does not. One bearer token per host, checked on every request, required to
+bind beyond localhost. A session key is a name, never a path: the daemon
+resolves it by walking what exists under its root.
+
 Three streams carry a `seq`: `status.json`, and every row of `metrics.jsonl`
 and `events.jsonl`. It is what lets a reader ask for *what is new* --
 `metrics(since_seq=n)`, `events(since_seq=n)` -- instead of refetching a log

@@ -340,7 +340,7 @@ _SHAPE_ARGS = {
 _REFUSALS = {"play", "analyze", "check", "recipe"}
 
 # `train` and `serve` hand the line to another program; there is no payload.
-_NO_OUTPUT = {"train", "serve"}
+_NO_OUTPUT = {"train", "serve", "hostd"}  # launchers and a daemon: no envelope to declare
 
 
 @pytest.fixture

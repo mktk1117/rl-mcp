@@ -978,6 +978,11 @@ def build_parser() -> argparse.ArgumentParser:
 
   sub.add_parser("sessions", help="List known sessions and whether they are live")
 
+  p = sub.add_parser("hostd", help="Serve this machine's sessions and jobs over HTTP, "
+                                   "for a studio on another machine")
+  from rlmcp import hostd as hostd_module
+  hostd_module.add_arguments(p)
+
   p = sub.add_parser("tasks", help="List task ids this environment can drive")
   p.add_argument("--task-package", action="append", default=[], metavar="MODULE",
                  help="Import this module first, so its tasks register. Repeatable.")
@@ -1453,6 +1458,23 @@ def _dispatch(args: argparse.Namespace) -> int:
   """Every command, one `if` each, ending in `_emit` or a `_call`."""
   cmd = args.command
   timeout = args.timeout
+
+  if cmd == "hostd":
+    # The other command with no session of its own: it *serves* them. A
+    # daemon, not a query, so it never reaches `_emit`.
+    from rlmcp import hostd as hostd_module
+
+    host = hostd_module.Host(Path(args.root), token=args.token)
+    try:
+      server = hostd_module.Server(host, bind=args.bind, port=args.port)
+    except (ValueError, OSError) as exc:
+      print(cli_output.note(f"[rlmcp hostd] {exc}"), file=sys.stderr)
+      return 2
+    print(f"rlmcp hostd  {server.url}  host {host.id}  root {host.root}"
+          + ("" if args.token else "  (no token: localhost only)"), flush=True)
+    with contextlib.suppress(KeyboardInterrupt):
+      server.serve_forever()
+    return 0
 
   if cmd == "tasks":
     # The one command with no session: it answers what *could* run, which is
