@@ -153,14 +153,24 @@ def read_events(source: Any) -> list[dict[str, Any]]:
 
 def stage_names(session_dir: Any) -> list[str]:
   """Every stage this run entered, in the order it entered them."""
-  seen: list[str] = []
+  return list(stage_entries(session_dir))
+
+
+def stage_entries(session_dir: Any) -> dict[str, int]:
+  """Each stage this run entered, with the iteration it was first entered at.
+
+  Insertion order is entry order. This is what places a mid-run edit in the
+  rung that was active when it happened; the phrased intervention lines are
+  prose and not the place to read it back from.
+  """
+  entered: dict[str, int] = {}
   for event in read_events(session_dir):
     if event.get("kind") != "curriculum_stage":
       continue
     name = str(event.get("to") or "")
-    if name and name not in seen:
-      seen.append(name)
-  return seen
+    if name and name not in entered:
+      entered[name] = int(event.get("iteration") or 0)
+  return entered
 
 
 # Where a run's stage ladder is written down, best first: beside the session,

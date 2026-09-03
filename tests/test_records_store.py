@@ -830,3 +830,20 @@ def test_a_record_already_poisoned_can_still_be_read_and_repaired(store, tmp_pat
   healed = FileStore(store.root).add_feedback(
       record.id, Feedback(text="after the repair", kind="observe"))
   assert len(healed.feedback) == 3
+
+
+def test_a_record_can_be_opened_under_a_named_id(tmp_path):
+  """`recipe-010` for the rerun of run 010's recipe: an id that carries
+  meaning, beside the numbered ones, and never twice."""
+  from rlmcp.records.filestore import FileStore, StoreError
+  store = FileStore(tmp_path / "records", slots=1)
+  numbered = store.new_record("first", task="T")
+  named = store.new_record("rerun", record_id="recipe-010", task="T")
+
+  assert (numbered.id, named.id) == ("001", "recipe-010")
+  assert store.get_record("recipe-010").slug == "rerun"
+  assert store.free_id("recipe-010") == "recipe-010-2"
+  with pytest.raises(StoreError, match="already taken"):
+    store.new_record("again", record_id="recipe-010", task="T")
+  # The numbered sequence is not disturbed by a named id.
+  assert store.new_record("second", task="T").id == "002"

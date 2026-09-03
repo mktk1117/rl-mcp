@@ -53,7 +53,10 @@ def _phrase(event: dict[str, Any]) -> str:
     keys = event.get("keys") or []
     return f"reset {len(keys)} parameter(s) to their launch values"
   if kind == "curriculum_stage":
-    return f"stage → {event.get('stage') or event.get('name') or '?'}"
+    # The controller writes the transition as `from` / `to`; `stage` and
+    # `name` are older spellings of the destination.
+    to = event.get("to") or event.get("stage") or event.get("name") or "?"
+    return f"stage → {to}"
   if kind == "curriculum_auto":
     return f"auto-promotion {'on' if event.get('enabled') else 'off'}"
   if kind == "reset_envs":

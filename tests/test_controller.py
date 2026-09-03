@@ -213,6 +213,7 @@ def test_at_reset_write_reports_liveness_and_adapter_notes(tmp_path, fake_runner
 def test_refused_write_is_truthful_and_does_not_republish_schema(
     lab, fake_sim, monkeypatch):
   """A write the adapter refuses must say applied=false and change nothing."""
+  lab.service(iteration=0)   # the opening rung publishes once; not what is tested
   published = []
   monkeypatch.setattr(lab.session, "publish_params",
                       published.append)
@@ -945,3 +946,55 @@ def test_resetting_episodes_and_resetting_parameters_are_different_verbs(lab, fa
 
 def test_reset_envs_is_offered_to_agents_alongside_the_other_commands(lab):
   assert "reset_envs" in _run(lab, "help").result["commands"]
+
+
+# A recipe's config.json: applied at launch, not replayed as edits.
+
+
+def test_a_launch_config_is_applied_before_the_first_batch(tmp_path, fake_sim,
+                                                            fake_runner):
+  """Sim keys are set at construction, runner keys once the runner attaches,
+  and both become the values `reset_parameters` returns to."""
+  controller = RlMcp(
+      sim_adapter=fake_sim, session_dir=tmp_path / "session", video_every=0,
+      launch_config={"reward.action_rate_l2.weight": -0.5,
+                     "reward.track_linear_velocity.weight": 2.0,   # already so
+                     "rl.entropy_coef": 0.02,
+                     "reward.invented.weight": 1.0})
+  try:
+    assert controller.parameters.get_value("reward.action_rate_l2.weight") == -0.5
+    assert controller.parameters.get_spec("rl.entropy_coef") is None  # not yet
+
+    controller.attach_runner(fake_runner)
+    assert controller.parameters.get_value("rl.entropy_coef") == 0.02
+
+    controller.parameters.set_value("reward.action_rate_l2.weight", -0.9)
+    controller.cmd_reset_parameters()
+    assert controller.parameters.get_value("reward.action_rate_l2.weight") == -0.5
+
+    events = [e for e in Session.open(controller.session.dir).events()
+              if e["kind"] == "launch_config"]
+    assert [sorted(e["applied"]) for e in events] == [
+        ["reward.action_rate_l2.weight"], ["rl.entropy_coef"]]
+    # A value the task already had is not written -- a startup-only
+    # parameter would refuse the write of the very value it holds.
+    assert events[0]["unchanged"] == ["reward.track_linear_velocity.weight"]
+    assert events[-1]["unknown"] == ["reward.invented.weight"]
+    # Not an intervention: a distilled ladder must not fold launch values in.
+    assert not [e for e in Session.open(controller.session.dir).events()
+                if e["kind"] == "set_parameter"]
+  finally:
+    controller.close()
+
+
+def test_a_stage_entry_republishes_the_parameter_file(lab):
+  """`rlmcp params` and `rlmcp env export` read params.json for the values
+  in force; the opening rung changed them and left the file at the launch
+  values, so an export said fall_penalty -250 while the run had -120."""
+  assert Session.open(lab.session.dir).params()[
+      "reward.action_rate_l2.weight"]["current"] == -0.1   # as launched
+
+  lab.service(iteration=0)   # applies the opening rung: -0.05
+
+  published = Session.open(lab.session.dir).params()
+  assert published["reward.action_rate_l2.weight"]["current"] == -0.05

@@ -24,6 +24,7 @@ import sys
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 def _prog_name(subcommand: str) -> str:
@@ -40,7 +41,16 @@ def _prog_name(subcommand: str) -> str:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(prog=_prog_name("rlmcp train"),
                                    description=__doc__.splitlines()[0])
-  parser.add_argument("task", help="Registered mjlab task id")
+  parser.add_argument("task", nargs="?", default="",
+                      help="Registered mjlab task id (taken from --recipe when given)")
+  parser.add_argument(
+      "--recipe", default="", metavar="DIR",
+      help="A directory written by `rlmcp recipe build`. Its recipe.json fills "
+           "in the task, --task-package, --config-json, --curriculum-json, "
+           "--seed, --num-envs, --max-iterations and --code-root; any of them "
+           "given here wins. Without --record-run, opens the record for the "
+           "rerun as recipe-<run>.",
+  )
   parser.add_argument("--num-envs", type=int, default=None)
   parser.add_argument("--max-iterations", type=int, default=None)
   parser.add_argument("--device", default="cuda:0")
@@ -50,6 +60,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument(
       "--curriculum", default="terrain", choices=["terrain", "none"],
       help="'terrain' unlocks terrain groups flat-first; 'none' keeps the task's own config",
+  )
+  parser.add_argument(
+      "--curriculum-json", default="", metavar="PATH",
+      help="A ladder written by `rlmcp recipe build` (curriculum.json), or any "
+           "StageSchedule.to_dict() saved as JSON. Starts it from its first rung. "
+           "Overrides --curriculum.",
+  )
+  parser.add_argument(
+      "--config-json", default="", metavar="PATH",
+      help="Parameter values to set before the first batch, as {key: value} -- "
+           "a recipe's config.json. Keys the task does not have are reported, "
+           "not fatal.",
   )
   parser.add_argument("--stage-min-iterations", type=int, default=150)
   parser.add_argument("--stage-hold-iterations", type=int, default=20)
@@ -135,8 +157,92 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return parser.parse_args(argv)
 
 
+def load_curriculum_json(path: str) -> Any:
+  """The ladder in ``path`` as a fresh :class:`StageSchedule`, or None.
+
+  Fresh on purpose: a file saved from a live schedule carries the rung it was
+  on and the history behind it, and a new run starts on the first rung with
+  none of that.
+  """
+  if not path:
+    return None
+  from rlmcp.core.curriculum import StageSchedule
+
+  raw = json.loads(Path(path).read_text())
+  if isinstance(raw, list):
+    raw = {"stages": raw}
+  if not isinstance(raw, dict) or not raw.get("stages"):
+    raise ValueError(f"--curriculum-json {path}: no 'stages' in it.")
+  return StageSchedule.from_dict({"stages": raw["stages"],
+                                  "auto_promote": raw.get("auto_promote", True)})
+
+
+def load_config_json(path: str) -> dict[str, Any]:
+  """``{key: value}`` from ``path``, or ``{}`` when no path was given."""
+  if not path:
+    return {}
+  raw = json.loads(Path(path).read_text())
+  if not isinstance(raw, dict):
+    raise ValueError(f"--config-json {path}: expected a JSON object of key: value.")
+  return dict(raw)
+
+
+def apply_recipe(args: argparse.Namespace) -> dict[str, Any] | None:
+  """Fill the parser's blanks from ``--recipe``, and open its record.
+
+  Explicit flags win over the manifest, so a rerun with more envs or a
+  different device is one flag away. The recipe's ``package/`` goes first on
+  ``sys.path`` and becomes the code root, so the task package that trains is
+  the one the original run had, not whichever one is installed.
+  """
+  if not args.recipe:
+    return None
+  from rlmcp.records.recipe import load_manifest
+
+  manifest = load_manifest(args.recipe)
+  where = Path(manifest["dir"])
+  args.task = args.task or manifest["task"]
+  for package in manifest.get("task_packages") or []:
+    if package not in args.task_package:
+      args.task_package.append(package)
+  if not args.config_json and (where / manifest.get("config", "config.json")).exists():
+    args.config_json = str(where / manifest.get("config", "config.json"))
+  if not args.curriculum_json and (
+      where / manifest.get("curriculum", "curriculum.json")).exists():
+    args.curriculum_json = str(where / manifest.get("curriculum", "curriculum.json"))
+  if args.seed is None and manifest.get("seed") is not None:
+    args.seed = int(manifest["seed"])
+  if args.num_envs is None and manifest.get("num_envs"):
+    args.num_envs = int(manifest["num_envs"])
+  if args.max_iterations is None and manifest.get("iterations"):
+    args.max_iterations = int(manifest["iterations"])
+  package = manifest.get("package")
+  if package and (where / package).is_dir():
+    sys.path.insert(0, str(where / package))
+    if args.code_root is None:
+      args.code_root = str(where / package)
+  if not args.record_run:
+    from rlmcp.records import open_store
+    from rlmcp.records.recipe import open_reproduction_record
+
+    store = open_store(args.records_root or None)
+    record = open_reproduction_record(store, manifest, where)
+    args.record_run = record.id
+    print(f"[rlmcp-train] opened record {record.id} for the rerun of "
+          f"{manifest.get('from_run')} (records: {getattr(store, 'root', '')})")
+  return manifest
+
+
 def main(argv: list[str] | None = None) -> int:
   args = _parse_args(argv)
+  try:
+    apply_recipe(args)
+  except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"[rlmcp-train] --recipe: {exc}")
+    return 2
+  if not args.task:
+    print("[rlmcp-train] name a task, or pass --recipe <dir>.")
+    return 2
 
   # Checked before anything expensive starts: a mistyped cadence should cost a
   # line, not a traceback out of the middle of environment construction.
@@ -146,6 +252,13 @@ def main(argv: list[str] | None = None) -> int:
     Cadence.parse(args.video_every)
   except CadenceError as exc:
     print(f"[rlmcp-train] --video-every: {exc}")
+    return 2
+
+  try:
+    schedule = load_curriculum_json(args.curriculum_json)
+    launch_config = load_config_json(args.config_json)
+  except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"[rlmcp-train] {exc}")
     return 2
 
   # Must precede the first mujoco import so the GL backend is picked correctly.
@@ -231,11 +344,19 @@ def main(argv: list[str] | None = None) -> int:
       render_mode="rgb_array" if args.eager_render else None,
   )
 
+  if schedule is not None:
+    (log_dir / "params" / "curriculum.json").write_text(
+        json.dumps([s.to_dict() for s in schedule.stages], indent=2))
+
   env = rlmcp.wrap(
       env,
       session_dir=log_dir / "rlmcp",
-      curriculum=None if args.curriculum == "none" else "terrain",
+      curriculum=schedule if schedule is not None
+      else None if args.curriculum == "none" else "terrain",
       task_id=args.task,
+      task_packages=list(args.task_package),
+      seed=agent_cfg.seed,
+      parameters=launch_config,
       service_every_steps=agent_cfg.num_steps_per_env,
       record_run=args.record_run or None,
       records_root=args.records_root or None,

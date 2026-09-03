@@ -81,10 +81,13 @@ extension in *that task's* repo.
 ## Curricula are NOT terrain-only
 
 `rlmcp-train --curriculum {terrain,none}` is a convenience entry point, and its
-two choices are the whole of what *that CLI* offers. The library is not so
-limited: a curriculum is an ordered list of stages, each of which applies
-parameter edits and/or commands on entry and promotes when metric conditions
-hold for N consecutive iterations past a floor. Nothing about it is terrain.
+two choices are the whole of what *that flag* offers; `--curriculum-json
+<file>` takes any ladder saved as JSON (a recipe's `curriculum.json`, a run's
+`params/curriculum.json`), and `--config-json` the parameter values to start
+from. The library is not so limited either: a curriculum is an ordered list of
+stages, each of which applies parameter edits and/or commands on entry and
+promotes when metric conditions hold for N consecutive iterations past a
+floor. Nothing about it is terrain.
 
 ```python
 from rlmcp.core.curriculum import Action, Condition, CurriculumStage, StageSchedule
