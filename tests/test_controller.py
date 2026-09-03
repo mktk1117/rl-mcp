@@ -957,6 +957,7 @@ def test_a_launch_config_is_applied_before_the_first_batch(tmp_path, fake_sim,
   controller = RlMcp(
       sim_adapter=fake_sim, session_dir=tmp_path / "session", video_every=0,
       launch_config={"reward.action_rate_l2.weight": -0.5,
+                     "reward.track_linear_velocity.weight": 2.0,   # already so
                      "rl.entropy_coef": 0.02,
                      "reward.invented.weight": 1.0})
   try:
@@ -974,6 +975,9 @@ def test_a_launch_config_is_applied_before_the_first_batch(tmp_path, fake_sim,
               if e["kind"] == "launch_config"]
     assert [sorted(e["applied"]) for e in events] == [
         ["reward.action_rate_l2.weight"], ["rl.entropy_coef"]]
+    # A value the task already had is not written -- a startup-only
+    # parameter would refuse the write of the very value it holds.
+    assert events[0]["unchanged"] == ["reward.track_linear_velocity.weight"]
     assert events[-1]["unknown"] == ["reward.invented.weight"]
     # Not an intervention: a distilled ladder must not fold launch values in.
     assert not [e for e in Session.open(controller.session.dir).events()

@@ -380,6 +380,20 @@ class _TraceJob(DeferredJob):
     return out
 
 
+def _same_value(current: Any, wanted: Any) -> bool:
+  """Whether a launch-config value is the one the parameter already holds."""
+  try:
+    if isinstance(current, (list, tuple)) and isinstance(wanted, (list, tuple)):
+      return len(current) == len(wanted) and all(
+          _same_value(a, b) for a, b in zip(current, wanted, strict=True))
+    if isinstance(current, (int, float)) and isinstance(wanted, (int, float)) \
+        and not isinstance(current, bool) and not isinstance(wanted, bool):
+      return abs(float(current) - float(wanted)) <= 1e-12 * max(1.0, abs(float(wanted)))
+    return bool(current == wanted)
+  except Exception:
+    return False
+
+
 class RlMcp:
   """Agent-facing control surface over a live training run."""
 
@@ -601,10 +615,18 @@ class RlMcp:
       return
     applied: dict[str, Any] = {}
     refused: dict[str, str] = {}
+    unchanged: list[str] = []
     for key in list(self._launch_pending):
       if self.parameters.get_spec(key) is None:
         continue
       value = self._launch_pending.pop(key)
+      # A value the task already has is not written: a config.json is the
+      # whole snapshot, and most of it matches the task's defaults -- among
+      # them startup-only parameters that would refuse a write of the very
+      # value they hold.
+      if _same_value(self.parameters.get_value(key), value):
+        unchanged.append(key)
+        continue
       try:
         ok = self.parameters.set_value(key, value)
       except Exception as exc:
@@ -615,10 +637,11 @@ class RlMcp:
         self._defaults[key] = applied[key]
       else:
         refused[key] = "the setter returned False"
-    if applied or refused:
+    if applied or refused or unchanged:
       self.session.append_event("launch_config", {
           "iteration": self.iteration,
           "applied": applied,
+          "unchanged": unchanged,
           "refused": refused,
           "unknown": sorted(self._launch_pending),
       })
