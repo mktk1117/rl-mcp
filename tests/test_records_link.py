@@ -443,3 +443,25 @@ def test_stamping_can_be_declined_and_a_loose_directory_still_launches(
   RecordLink(store, record_id=loose.id, code_root=str(tmp_path)).start("/tmp/session")
   assert store.get_record(loose.id).code["kind"] == "none"
   assert "no code snapshot" in capsys.readouterr().out
+
+
+def test_a_launchers_stamp_survives_a_trainer_told_not_to_stamp(store, repo_with_package):
+  """A launcher that materializes the code (a studio, a fleet) stamps the
+  record itself, before the process exists, and then runs the trainer from a
+  plain directory with ``--code-root ''``: "do not stamp, I already did". The
+  trainer must keep that stamp, not replace it with ``{}`` -- the tree the
+  run actually trains from is the one the launcher wrote, and nothing the
+  trainer can see from its cwd is truer."""
+  from rlmcp.records.snapshot import capture
+
+  record = store.new_record("materialized")
+  record.code = capture(repo_with_package, record_id=record.id)
+  store.put_record(record)
+  assert record.code["kind"] == "git"
+
+  RecordLink(store, record_id=record.id, code_root="").start("/tmp/session")
+
+  kept = store.get_record(record.id).code
+  assert kept["kind"] == "git" and kept["tree"] == record.code["tree"], \
+      "the trainer erased the launcher's stamp"
+  assert RecordLink.KEEPS_LAUNCHER_STAMP is True, "a launcher needs a way to ask"

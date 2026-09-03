@@ -150,7 +150,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument(
       "--code-root", default=None, metavar="DIR",
       help="Task package to stamp on the record at launch (default: the "
-           "directory you launched from). Pass '' to record no code snapshot.",
+           "directory you launched from). Pass '' to stamp nothing here: a "
+           "stamp the launcher already put on the record is kept.",
   )
   parser.add_argument("--logger", default="tensorboard",
                       choices=["tensorboard", "wandb", "neptune"])
