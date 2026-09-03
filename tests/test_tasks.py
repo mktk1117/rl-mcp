@@ -108,6 +108,26 @@ def test_a_task_is_attributed_to_the_import_that_registered_it(
   assert rows["Shipped-With-The-Backend"]["package"] == ""
 
 
+def test_each_package_is_credited_with_its_own_tasks(
+    fake_backend, package, monkeypatch):
+  """Two packages is the case that tells attribution from a first-one-wins.
+
+  With one package named, crediting it with everything that appeared and
+  crediting it with what its own import registered are the same answer. With
+  two they are not, and the wrong one sends somebody reading a task they are
+  building to a package that has nothing to do with it.
+  """
+  monkeypatch.delenv(tasks.TASK_PACKAGES_ENV, raising=False)
+  package("first_tasks", ["First-Rough-G1"])
+  package("second_tasks", ["Second-Rough-G1"])
+
+  rows = {row["task"]: row
+          for row in tasks.registered(["first_tasks", "second_tasks"])["tasks"]}
+
+  assert rows["First-Rough-G1"]["package"] == "first_tasks"
+  assert rows["Second-Rough-G1"]["package"] == "second_tasks"
+
+
 def test_an_absent_backend_is_a_reason_rather_than_an_empty_list(monkeypatch):
   def missing():
     raise ImportError("No module named 'mjlab'")

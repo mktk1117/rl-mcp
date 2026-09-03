@@ -38,6 +38,7 @@ from rlmcp.core.live_view import (
 )
 from rlmcp.core.parameters.registry import ParameterRegistry
 from rlmcp.core.progress_video import DEFAULT_BUDGET_MB, ProgressVideoSchedule
+from rlmcp.core.reward_source import compile_reward_source
 from rlmcp.core.telemetry import plotter
 from rlmcp.core.telemetry.buffer import TelemetryBuffer
 from rlmcp.core.telemetry.trace import TraceRecorder
@@ -379,6 +380,20 @@ class _TraceJob(DeferredJob):
     return out
 
 
+def _same_value(current: Any, wanted: Any) -> bool:
+  """Whether a launch-config value is the one the parameter already holds."""
+  try:
+    if isinstance(current, (list, tuple)) and isinstance(wanted, (list, tuple)):
+      return len(current) == len(wanted) and all(
+          _same_value(a, b) for a, b in zip(current, wanted, strict=True))
+    if isinstance(current, (int, float)) and isinstance(wanted, (int, float)) \
+        and not isinstance(current, bool) and not isinstance(wanted, bool):
+      return abs(float(current) - float(wanted)) <= 1e-12 * max(1.0, abs(float(wanted)))
+    return bool(current == wanted)
+  except Exception:
+    return False
+
+
 class RlMcp:
   """Agent-facing control surface over a live training run."""
 
@@ -392,6 +407,7 @@ class RlMcp:
       trace_capacity: int = 6000,
       extensions: Sequence[Extension] | None = None,
       records: Any | None = None,
+      launch_config: dict[str, Any] | None = None,
       video_every: Any = None,
       video_seconds: float = 4.0,
       video_env_id: int = 0,
@@ -465,6 +481,13 @@ class RlMcp:
     self._register_handlers()
     self._discover_parameters()
     self._defaults = self.parameters.get_snapshot()
+    # A recipe's config.json: the values the original run started from, set
+    # before the first batch so the record's snapshot and `reset_parameters`
+    # both treat them as this run's launch values. Keys the runner owns
+    # (`rl.*`) are not known yet and are applied when it attaches.
+    self._launch_pending: dict[str, Any] = dict(launch_config or {})
+    self._apply_launch_config()
+    self._capture_env_terms()
 
     self._extension_context = ExtensionContext(
         write_artifact=self.write_artifact,
@@ -578,7 +601,53 @@ class RlMcp:
           getter=lambda k=spec.key: self.runner.get_hyperparameter(k),
       )
     self._defaults = self.parameters.get_snapshot()
+    self._apply_launch_config()
     self.session.publish_params(self.parameters.export_schema_json())
+
+  def _apply_launch_config(self) -> None:
+    """Set every pending launch-config key the registry knows, and say so.
+
+    One event for the batch rather than one per key: these are not decisions
+    made during the run, and a recipe distilled from this run must not read
+    forty launch values as forty mid-run edits.
+    """
+    if not self._launch_pending:
+      return
+    applied: dict[str, Any] = {}
+    refused: dict[str, str] = {}
+    unchanged: list[str] = []
+    for key in list(self._launch_pending):
+      if self.parameters.get_spec(key) is None:
+        continue
+      value = self._launch_pending.pop(key)
+      # A value the task already has is not written: a config.json is the
+      # whole snapshot, and most of it matches the task's defaults -- among
+      # them startup-only parameters that would refuse a write of the very
+      # value they hold.
+      if _same_value(self.parameters.get_value(key), value):
+        unchanged.append(key)
+        continue
+      try:
+        ok = self.parameters.set_value(key, value)
+      except Exception as exc:
+        refused[key] = f"{type(exc).__name__}: {exc}"
+        continue
+      if ok:
+        applied[key] = self.parameters.get_value(key)
+        self._defaults[key] = applied[key]
+      else:
+        refused[key] = "the setter returned False"
+    if applied or refused or unchanged:
+      self.session.append_event("launch_config", {
+          "iteration": self.iteration,
+          "applied": applied,
+          "unchanged": unchanged,
+          "refused": refused,
+          "unknown": sorted(self._launch_pending),
+      })
+    if refused:
+      print(f"[rlmcp] launch config: {len(refused)} value(s) refused: "
+            + ", ".join(f"{k} ({v})" for k, v in refused.items()), flush=True)
 
   # Training-loop hooks.
 
@@ -993,6 +1062,7 @@ class RlMcp:
         "get_parameter": self.cmd_get_parameter,
         "set_parameter": self.cmd_set_parameter,
         "reset_parameters": self.cmd_reset_parameters,
+        "add_reward": self.cmd_add_reward,
         "reset_envs": self.cmd_reset_envs,
         "list_metrics": self.cmd_list_metrics,
         "get_metrics": self.cmd_get_metrics,
@@ -1195,6 +1265,157 @@ class RlMcp:
       )
       self.session.publish_params(self.parameters.export_schema_json())
     return {"restored_count": len(restored), "restored": restored}
+
+  def cmd_add_reward(
+      self,
+      name: str,
+      source: str,
+      weight: float = 1.0,
+      params: dict[str, Any] | None = None,
+      rationale: str = "",
+  ) -> dict[str, Any]:
+    """Add a reward term the task never had, written by the agent, live."""
+    compiled = compile_reward_source(
+        source, name=name, namespace=self._reward_namespace())
+    installed = self.sim.add_reward_term(
+        name=compiled.name,
+        func=compiled.func,
+        weight=float(weight),
+        params=dict(params or {}),
+    )
+
+    # Written before the event, so the event's `source_path` always names a
+    # file that exists -- a reader following the audit trail never lands on a
+    # term whose text was lost to a crash between the two writes.
+    source_path = self._write_reward_source(
+        compiled, weight=weight, params=params, rationale=rationale)
+
+    # The new weight is a parameter like any other from here on: tunable with
+    # set_parameter, plotted by the records, usable in a curriculum stage.
+    # Re-running discovery is what puts it in the registry -- the schema was
+    # built from the terms the task shipped with.
+    self._discover_parameters()
+    key = f"reward.{compiled.name}.weight"
+    self._defaults.setdefault(key, float(weight))
+
+    # The captured terms describe the environment as it is, and it has just
+    # changed. Without this the export would miss the very term the agent
+    # added -- the one nothing else in the world has a copy of.
+    self._capture_env_terms()
+
+    detail = {
+        "iteration": self.iteration,
+        "name": compiled.name,
+        "function": compiled.func_name,
+        "weight": float(weight),
+        "params": dict(params or {}),
+        "digest": compiled.digest,
+        "source_path": str(source_path),
+        "rationale": rationale,
+    }
+    self.session.append_event("add_reward_term", detail)
+    self.session.publish_params(self.parameters.export_schema_json())
+
+    return {
+        **detail,
+        "key": key,
+        "index": installed.get("index"),
+        "class_based": installed.get("class_based", False),
+        "trial_value": installed.get("trial_value"),
+        "note": (
+            f"'{compiled.name}' scores from the next batch. Its weight is "
+            f"tunable as '{key}'. The source is saved in the session; "
+            "`rlmcp rewards export` writes it back out as a task module with "
+            "the config lines to go with it."
+        ),
+    }
+
+  def _capture_env_terms(self) -> None:
+    """Write down the terms a policy trained under, while they still exist.
+
+    Taken at startup, and again whenever a reward term is added, so the file
+    always describes the environment as it currently is. Never allowed to
+    fail the run: the terms are a convenience for afterwards, and a backend
+    that cannot be read simply has no file. A backend with nothing to capture
+    returns ``{}``, and no file is written rather than an empty one that reads
+    as "this run had no reward function".
+    """
+    reader = getattr(self.sim, "capture_env_terms", None)
+    if not callable(reader):
+      return
+    terms = self._safe(reader, {}) or {}
+    if not terms:
+      return
+    terms = {"task": self._task_label, "iteration": self.iteration, **terms}
+    with contextlib.suppress(Exception):  # a session that cannot be written
+      self.session.publish_env_terms(terms)
+
+  def _reward_namespace(self) -> dict[str, Any]:
+    """What an agent's reward source is compiled against.
+
+    The task's own ``mdp`` module when the environment exposes one, because a
+    new term usually wants the helpers the existing terms use, plus ``torch``.
+    Everything here is a convenience: source that imports what it needs works
+    the same.
+    """
+    namespace: dict[str, Any] = {}
+    try:
+      import torch
+
+      namespace["torch"] = torch
+    except Exception:  # pragma: no cover - torch is present wherever a sim is.
+      pass
+    # No backend hangs its mdp module off the env, so it is found the way the
+    # terms themselves know it: the module an existing reward term lives in.
+    import sys
+
+    env = getattr(self.sim, "env", None)
+    manager = getattr(env, "reward_manager", None)
+    for name in list(getattr(manager, "active_terms", []) or []):
+      try:
+        func = manager.get_term_cfg(name).func
+      except Exception:
+        continue
+      target = func if callable(func) and hasattr(func, "__module__") else type(func)
+      module = sys.modules.get(getattr(target, "__module__", "") or "")
+      if module is not None and getattr(module, "__name__", "") != "builtins":
+        namespace["mdp"] = module
+        break
+    return namespace
+
+  def _write_reward_source(
+      self,
+      compiled: Any,
+      *,
+      weight: float,
+      params: dict[str, Any] | None,
+      rationale: str,
+  ) -> Path:
+    """Save the term's source into the session, header first.
+
+    The header is what makes the file re-usable rather than merely archived:
+    it carries the term name, the weight and params it was added with, and the
+    reason it was written, so the file alone says how to put it into a task
+    config.
+    """
+    directory = self.session.rewards
+    directory.mkdir(parents=True, exist_ok=True)
+    header = [
+        f"\"\"\"Reward term '{compiled.name}', added during this run.",
+        "",
+        f"iteration: {self.iteration}",
+        f"weight:    {float(weight)!r}",
+        f"params:    {dict(params or {})!r}",
+        f"function:  {compiled.func_name}",
+        f"digest:    {compiled.digest}",
+    ]
+    if rationale:
+      # Inside a docstring, so a rationale that quotes one must not end it.
+      header += ["", f"rationale: {rationale.replace(chr(34) * 3, chr(92) + chr(34) * 3)}"]
+    header += ['"""', "", ""]
+    path = directory / f"{compiled.name}.py"
+    path.write_text("\n".join(header) + compiled.source)
+    return path
 
   def cmd_reset_envs(
       self,
@@ -1753,6 +1974,9 @@ class RlMcp:
           f"{self.iteration}: {stage.notes}",
           flush=True,
       )
+    # The rung just changed the parameters; params.json is what `rlmcp params`
+    # and `rlmcp env export` read for the values in force, so it must follow.
+    self.session.publish_params(self.parameters.export_schema_json())
 
   # Shutdown.
 

@@ -130,6 +130,9 @@ class RlMcpEnvWrapper:
       record_slot: str = "",
       record_strict: bool = False,
       code_root: str | None = None,
+      task_packages: Sequence[str] | None = None,
+      seed: int | None = None,
+      parameters: dict[str, Any] | None = None,
       video_every: Any = None,
       video_seconds: float = 4.0,
       video_env_id: int = 0,
@@ -163,6 +166,7 @@ class RlMcpEnvWrapper:
         curriculum=None,  # Set below, once extensions can inform the plan.
         trace_capacity=trace_capacity,
         records=records,
+        launch_config=dict(parameters or {}),
         video_every=video_every,
         video_seconds=video_seconds,
         video_env_id=video_env_id,
@@ -184,6 +188,10 @@ class RlMcpEnvWrapper:
             "device": str(getattr(self.unwrapped, "device", "")),
             "step_dt": sim_adapter.step_dt(),
             "render_mode": getattr(self.unwrapped, "render_mode", None),
+            # What a recipe built from this run needs to launch it again:
+            # the modules whose import registers the task, and the seed.
+            "task_packages": [str(m) for m in (task_packages or [])],
+            **({} if seed is None else {"seed": int(seed)}),
         },
     )
 

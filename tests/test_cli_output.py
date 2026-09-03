@@ -276,11 +276,15 @@ SHAPES = {
     "params": BARE,        # --live flips it to the envelope; pinned below
     "extensions": BARE,    # --available flips it; pinned below
     "record": BARE,        # via `record list`; the record family has its own test
+    "recipe": ENVELOPE,    # the store answers; "ok" beside the recipe's own keys
     "help": ENVELOPE,
     "get": ENVELOPE,
     "set": ENVELOPE,
     "reset": ENVELOPE,
     "reset-envs": ENVELOPE,
+    "add-reward": ENVELOPE,
+    "rewards": BARE,       # via `rewards list`; read from the session, not the run
+    "env": BARE,           # via `env show`; likewise read from the session
     "metrics": ENVELOPE,
     "plot": ENVELOPE,
     "shot": ENVELOPE,
@@ -311,9 +315,16 @@ SHAPES = {
 # paths that do not exist are deliberate: `play` and `analyze` build their own
 # result rather than round-tripping, so their *refusal* is what must carry the
 # envelope -- a live success would need a checkpoint and a trace.
+#: `add-reward` reads its source off disk, so its well-formed invocation needs
+#: a file that exists; the test substitutes one it writes under tmp_path.
+SOURCE_PLACEHOLDER = "<reward-source>"
+
 _SHAPE_ARGS = {
     "get": ["reward.x.weight"],
     "set": ["reward.x.weight", "-0.2"],
+    "add-reward": ["upright", SOURCE_PLACEHOLDER],
+    "rewards": ["list"],
+    "env": ["show"],
     "run": ["get_status"],
     "raw": ["get_status"],
     "note": ["a note"],
@@ -322,8 +333,11 @@ _SHAPE_ARGS = {
     "analyze": ["/nonexistent/trace.npz"],
     "play": ["/nonexistent/checkpoint.pt"],
     "record": ["list"],
+    # A record that does not exist: the failure half of the envelope, which is
+    # the half a store command can show without a live trainer.
+    "recipe": ["build", "404"],
 }
-_REFUSALS = {"play", "analyze", "check"}
+_REFUSALS = {"play", "analyze", "check", "recipe"}
 
 # `train` and `serve` hand the line to another program; there is no payload.
 _NO_OUTPUT = {"train", "serve"}
@@ -380,6 +394,19 @@ def _run_json(argv, tmp_path, capsys, monkeypatch):
   return code, json.loads(capsys.readouterr().out)
 
 
+def _resolve_args(command, tmp_path):
+  """`_SHAPE_ARGS` with any placeholder standing for a real file on disk."""
+  args = []
+  for arg in _SHAPE_ARGS.get(command, []):
+    if arg == SOURCE_PLACEHOLDER:
+      path = tmp_path / "reward_source.py"
+      path.write_text("def upright(env):\n  return torch.ones(env.num_envs)\n")
+      args.append(str(path))
+      continue
+    args.append(arg)
+  return args
+
+
 def test_every_command_declares_its_envelope_family():
   """A command added without a row in SHAPES is a contract nobody wrote down."""
   assert set(SHAPES) == _shape_subcommands()
@@ -393,7 +420,7 @@ def test_the_declared_family_is_the_emitted_family(
       "--root", str(tmp_path),
       "--timeout", "1",
       command,
-      *_SHAPE_ARGS.get(command, []),
+      *_resolve_args(command, tmp_path),
   ]
   code, payload = _run_json(argv, tmp_path, capsys, monkeypatch)
 

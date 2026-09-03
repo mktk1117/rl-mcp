@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rlmcp.session import read_jsonl
+
 
 @dataclass(frozen=True)
 class Step:
@@ -135,39 +137,40 @@ def parse_action(text: str) -> tuple[str, dict[str, Any]]:
   return node.func.id, args
 
 
-def read_events(session_dir: Path | str) -> list[dict[str, Any]]:
-  """Load a session's event log, skipping any line that is not whole JSON.
+def read_events(source: Any) -> list[dict[str, Any]]:
+  """A session's event log: from an open session, or from its directory.
 
-  A run killed mid-write leaves a torn last line. That is not a reason to
-  refuse to reconstruct the 4000 iterations in front of it.
+  Anything with an ``events()`` method answers for itself -- which is how this
+  reads a run that is not on this filesystem. A path is read the way
+  :func:`rlmcp.session.read_jsonl` reads one, torn last line and all: a run
+  killed mid-write is not a reason to refuse to reconstruct the 4000
+  iterations in front of it.
   """
-  path = Path(session_dir) / "events.jsonl"
-  if not path.exists():
-    return []
-  events: list[dict[str, Any]] = []
-  for raw in path.read_text(errors="replace").splitlines():
-    line = raw.strip()
-    if not line:
-      continue
-    try:
-      event = json.loads(line)
-    except json.JSONDecodeError:
-      continue
-    if isinstance(event, dict):
-      events.append(event)
-  return events
+  events = getattr(source, "events", None)
+  rows = events() if callable(events) else read_jsonl(Path(source) / "events.jsonl")
+  return [row for row in rows if isinstance(row, dict)]
 
 
-def stage_names(session_dir: Path | str) -> list[str]:
+def stage_names(session_dir: Any) -> list[str]:
   """Every stage this run entered, in the order it entered them."""
-  seen: list[str] = []
+  return list(stage_entries(session_dir))
+
+
+def stage_entries(session_dir: Any) -> dict[str, int]:
+  """Each stage this run entered, with the iteration it was first entered at.
+
+  Insertion order is entry order. This is what places a mid-run edit in the
+  rung that was active when it happened; the phrased intervention lines are
+  prose and not the place to read it back from.
+  """
+  entered: dict[str, int] = {}
   for event in read_events(session_dir):
     if event.get("kind") != "curriculum_stage":
       continue
     name = str(event.get("to") or "")
-    if name and name not in seen:
-      seen.append(name)
-  return seen
+    if name and name not in entered:
+      entered[name] = int(event.get("iteration") or 0)
+  return entered
 
 
 # Where a run's stage ladder is written down, best first: beside the session,

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from rlmcp.records.record import OWED_A_RESPONSE, RunRecord, fold_recipe
-from rlmcp.session import Session
+from rlmcp.session import RESERVED_METRIC_KEYS, Session
 
 _PLAN_PROMPTS = {
     "hypothesis": "One sentence, mechanistic. Not \"this should work better\".",
@@ -95,11 +95,11 @@ def gather_evidence(
   -- "undecidable" at close-out -- when the run did measure it. The window
   actually merged is recorded in the evidence as ``metrics_window``.
   """
-  if not session_dir or not Path(session_dir).exists():
+  if not session_dir:
     return {}
   try:
     session = Session.open(session_dir)
-  except FileNotFoundError:
+  except (FileNotFoundError, OSError):
     return {}
 
   rows = session.metrics(last_n=window)
@@ -109,14 +109,10 @@ def gather_evidence(
   final_values: dict[str, float] = {}
   for row in rows:  # oldest first, so the newest logged value wins.
     for key, value in row.items():
-      if isinstance(value, (int, float)) and key not in ("iteration", "t"):
+      if isinstance(value, (int, float)) and key not in RESERVED_METRIC_KEYS:
         final_values[key] = value
 
-  try:
-    with session.metrics_file.open() as f:
-      num_rows = sum(1 for line in f if line.strip())
-  except OSError:
-    num_rows = len(rows)
+  num_rows = session.metrics_count() or len(rows)
 
   interventions = [
       {
@@ -152,8 +148,7 @@ def gather_evidence(
       if e.get("kind") == "feedback"
   ]
 
-  artifacts = (sorted(p.name for p in session.artifacts.glob("*"))
-               if session.artifacts.exists() else [])
+  artifacts = sorted(a["name"] for a in session.list_artifacts())
 
   return {
       "iterations": final.get("iteration"),
@@ -165,7 +160,7 @@ def gather_evidence(
       "notes": notes,
       "feedback": feedback,
       "artifacts": artifacts,
-      "session": str(session.dir),
+      "session": session.address,
   }
 
 

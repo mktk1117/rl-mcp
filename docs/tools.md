@@ -59,7 +59,7 @@ the answer came from:
 | --- | --- | --- |
 | session files on disk | the payload itself — an object, or a list for `sessions` and `events` | `status`, `info`, `sessions`, `events`, `params`, `metrics --list`, `extensions`, `record list`, `record timeline` |
 | the training process, or an offline stand-in for it | `{"ok": true, "result": …}`, or `{"ok": false, "error": "…"}` plus hints | `get`, `set`, `metrics`, `plot`, `shot`, `video`, `curriculum`, `run`, … and `play`, `analyze` |
-| the record store | `"ok"` beside the record's own keys | the other `record …` subcommands |
+| the record store | `"ok"` beside the record's own keys | the other `record …` subcommands, `recipe build` |
 
 **For a parser:** look for a top-level `"ok"`. Absent, the payload is the whole
 output. Present and the command is not `record`, take `"result"` on success and
@@ -95,6 +95,9 @@ stdout. Text mode is untouched; watching a viewer build is the point of it.
 | raw per-step signals | [`trace`](#trace), [`plot-trace`](#plot-trace), [`analyze`](#analyze) | `record_trace`, `plot_joint_trace` |
 | what can I tune | [`params`](#params), [`get`](#get) | `list_parameters` |
 | change a weight | [`set`](#set), [`reset`](#reset) | `set_parameter`, `reset_parameters` |
+| add a reward the task lacks | [`add-reward`](#add-reward) | `add_reward` |
+| keep a term you added | [`rewards export`](#rewards) | (CLI only) |
+| the env a checkpoint trained under | [`env export`](#env) | (CLI only) |
 | restart episodes | [`reset-envs`](#reset-envs) | `reset_environments` |
 | task-specific verbs | [`commands`](#commands), [`run`](#run) | `list_commands`, `run_command` |
 | the stage ladder | [`curriculum`](#curriculum) | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
@@ -103,6 +106,8 @@ stdout. Text mode is untouched; watching a viewer build is the point of it.
 | what was done to this run | [`events --interventions`](#events) | `get_events` |
 | write something down | [`note`](#note), [`feedback`](#feedback), [`events`](#events) | `add_note`, `record_feedback`, `get_events` |
 | watch a finished run | [`play`](#play) | (CLI only) |
+| run it again | [`recipe build`](records.md#making-a-run-runnable-again-rlmcp-recipe-build) | (CLI only) |
+| check a rerun matched the original | [`recipe verify`](records.md#checking-a-recipe-actually-reproduces) | (CLI only) |
 | what code a run used | [`record code`](records.md#what-the-code-was-the-other-half-of-a-recipe) | (CLI only) |
 | the record across runs | [`record …`](records.md) | `attach_feedback`, `answer_feedback`, `get_feedback_timeline`, `set_record_headline` |
 
@@ -765,6 +770,133 @@ rlmcp reset-envs --env-id 0 --env-id 7
 
 Use it to clear a stuck state, or to watch the start of a behaviour instead of
 waiting for the robot to fail into one.
+
+## `add-reward`
+
+Add a reward term the task does not have, written during the run.
+
+`set` explores the reward function the task shipped with. This is for the other
+case: nothing in it scores the thing you are trying to encourage, and no weight
+you can reach expresses it. Check [`params`](#params) first — a term the task
+already has is always the better lever, including one shipped at weight `0.0`.
+
+```bash
+cat > /tmp/upright.py <<'EOF'
+def upright(env, scale: float = 1.0):
+  """Reward keeping the torso vertical."""
+  projected = env.scene["robot"].data.projected_gravity_b[:, 2]
+  return torch.exp(-(1.0 + projected) ** 2 / scale)
+EOF
+
+rlmcp add-reward upright /tmp/upright.py --weight 1.5 \
+    --params '{"scale": 0.25}' --why "nothing scores torso attitude"
+```
+
+**MCP:** `add_reward({"name": ..., "source": ..., "weight": ..., "params": {...}, "rationale": ...})`
+
+The source is one function taking `(env, **params)` and returning one score per
+environment — a tensor of shape `(num_envs,)`. It is compiled with `torch` and
+the module an existing reward term lives in as `mdp`, and **called once against the live
+environment before it is installed**: a term that raises, returns the wrong
+shape, or produces a NaN costs you an error message rather than the run. The
+manager is left untouched in every one of those cases.
+
+Once installed it scores from the next batch, and its weight is a parameter
+like any other — `set reward.upright.weight 3.0`, plottable, usable in a
+curriculum stage, and returned to its original value by `reset`.
+
+This runs Python you wrote inside the training process, with the simulator and
+the optimiser in scope. That is the same trust `set` and `load` already need, so
+it is not gated — it is recorded instead. Every added term is written to
+`<session>/rewards/<name>.py` and its digest goes into the event log.
+
+## `rewards`
+
+What a run added, and how to keep it.
+
+```bash
+rlmcp rewards list                    # what this run added
+rlmcp rewards export --out ./exported # write it back out
+```
+
+A term added mid-run exists as text in the session and nowhere else. When the
+session is gone, so is it: the task package still does not define it and its
+config still does not list it. `rewards export` writes the two halves a task
+package needs —
+
+* `added_rewards.py` — the implementations, to move into the task's `mdp`
+  package;
+* `added_rewards_cfg.py` — one `RewTerm` line per term, to paste into its
+  `RewardsCfg`.
+
+The weights written are the ones **in force at the end of the run**, not the
+ones the terms were added with, since those are what the run being reproduced
+actually used. A term added at `0.5` and tuned to `3.0` arrives at `3.0`, with
+the history kept as a comment.
+
+Editing the task's own files is left to you on purpose: rlmcp does not know
+which package a term belongs to, and nothing task-shaped may live in this repo
+(see `AGENTS.md`).
+
+## `env`
+
+The environment a policy trained under, written out beside the checkpoint.
+
+A `.pt` file is half an answer. To use it you need the observations it expects
+in the order it expects them, the actions it emits, and — to keep training it
+or judge it — what it was being paid for. That lives in a task package which
+has since moved on, at a commit nobody wrote down.
+
+```bash
+rlmcp env show                        # what was captured
+rlmcp env export --out ./exported_env # write it out
+```
+
+```
+exported_env/
+  mdp_terms.py   every term's implementation, inlined
+  env_cfg.py     RewardsCfg / ObservationsCfg / ActionsCfg over those
+  README.md      what it is, what it pairs with, what did not survive
+```
+
+**Inlined with what each term reaches.** A term's source alone does not run —
+it reads its module's constants and helpers and the names its module imported,
+and a default argument such as `asset_cfg=_DEFAULT_ASSET_CFG` is evaluated at
+`def` time. So each term is cut out of its module with that closure: the
+functions, the constants and helpers they use, the imports that bind the rest,
+relative imports made absolute. What the module imported from *elsewhere* is
+still imported, and `README.md` lists it under "What it still imports", naming
+which of those are the task package's own modules (which then has to be
+installed; the recipe's `package/` is the version that ran). Each term's source
+is captured from the live manager while the run is alive — including terms an
+agent [added](#add-reward) mid-run, which exist nowhere else. Two modules that
+define the same name differently do not shadow each other: the second is
+renamed with its module's slug, and the config refers to the renamed symbol.
+
+**Weights are the ones the run ended on**, not the ones the config shipped
+with, because those are what the checkpoint actually trained against. The
+configured value stays as a comment.
+
+**What could not be rendered is named, never guessed.** A term whose source
+cannot be read is commented out of the config with the reason, so the config
+still constructs and says what has to be supplied by hand; a param holding an
+object that cannot be reconstructed from its fields is written as a commented
+`repr`. Both are listed in `README.md`. A config that quietly differs from the
+one that trained the policy is worse than one that says where it stopped.
+
+Rewards, observations and actions only. Terminations and events shape
+*training* rather than the policy's interface, and a checkpoint pairs with the
+interface.
+
+This is a snapshot, not a package: it will not pick up later fixes to those
+terms. When what you want is the living package at the run's commit, that is
+[`rlmcp recipe build`](records.md).
+
+Nothing in the export is executed by rlmcp. Import it once against your backend
+before pairing it with a checkpoint.
+
+> Runs started before this existed have no `env_terms.json`, and `env export`
+> says so rather than writing an empty config.
 
 ## `commands`
 

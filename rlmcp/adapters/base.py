@@ -299,6 +299,55 @@ class SimAdapter(ABC):
   def set_env_state(self, state: dict[str, Any]) -> None:
     return None
 
+  # Optional: growing the reward function.
+
+  def add_reward_term(
+      self,
+      name: str,
+      func: Any,
+      weight: float,
+      params: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
+    """Append a reward term to the running environment.
+
+    The counterpart of :meth:`set_parameter` for the case where no existing
+    weight expresses what the agent wants: a term the task never had, scoring
+    from the next batch on. ``func`` is already a callable -- compiling the
+    agent's source and deciding whether to trust it happens above this layer,
+    in :mod:`rlmcp.core.reward_source` and the controller.
+
+    An implementation must be all-or-nothing: a term that cannot be installed
+    leaves the manager exactly as it was, because the alternative is a run
+    that dies on its next batch inside the reward manager. Validate first --
+    including a trial call -- then mutate.
+
+    Returns a dict describing the installed term (at minimum ``name`` and
+    ``index``), and raises :class:`NotSupported` on a backend whose reward
+    function is fixed at construction.
+    """
+    raise NotSupported("add_reward_term")
+
+  def capture_env_terms(self) -> dict[str, Any]:
+    """Snapshot the terms that define what a policy trained against.
+
+    The rewards it was paid, the observations it saw and the actions it
+    emitted -- with each term's implementation captured as *source*, not as an
+    import path, because an import path is only as good as the package still
+    being installed at the version the run used.
+
+    Taken once at run start and kept in the session, so that a checkpoint can
+    be paired with the environment it trained under after the training process
+    is gone. Terminations and events are out of scope: they shape training
+    rather than the policy's interface.
+
+    Must not raise for a manager that is absent or oddly shaped -- a capture is
+    a convenience and cannot be allowed to stop a run. Report what could not be
+    read in the payload's ``problems`` list instead.
+
+    Returns ``{}`` on a backend with nothing to capture.
+    """
+    return {}
+
   # Optional: rendering.
 
   def render(self, env_id: int = 0) -> np.ndarray:

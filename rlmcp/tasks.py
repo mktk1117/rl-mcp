@@ -43,6 +43,7 @@ from rlmcp.play import TASK_PACKAGES_ENV
 __all__ = [
   "BACKENDS",
   "TASK_PACKAGES_ENV",
+  "import_one",
   "import_packages",
   "packages_to_import",
   "registered",
@@ -65,8 +66,8 @@ def packages_to_import(explicit: list[str] | tuple[str, ...] = ()) -> list[str]:
   return found
 
 
-def import_packages(names: list[str]) -> list[dict[str, Any]]:
-  """Import each package, and report what happened to each one.
+def import_one(name: str) -> dict[str, Any]:
+  """Import one package, and report what happened to it.
 
   A package that will not import is the single most common reason a task id is
   missing, and it is invisible from the id alone -- the task simply is not
@@ -75,15 +76,21 @@ def import_packages(names: list[str]) -> list[dict[str, Any]]:
   """
   import importlib
 
-  report: list[dict[str, Any]] = []
-  for name in names:
-    try:
-      importlib.import_module(name)
-    except Exception as exc:
-      report.append({"module": name, "imported": False, "error": f"{type(exc).__name__}: {exc}"})
-    else:
-      report.append({"module": name, "imported": True, "error": ""})
-  return report
+  try:
+    importlib.import_module(name)
+  except Exception as exc:
+    return {"module": name, "imported": False, "error": f"{type(exc).__name__}: {exc}"}
+  return {"module": name, "imported": True, "error": ""}
+
+
+def import_packages(names: list[str]) -> list[dict[str, Any]]:
+  """Import each package in turn, and report what happened to each one.
+
+  Attribution needs the registry read *between* these imports rather than
+  after the last one, so a caller that attributes walks the names itself and
+  calls :func:`import_one`. This is for callers that only want them imported.
+  """
+  return [import_one(name) for name in names]
 
 
 # ── backends ──────────────────────────────────────────────────────────────
@@ -201,8 +208,14 @@ def registered(packages: list[str] | tuple[str, ...] = (),
     ids, _reason = _ids_or_reason(spec["ids"])
     seen[spec["backend"]] = set(ids)
 
-  imports = import_packages(wanted)
-  for entry in imports:
+  # One import, then the registries, then the next import. Importing them all
+  # first and diffing afterwards reads the same and is not: by the time the
+  # first package is looked at, every id any of them registered is new, so the
+  # whole lot is attributed to whichever package happened to be named first.
+  imports: list[dict[str, Any]] = []
+  for module in wanted:
+    entry = import_one(module)
+    imports.append(entry)
     if not entry["imported"]:
       continue
     for spec in BACKENDS:

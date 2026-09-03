@@ -75,8 +75,15 @@ class RecordStore(Protocol):
 
   # Records.
 
-  def new_record(self, slug: str, **fields: Any) -> RunRecord:
-    """Create a record with a store-assigned id and seq, and persist it."""
+  def new_record(self, slug: str, record_id: str | None = None,
+                 **fields: Any) -> RunRecord:
+    """Create a record and persist it.
+
+    The store assigns the id unless ``record_id`` names one, which is for
+    records whose id *means* something -- ``recipe-010`` for the rerun of
+    run 010's recipe -- and is refused if it is already taken. The seq is
+    always the store's.
+    """
 
   def put_record(self, record: RunRecord) -> RunRecord:
     """Persist an existing record, or raise :class:`ConflictError`.

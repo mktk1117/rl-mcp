@@ -19,6 +19,8 @@ Layout::
       inbox/              pending requests written by the agent side
       outbox/             responses written by the trainer side
       artifacts/          png / mp4 / npz produced on demand
+      env_terms.json      reward / observation / action terms, with their source
+      rewards/            source of every reward term added mid-run
 """
 
 from __future__ import annotations
@@ -29,12 +31,18 @@ import math
 import os
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 SCHEMA_VERSION = 1
+
+#: Keys a metrics row carries that are not measurements. Every reader that
+#: asks "what did this run log?" walks the row's keys, so bookkeeping fields
+#: have to be named in one place -- otherwise the next one added shows up as a
+#: metric in the CLI's list, on a plot's axis, and in the studio's headline.
+RESERVED_METRIC_KEYS = ("seq", "iteration", "t")
 
 PLAY_SESSION_KIND = "rlmcp-play-session"
 """``kind`` a play session writes into its session.json.
@@ -151,7 +159,8 @@ def read_jsonl(path: Path, last_n: int | None = None) -> list[Any]:
   if last_n is not None and last_n <= 0:
     return []
   try:
-    lines = path.read_text().splitlines() if last_n is None else _tail_lines(path, last_n)
+    lines = (path.read_bytes().decode("utf-8", errors="replace").splitlines()
+             if last_n is None else _tail_lines(path, last_n))
   except OSError:
     return []
   out: list[Any] = []
@@ -163,6 +172,57 @@ def read_jsonl(path: Path, last_n: int | None = None) -> list[Any]:
       out.append(json.loads(line))
     except json.JSONDecodeError:
       continue
+  return out
+
+
+def last_row(path: Path) -> dict[str, Any] | None:
+  """The last well-formed JSON object in a JSONL file, or None.
+
+  One backward block read, so "where had I got to" costs the same on a
+  day-old metrics log as on an empty one.
+  """
+  for raw in reversed(_tail_lines(path, 2) if path.exists() else []):
+    line = raw.strip()
+    if not line:
+      continue
+    try:
+      row = json.loads(line)
+    except json.JSONDecodeError:
+      continue  # A torn last line; the one before it still counts.
+    if isinstance(row, dict):
+      return row
+  return None
+
+
+def rows_since(path: Path, since_seq: int) -> list[dict[str, Any]]:
+  """Rows whose ``seq`` is greater than ``since_seq``, oldest first.
+
+  The cursor a reader that is not on this machine needs: it holds the last
+  ``seq`` it saw and asks for what came after, instead of refetching a log
+  that only ever grows.
+
+  Sequences are contiguous and one-based, so the last row's ``seq`` is the
+  row count, and the answer is the last ``last - since`` lines -- two backward
+  reads, no scan. Rows are filtered again after reading, because a file
+  written by an older rlmcp has no ``seq`` at all: that history is returned
+  once, to a reader starting from the beginning, and never again to one
+  holding a cursor.
+  """
+  last = last_row(path) or {}
+  latest = last.get("seq")
+  if isinstance(latest, int):
+    want = max(0, latest - max(0, since_seq))
+    rows = read_jsonl(path, last_n=want) if want else []
+  else:
+    rows = read_jsonl(path)  # No cursor to seek by; read it and filter.
+  out = []
+  for row in rows:
+    seq = row.get("seq")
+    if isinstance(seq, int):
+      if seq > since_seq:
+        out.append(row)
+    elif since_seq <= 0:
+      out.append(row)
   return out
 
 
@@ -226,6 +286,75 @@ class Response:
     )
 
 
+#: Every name a client of a run may use. Frozen on purpose: a reader that
+#: stays inside this list keeps working when the run is on another machine,
+#: and adding to it is a decision about the wire, not a convenience.
+WIRE_SURFACE = (
+    "address", "key", "name",
+    "info", "status", "params",
+    "metrics", "metrics_count", "events",
+    "list_artifacts", "read_artifact",
+    "submit", "poll", "wait", "call",
+    "liveness", "liveness_info",
+)
+
+
+@runtime_checkable
+class SessionClient(Protocol):
+  """What reaching a run requires, and the whole of it.
+
+  :class:`Session` is one implementation -- the local one, where reaching a run
+  means reading its directory. It is the only one today and the right default
+  on a single machine: no socket, nothing to crash, and ``cat`` still works
+  when something is wrong.
+
+  This exists because it will not be the only one. A run on a GPU box the
+  reader cannot see needs a second implementation over a connection, and the
+  cost of that is decided here: **everything above this protocol -- the CLI,
+  the MCP server, rl-mcp-studio -- is written against these names and no
+  others**, so the second implementation changes one layer instead of every
+  caller.
+
+  Which is why the two things a filesystem gives away for free are methods
+  rather than paths. ``list_artifacts`` and ``read_artifact`` exist because a
+  caller that reaches a plot by joining ``session.dir / "artifacts"`` compiles
+  fine, works locally, and cannot be made to work at all when the file is on
+  another machine.
+
+  ``address`` is the string that names this run to a person and to
+  ``--session``; today a path, later a URL. Nothing may parse it.
+  """
+
+  @property
+  def address(self) -> str:
+    """Where this run is, in whatever way the transport addresses it."""
+
+  @property
+  def key(self) -> str:
+    """Short identity carried in payloads: ``<run>/<session>``."""
+
+  @property
+  def name(self) -> str:
+    """The run's own name, for titles."""
+
+  def info(self) -> dict[str, Any]: ...
+  def status(self) -> dict[str, Any]: ...
+  def params(self) -> dict[str, Any]: ...
+  def metrics(self, last_n: int | None = ...,
+              since_seq: int | None = ...) -> list[dict[str, Any]]: ...
+  def metrics_count(self) -> int: ...
+  def events(self, last_n: int | None = ...,
+             since_seq: int | None = ...) -> list[dict[str, Any]]: ...
+  def list_artifacts(self) -> list[dict[str, Any]]: ...
+  def read_artifact(self, name: str) -> bytes: ...
+  def submit(self, cmd: str, **args: Any) -> Request: ...
+  def poll(self, req_id: str, consume: bool = ...) -> Response | None: ...
+  def wait(self, req_id: str, timeout: float = ..., interval: float = ...) -> Response: ...
+  def call(self, cmd: str, timeout: float = ..., **args: Any) -> Response: ...
+  def liveness(self) -> str: ...
+  def liveness_info(self) -> dict[str, Any]: ...
+
+
 class Session:
   """Filesystem handle on one training session.
 
@@ -265,6 +394,34 @@ class Session:
     self.dir = Path(session_dir).expanduser().resolve()
     self._cached_pid: int | None = None
     self._last_outbox_prune = 0.0
+    #: Next sequence number for each stream this process writes, filled in
+    #: lazily from what is already on disk so a trainer restarted onto the
+    #: same directory continues the count instead of replaying it.
+    self._next_seq: dict[str, int] = {}
+
+  # Identity. Three strings, because callers want three different things and
+  # a path answers all of them only while the run is on this machine.
+
+  @property
+  def address(self) -> str:
+    """The directory, as the string ``--session`` takes."""
+    return str(self.dir)
+
+  @property
+  def key(self) -> str:
+    """``<run>/<session>`` -- what payloads name the session by.
+
+    Short enough to read in a table, specific enough to tell two runs apart,
+    and it survives the run moving: the last two segments are the run's, not
+    the machine's.
+    """
+    parent = self.dir.parent.name
+    return f"{parent}/{self.dir.name}" if parent else self.dir.name
+
+  @property
+  def name(self) -> str:
+    """The run's own name -- the log directory, not the ``rlmcp`` inside it."""
+    return self.dir.parent.name or self.dir.name
 
   # Paths.
 
@@ -299,6 +456,27 @@ class Session:
   @property
   def artifacts(self) -> Path:
     return self.dir / "artifacts"
+
+  @property
+  def env_terms_file(self) -> Path:
+    """The captured reward / observation / action terms of this run.
+
+    Written once at startup and refreshed when a term is added. It is what
+    lets a checkpoint be paired with the environment it trained under after
+    the training process is gone -- see ``rlmcp env export``.
+    """
+    return self.dir / "env_terms.json"
+
+  @property
+  def rewards(self) -> Path:
+    """Source of reward terms added during the run, one file per term.
+
+    Kept out of ``artifacts`` because it is not an output to look at: it is
+    what the run was optimising, and the only copy of a term that existed
+    nowhere before the agent wrote it. Created on first write, so a run that
+    adds none has no empty directory.
+    """
+    return self.dir / "rewards"
 
   # Lifecycle.
 
@@ -348,8 +526,30 @@ class Session:
 
   # Trainer side.
 
+  def _seq(self, stream: str, resume_from: Callable[[], int]) -> int:
+    """The next sequence number for ``stream``, counted from disk once."""
+    nxt = self._next_seq.get(stream)
+    if nxt is None:
+      nxt = resume_from() + 1
+    self._next_seq[stream] = nxt + 1
+    return nxt
+
+  def _resume_status_seq(self) -> int:
+    seq = self.status().get("seq")
+    return seq if isinstance(seq, int) else 0
+
+  def _resume_log_seq(self, path: Path) -> int:
+    """Where a log left off: its last ``seq``, else its length."""
+    row = last_row(path)
+    if row is None:
+      return 0
+    seq = row.get("seq")
+    return seq if isinstance(seq, int) else len(read_jsonl(path))
+
   def publish_status(self, status: dict[str, Any]) -> None:
-    _atomic_write_json(self.status_file, {"updated_at": time.time(), **status})
+    seq = self._seq("status", self._resume_status_seq)
+    _atomic_write_json(self.status_file,
+                       {"updated_at": time.time(), "seq": seq, **status})
     # Piggyback outbox hygiene on the heartbeat: responses are deleted by the
     # waiter that consumes them, so anything old enough to prune belongs to a
     # client that vanished. Throttled -- the pause loop publishes ~7x/s.
@@ -361,11 +561,21 @@ class Session:
   def publish_params(self, schema: dict[str, Any]) -> None:
     _atomic_write_json(self.params_file, schema)
 
+  def publish_env_terms(self, terms: dict[str, Any]) -> None:
+    _atomic_write_json(self.env_terms_file, terms)
+
+  def env_terms(self) -> dict[str, Any]:
+    return _read_json(self.env_terms_file, {}) or {}
+
   def append_metrics(self, iteration: int, metrics: dict[str, float]) -> None:
-    _append_jsonl(self.metrics_file, {"iteration": iteration, "t": time.time(), **metrics})
+    seq = self._seq("metrics", lambda: self._resume_log_seq(self.metrics_file))
+    _append_jsonl(self.metrics_file,
+                  {"seq": seq, "iteration": iteration, "t": time.time(), **metrics})
 
   def append_event(self, kind: str, detail: dict[str, Any]) -> None:
-    _append_jsonl(self.events_file, {"t": time.time(), "kind": kind, **detail})
+    seq = self._seq("events", lambda: self._resume_log_seq(self.events_file))
+    _append_jsonl(self.events_file,
+                  {"seq": seq, "t": time.time(), "kind": kind, **detail})
 
   def pop_requests(self, max_age_s: float | None = None) -> list[Request]:
     """Claim every pending request, oldest first.
@@ -474,11 +684,73 @@ class Session:
   def params(self) -> dict[str, Any]:
     return _read_json(self.params_file, {}) or {}
 
-  def metrics(self, last_n: int | None = None) -> list[dict[str, Any]]:
+  def metrics(self, last_n: int | None = None,
+              since_seq: int | None = None) -> list[dict[str, Any]]:
+    """Metric rows, newest last. ``since_seq`` reads only what is new."""
+    if since_seq is not None:
+      return rows_since(self.metrics_file, since_seq)
     return read_jsonl(self.metrics_file, last_n=last_n)
 
-  def events(self, last_n: int | None = None) -> list[dict[str, Any]]:
+  def events(self, last_n: int | None = None,
+             since_seq: int | None = None) -> list[dict[str, Any]]:
+    """Session events, oldest first. ``since_seq`` reads only what is new."""
+    if since_seq is not None:
+      return rows_since(self.events_file, since_seq)
     return read_jsonl(self.events_file, last_n=last_n)
+
+  def metrics_count(self) -> int:
+    """How many metric rows the run has logged.
+
+    A separate question from ``len(metrics(last_n=N))``: a report wants the
+    total while reading only a window of it, and counting lines here keeps the
+    caller from opening the file to find out.
+    """
+    try:
+      with self.metrics_file.open("rb") as f:
+        return sum(1 for line in f if line.strip())
+    except OSError:
+      return 0
+
+  def list_artifacts(self) -> list[dict[str, Any]]:
+    """Files this run produced -- newest first.
+
+    ``name``, ``bytes`` and ``modified_at`` are the contract. ``path`` is
+    present only because this transport has one, and a caller that requires it
+    is a caller that cannot read a run on another machine.
+    """
+    rows: list[dict[str, Any]] = []
+    if not self.artifacts.exists():
+      return rows
+    for path in self.artifacts.iterdir():
+      try:
+        stat = path.stat()
+      except OSError:
+        continue
+      if not path.is_file():
+        continue
+      rows.append({
+          "name": path.name,
+          "path": str(path),
+          "bytes": stat.st_size,
+          "modified_at": stat.st_mtime,
+      })
+    rows.sort(key=lambda r: r["modified_at"], reverse=True)
+    return rows
+
+  def read_artifact(self, name: str) -> bytes:
+    """The bytes of one artifact, by the ``name`` :meth:`list_artifacts` gave.
+
+    Only a name: no separators, no ``..``, no absolute paths. The check is
+    here rather than in each caller because this method is the one a remote
+    transport re-implements, and there the same argument crosses a network
+    from wherever the studio got it.
+    """
+    if not name or name != Path(name).name or name in (".", ".."):
+      raise ValueError(
+          f"'{name}' is not an artifact name. Pass the `name` from "
+          "list_artifacts(), not a path."
+      )
+    return (self.artifacts / name).read_bytes()
 
   def submit(self, cmd: str, **args: Any) -> Request:
     """Queue a command for the training loop (does not wait)."""

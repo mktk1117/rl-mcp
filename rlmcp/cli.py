@@ -37,7 +37,7 @@ from typing import Any
 
 from rlmcp import cli_output
 from rlmcp.records.record import FEEDBACK_KINDS
-from rlmcp.session import Session, iter_sessions
+from rlmcp.session import RESERVED_METRIC_KEYS, Session, iter_sessions
 
 DEFAULT_ROOTS = ("./logs", "./rlmcp_session", ".")
 
@@ -80,7 +80,7 @@ def _resolve_session(args: argparse.Namespace) -> Session:
       print(
           cli_output.note(
               f"[rlmcp] no session under {Path.cwd()}; "
-              f"using {found.dir} ({how})"
+              f"using {found.address} ({how})"
           ),
           file=sys.stderr,
       )
@@ -313,7 +313,7 @@ def _call(session: Session, cmd: str, timeout: float, **args: Any) -> int:
         {
             "ok": False,
             "error": "The training process for this session is not running.",
-            "session": str(session.dir),
+            "session": session.address,
             **({"note": live["note"]} if "note" in live else {}),
             "hint": "Read status.json / metrics.jsonl for the final state.",
         },
@@ -351,7 +351,7 @@ def _default_metric_names(session: Session, limit: int = 4) -> list[str]:
   cartpole run has no terrain level and no velocity command.
   """
   rows = session.metrics(last_n=1)
-  available = {k for row in rows for k in row if k not in ("iteration", "t")}
+  available = {k for row in rows for k in row if k not in RESERVED_METRIC_KEYS}
   chosen = [
       k for k in ("Train/mean_reward", "Train/mean_episode_length") if k in available
   ]
@@ -402,7 +402,7 @@ def _offline_plot(
   series = _offline_series(session, names, last_n=last_n)
   if not any(series.values()):
     available = sorted(
-        {k for row in session.metrics(last_n=1) for k in row if k not in ("iteration", "t")}
+        {k for row in session.metrics(last_n=1) for k in row if k not in RESERVED_METRIC_KEYS}
     )
     _emit({"ok": False, "error": f"No data for {names}.", "available": available[:40]})
     return 1
@@ -416,7 +416,7 @@ def _offline_plot(
   ]
   png = plot_metric_series(
       {k: [tuple(p) for p in v] for k, v in series.items()},
-      title=f"{session.dir.parent.name} (offline)",
+      title=f"{session.name} (offline)",
       smooth_window=max(1, smooth),
       markers=markers,
   )
@@ -489,6 +489,7 @@ def _record_command(args: argparse.Namespace) -> int:
   if action == "new":
     record = store.new_record(
         args.slug,
+        record_id=args.record_id or None,
         stage=args.stage,
         hypothesis=args.hypothesis,
         prediction=args.prediction,
@@ -1008,6 +1009,52 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument("keys", nargs="*")
 
   p = sub.add_parser(
+      "add-reward",
+      help="Add a reward term the task does not have, from a source file",
+      description="Compiles a function you wrote and appends it to the "
+                  "running reward manager, scoring from the next batch. The "
+                  "source is saved in the session; `rlmcp rewards export` "
+                  "writes it back out for the task package. This runs your "
+                  "file inside the training process.",
+  )
+  p.add_argument("name", help="Term name, as it will appear in the config")
+  p.add_argument("source", help="Path to a .py file defining the function ('-' for stdin)")
+  p.add_argument("--weight", type=float, default=1.0)
+  p.add_argument("--params", default="",
+                 help="JSON object passed to the function on every call")
+  p.add_argument("--why", default="", help="Rationale recorded in the event log")
+
+  rew = sub.add_parser(
+      "rewards",
+      help="Reward terms added during a run: list them, write them back out")
+  rewards_sub = rew.add_subparsers(dest="rewards_command", required=True)
+
+  q = rewards_sub.add_parser(
+      "export",
+      help="Write added terms out as a task module plus its config lines")
+  q.add_argument("--out", default=".",
+                 help="Directory to write into (default: the current one)")
+
+  rewards_sub.add_parser("list", help="List the terms this run added")
+
+  envp = sub.add_parser(
+      "env",
+      help="The environment a policy trained under: export it beside the checkpoint",
+      description="A checkpoint is half an answer; this writes the other half "
+                  "-- the reward, observation and action terms the policy "
+                  "trained under, implementations inlined so the export needs "
+                  "no task package.")
+  env_sub = envp.add_subparsers(dest="env_command", required=True)
+
+  q = env_sub.add_parser(
+      "export", help="Write the env config plus merged implementations")
+  q.add_argument("--out", default="exported_env",
+                 help="Directory to write into (default: ./exported_env)")
+
+  env_sub.add_parser(
+      "show", help="Summarise the captured terms without writing anything")
+
+  p = sub.add_parser(
       "reset-envs",
       help="Start fresh episodes in some or all environments",
       description="Restarts episodes, not parameter values -- 'reset' is the "
@@ -1183,6 +1230,36 @@ def build_parser() -> argparse.ArgumentParser:
   p = sub.add_parser("stop", help="Stop a run -- or a play session -- cleanly")
   p.add_argument("--why", default="")
 
+  p = sub.add_parser(
+      "recipe", help="Turn a finished run into something that runs again",
+      description="Assembles the package, the config, the ladder and the "
+                  "warm-start chain into a directory you can launch.")
+  recipe_sub = p.add_subparsers(dest="action", required=True)
+  q = recipe_sub.add_parser("build", help="Write recipe-<id>/ for a run")
+  q.add_argument("record_id")
+  q.add_argument("--out", help="Where to write it (default: recipe-<id>/ beside the records)")
+  q.add_argument("--session", dest="from_session",
+                 help="Read the intervention history from this session instead")
+  q.add_argument("--no-policy", dest="policy", action="store_false",
+                 help="Leave the trained weights out (they are the large part)")
+  q.add_argument("--task-package", action="append", default=[], metavar="MODULE",
+                 help="Module whose import registers the task, for a run that did "
+                      "not record its own. Repeatable; goes into recipe.json.")
+  q.add_argument("--records-root",
+                 help="Records directory (default: $RLMCP_RECORDS or ./records)")
+
+  q = recipe_sub.add_parser(
+      "verify",
+      help="Check a run launched from a recipe against what it claimed",
+      description="Compares the new run's metrics against expect.json inside "
+                  "a band. Answers 'statistically equivalent', never "
+                  "'identical' -- it does not compare weights.")
+  q.add_argument("recipe_dir", help="A directory written by `recipe build`")
+  q.add_argument("--session", dest="candidate", required=True,
+                 help="The session of the run launched from this recipe")
+  q.add_argument("--tolerance", type=float, default=None,
+                 help="Relative band per metric (default 0.2, i.e. 20%%)")
+
   rec = sub.add_parser("record", help="Run records: plans, outcomes, ancestry")
   rec.add_argument("--records-root",
                    help="Records directory (default: $RLMCP_RECORDS or ./records)")
@@ -1211,6 +1288,9 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Which problem this run is about (the environment id). "
                       "Filled in from the live session at launch if omitted")
   q.add_argument("--proposed-by", default="human")
+  q.add_argument("--id", dest="record_id", default="",
+                 help="Name the id instead of taking the next number, e.g. "
+                      "recipe-010 for a rerun of run 010's recipe. Refused if taken.")
 
   q = record_sub.add_parser("list", help="List records")
   q.add_argument("--stage")
@@ -1442,14 +1522,14 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     def add(session: Session) -> None:
       nonlocal newest, newest_started
-      if str(session.dir) in seen:
+      if session.address in seen:
         return
-      seen.add(str(session.dir))
+      seen.add(session.address)
       info = session.info()
       live = session.liveness_info()
       rows.append(
           {
-              "session": str(session.dir),
+              "session": session.address,
               "task": info.get("task"),
               "num_envs": info.get("num_envs"),
               "started_at": info.get("started_at"),
@@ -1514,6 +1594,36 @@ def _dispatch(args: argparse.Namespace) -> int:
     return _analyze_offline(args.trace_path, plot=args.plot,
                             allow_legacy=args.allow_legacy)
 
+  if cmd == "recipe":
+    from rlmcp.records import open_store
+    from rlmcp.records.recipe import DEFAULT_TOLERANCE, build, verify
+
+    if args.action == "verify":
+      try:
+        report = verify(args.recipe_dir, args.candidate,
+                        tolerance=args.tolerance
+                        if args.tolerance is not None else DEFAULT_TOLERANCE)
+      except ValueError as exc:
+        _emit({"ok": False, "error": str(exc)})
+        return 1
+      _emit({"ok": True, **report})
+      # A recipe that did not reproduce is a finding, and a non-zero exit is
+      # what makes it one in a script.
+      return 0 if report["reproduced"] else 1
+
+    store = open_store(getattr(args, "records_root", None),
+                       slots=getattr(args, "slots", 1))
+    out = args.out or (Path(store.root) / f"recipe-{args.record_id}")
+    try:
+      _emit({"ok": True, **build(store, args.record_id, out,
+                                 session_dir=args.from_session,
+                                 policy=args.policy,
+                                 task_packages=args.task_package)})
+    except ValueError as exc:
+      _emit({"ok": False, "error": str(exc)})
+      return 1
+    return 0
+
   if cmd == "record":
     return _record_command(args)
 
@@ -1534,7 +1644,7 @@ def _dispatch(args: argparse.Namespace) -> int:
   if cmd == "status":
     live = session.liveness_info()
     _emit({
-        "session": str(session.dir),
+        "session": session.address,
         "state": live["state"],
         "alive": live["pid_alive"],
         "heartbeat_age_s": live["heartbeat_age_s"],
@@ -1543,7 +1653,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     }, command="status")
     return 0
   if cmd == "info":
-    _emit({"session": str(session.dir), **session.info()}, command="info")
+    _emit({"session": session.address, **session.info()}, command="info")
     return 0
   if cmd == "events":
     if args.interventions:
@@ -1554,6 +1664,54 @@ def _dispatch(args: argparse.Namespace) -> int:
       return 0
     _emit(session.events(last_n=args.last_n), command="events")
     return 0
+  if cmd == "rewards":
+    # Offline: the terms and their sources are in the session, so this answers
+    # for a run that finished hours ago exactly as it does for a live one.
+    from rlmcp import rewards_export
+
+    if args.rewards_command == "list":
+      rewards = rewards_export.collect_added_rewards(session)
+      _emit({
+          "count": len(rewards),
+          "session": str(session.dir),
+          "rewards": [
+              {"name": r.name, "function": r.func_name, "weight": r.weight,
+               "params": r.params, "iteration": r.iteration,
+               "digest": r.digest, "rationale": r.rationale}
+              for r in rewards
+          ],
+      })
+      return 0
+    payload = rewards_export.export_added_rewards(
+        session, args.out, task=str(session.info().get("task") or ""))
+    _emit(payload)
+    if _MODE == "text":
+      print(cli_output.note(rewards_export.describe(payload)), file=sys.stderr)
+    return 0
+  if cmd == "env":
+    # Offline like `rewards`: the terms were captured into the session while
+    # the run was alive, so this answers for a run that exited long ago.
+    from rlmcp import env_export
+
+    if args.env_command == "show":
+      snapshot = session.env_terms()
+      groups = snapshot.get("observations") or {}
+      _emit({
+          "session": str(session.dir),
+          "task": snapshot.get("task"),
+          "captured": bool(snapshot),
+          "rewards": [t.get("name") for t in snapshot.get("rewards") or []],
+          "observations": {g: [t.get("name") for t in (s.get("terms") or [])]
+                           for g, s in groups.items()},
+          "actions": [t.get("name") for t in snapshot.get("actions") or []],
+          "problems": snapshot.get("problems") or [],
+      })
+      return 0
+    payload = env_export.export_env(session, args.out)
+    _emit(payload)
+    if _MODE == "text":
+      print(cli_output.note(env_export.describe(payload)), file=sys.stderr)
+    return 0 if payload.get("ok") else 1
   if cmd == "params" and not args.live:
     schema = session.params()
     items = {
@@ -1590,7 +1748,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
   if cmd == "metrics" and args.list:
     rows = session.metrics(last_n=1)
-    names = sorted({k for row in rows for k in row if k not in ("iteration", "t")})
+    names = sorted({k for row in rows for k in row if k not in RESERVED_METRIC_KEYS})
     if args.contains:
       names = [n for n in names if args.contains.lower() in n.lower()]
     _emit({"count": len(names), "metrics": names}, command="list_metrics")
@@ -1617,6 +1775,21 @@ def _dispatch(args: argparse.Namespace) -> int:
                  value=_parse_value(args.value), rationale=args.why)
   if cmd == "reset":
     return _call(session, "reset_parameters", timeout, keys=args.keys or None)
+  if cmd == "add-reward":
+    source = sys.stdin.read() if args.source == "-" else Path(args.source).read_text()
+    try:
+      params = json.loads(args.params) if args.params else {}
+    except json.JSONDecodeError as exc:
+      print(cli_output.note(f"[rlmcp] --params is not valid JSON: {exc}"),
+            file=sys.stderr)
+      return 2
+    if not isinstance(params, dict):
+      print(cli_output.note("[rlmcp] --params must be a JSON object, since it "
+                            "becomes keyword arguments to the function."),
+            file=sys.stderr)
+      return 2
+    return _call(session, "add_reward", timeout, name=args.name, source=source,
+                 weight=args.weight, params=params, rationale=args.why)
   if cmd == "reset-envs":
     return _call(session, "reset_envs", timeout, env_ids=args.env_ids or None,
                  where=_kv_pairs(args.where) or None, rationale=args.why)

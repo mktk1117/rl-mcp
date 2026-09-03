@@ -124,6 +124,114 @@ Whitespace-only changes are *marked*, never dropped. Deciding whether an edit
 changes behaviour is undecidable in general, so the honest version records
 everything and lets a viewer grey the noise.
 
+## Making a run runnable again: `rlmcp recipe build`
+
+A record says what was tried and what happened. What it does not say is *how to
+do it again* — and the answer is spread across four places: the package the run
+used, the config it started from, the ladder it climbed, and the ad-hoc edits
+somebody made while it trained.
+
+```bash
+rlmcp recipe build 011              # writes recipe-011/ beside the records
+```
+
+```
+recipe-011/
+  package/          the task package at the tree that run launched with
+  env/              the environment as it ran: cfg + every term inlined
+  policy/           the weights the run ended on
+  config.json       the resolved parameters it started from
+  curriculum.json   the ladder — loads into StageSchedule.from_dict unchanged
+  launch.sh         the command: packages, config, ladder, seed, length
+  phases.md         the warm-start chain, flattened
+  expect.json       the numbers a replay is checked against
+  README.md         generated
+```
+
+**`launch.sh` is a launch, not a suggestion.** Everything the recipe carries is
+on its command line: the modules whose import registers the task
+(`--task-package`, recorded in the session at launch), `config.json`
+(`--config-json`, applied before the first batch), `curriculum.json`
+(`--curriculum-json`, started from its first rung), the seed, the env count,
+and `--max-iterations` set to where the original stopped. Flags after the
+record id go straight to `rlmcp-train`, so `./launch.sh 020 --records-root
+records-reorient --run-name again` is the whole incantation. A run made before
+task packages were recorded gets a script that reads them from
+`$TASK_PACKAGES`, and `missing` says so.
+
+**`package/` and `env/` are not duplicates.** The package is the repository at
+the commit the run launched with — the thing to develop in, and only as good as
+that repository still existing. `env/` is the environment as it was *running*:
+the reward, observation and action terms with their final weights, every
+implementation inlined as source with the module-level names it reaches. A
+reward term an agent [added mid-run](tools.md#add-reward) exists only there.
+See [`rlmcp env export`](tools.md#env), which is the same machinery, for what
+it still has to import.
+
+**The policy travels with it**, so a recipe is a pair rather than a procedure
+you have to trust: `policy/` holds the checkpoint the run ended on, resolved the
+same way `rlmcp play` resolves one. `--no-policy` leaves it out when the recipe
+is only meant to be read — the weights are the large part.
+
+### Checking a recipe actually reproduces
+
+```bash
+./launch.sh 020                                  # train it again
+rlmcp recipe verify recipe-011/ --session <the new run's session>
+```
+
+`verify` compares the new run's final metrics against the ones the original
+*claimed* — `expect.json`'s `metrics`, the numbers a human wrote into the
+record — inside a relative band (20% by default, `--tolerance` to change it).
+It exits non-zero when a metric lands outside, so it works in a script. A
+claimed name is matched to the telemetry key that ends in it — a record says
+`joint_vel_rms`, the run publishes `rlmcp/joint_vel_rms` — and each check
+names the key it used; two keys ending the same way is an ambiguity, reported
+as `missing`.
+
+The band is loose on purpose: that is roughly where two runs of the same recipe
+differ from seed and GPU nondeterminism alone, and a tighter default would fail
+honest reproductions and teach everyone to ignore the check. A metric the new
+run never published is reported as `missing` rather than as a failure — usually
+it just has not got far enough yet.
+
+`expect.json` also carries `final`, every scalar the original run ended on, for
+diffing by eye. A pass means *statistically equivalent*; nothing here compares
+weights, and it cannot mean more than that.
+
+**Distillation, not transcription.** An edit made at iteration 900 because the
+entropy had collapsed does not belong in a replay as "wait 900 iterations, then
+panic". It becomes the value that rung *starts* with, carrying the reason it was
+needed. A run that had a curriculum keeps its rungs and their promotion
+conditions — those were written before the run, so they are real — and the
+mid-rung edits fold into the rung that was active when they happened, as the
+event log's rung entries say. An edit the log cannot place — the run entered a
+rung it never logged the iteration of — is listed under `missing` and in the
+notes rather than folded anywhere: a five-rung ladder that starts every rung at
+the values of an edit made on rung three looks exactly like a recipe and is a
+different experiment. A run with no curriculum gets one rung per change, each
+held for as long as the original ran before the next one. Refused edits are
+left out: they never applied.
+
+**A recipe starts where the policy did.** Warm-start edges are walked back
+until a run that trained from scratch, and that run is phase 1. Given
+`1 → 2 → 3 (from scratch) → 4 → 5 → 7`, the recipe for 7 is `3, 4, 5, 7`: runs 1
+and 2 are ancestors of 3's *config*, and their weights were thrown away when 3
+restarted, so replaying them would be replaying history this policy does not
+contain — their settings are already folded into `config.json`. A sibling branch
+off 5 is not on the path to 7 and is not in it either. Each phase after the
+first says which checkpoint it warm-starts from, because a four-phase recipe
+that only tells you how to start phase 1 is not a recipe.
+
+**It reproduces the procedure, not the policy.** RL is not bit-reproducible —
+GPU nondeterminism, a different env count, a different seed. That is why
+`expect.json` names numbers to check rather than a hash to match. Claim
+"statistically equivalent", never "identical".
+
+Every part is best-effort and says so: a run with no code snapshot still gets its
+config, its ladder and its chain, and the README names what is missing. A recipe
+that refused to exist because one input was absent would be a worse answer.
+
 ## Falsifiers
 
 A falsifier is the condition that would prove the run wrong, written down before

@@ -37,7 +37,8 @@ class Condition:
   value: float
 
   def check(self, metrics: dict[str, float]) -> tuple[bool, float | None]:
-    current = metrics.get(self.metric)
+    key = resolve_metric(self.metric, metrics)
+    current = metrics.get(key) if key else None
     if not isinstance(current, (int, float)):
       return False, None
     fn = _OPS.get(self.op)
@@ -54,6 +55,22 @@ class Condition:
   @staticmethod
   def from_dict(d: dict[str, Any]) -> Condition:
     return Condition(metric=d["metric"], op=d.get("op", ">="), value=float(d["value"]))
+
+
+def resolve_metric(name: str, metrics: dict[str, Any]) -> str | None:
+  """The telemetry key a metric name refers to, or None.
+
+  The exact key wins. Otherwise the one key whose last path segment is the
+  name's -- a ladder written for a run under another harness names
+  ``mcplab/holding_frac``, and this run publishes ``rlmcp/holding_frac``;
+  without this the rung could never promote and the recipe looked like a run
+  that stalled. Two candidate keys is an ambiguity, not a match.
+  """
+  if name in metrics:
+    return name
+  tail = name.rsplit("/", 1)[-1]
+  matches = [k for k in metrics if k.rsplit("/", 1)[-1] == tail]
+  return matches[0] if len(matches) == 1 else None
 
 
 @dataclass

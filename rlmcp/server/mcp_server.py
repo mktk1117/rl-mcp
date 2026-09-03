@@ -39,7 +39,7 @@ from typing import Any
 # ``MCPServer`` in mcp>=2, ``FastMCP`` in mcp 1.x, and the standalone ``fastmcp``
 # package outside the official SDK. The surface we use (tool/resource decorators,
 # Image, run) is the same in all three.
-from rlmcp.session import Session, iter_sessions
+from rlmcp.session import RESERVED_METRIC_KEYS, Session, iter_sessions
 
 SDK_MISSING = (
     "No MCP server SDK found in this interpreter. Install one with "
@@ -112,26 +112,16 @@ class _SessionHandle:
       self._pinned = found
     else:
       self._pinned = Session.open(target)
-    self.explicit = str(self._pinned.dir)
+    self.explicit = self._pinned.address
     return self._pinned
-
-
-def _session_key(session: Session) -> str:
-  """Short id stamped into every payload: enough to tell runs apart.
-
-  Session directories are conventionally ``<run_dir>/rlmcp``, so the basename
-  alone would name every run the same; the parent disambiguates.
-  """
-  parent = session.dir.parent.name
-  return f"{parent}/{session.dir.name}" if parent else session.dir.name
 
 
 def _dead_error(session: Session, live: dict[str, Any], cmd: str) -> dict[str, Any]:
   """What a live-command tool answers once the pinned trainer is gone."""
   out = {
       "ok": False,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "error": (
           f"The training process for this session is dead; '{cmd}' needs a "
           "live trainer and will not be serviced."
@@ -168,8 +158,8 @@ def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT,
     result = response.result if isinstance(response.result, dict) else {"result": response.result}
     # "session" is reserved: the server's identity stamp must win over any
     # same-named key a command result carries.
-    return {"ok": True, **result, "session": _session_key(session)}
-  return {"ok": False, "session": _session_key(session), "error": response.error}
+    return {"ok": True, **result, "session": session.key}
+  return {"ok": False, "session": session.key, "error": response.error}
 
 
 # Post-mortem: once the trainer is dead, everything worth asking is still on
@@ -180,7 +170,7 @@ def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT,
 
 def _offline_metric_names(session: Session, contains: str | None = None) -> list[str]:
   rows = session.metrics(last_n=1)
-  names = sorted({k for row in rows for k in row if k not in ("iteration", "t")})
+  names = sorted({k for row in rows for k in row if k not in RESERVED_METRIC_KEYS})
   if contains:
     names = [n for n in names if contains.lower() in n.lower()]
   return names
@@ -194,7 +184,7 @@ def _offline_metrics_payload(
   chosen = list(names) if names else _default_metric_names(session)
   payload: dict[str, Any] = {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "metrics.jsonl",
       "metrics": _offline_series(session, chosen, last_n=last_n),
@@ -226,7 +216,7 @@ def _offline_plot_payload(
   except ImportError as exc:
     return {
         "ok": False,
-        "session": _session_key(session),
+        "session": session.key,
         "error": f"Offline plotting needs matplotlib in the server's interpreter ({exc}).",
     }
   chosen = list(names) if names else _default_metric_names(session)
@@ -234,7 +224,7 @@ def _offline_plot_payload(
   if not any(series.values()):
     return {
         "ok": False,
-        "session": _session_key(session),
+        "session": session.key,
         "error": f"No data for {chosen}.",
         "available": _offline_metric_names(session)[:40],
     }
@@ -245,7 +235,7 @@ def _offline_plot_payload(
   ]
   png = plot_metric_series(
       {k: [tuple(p) for p in v] for k, v in series.items()},
-      title=title or f"{session.dir.parent.name} (offline)",
+      title=title or f"{session.name} (offline)",
       smooth_window=max(1, smooth),
       markers=markers,
   )
@@ -253,7 +243,7 @@ def _offline_plot_payload(
   path.write_bytes(png)
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "metrics.jsonl",
       "image_path": str(path),
@@ -273,7 +263,7 @@ def _offline_parameters_payload(
   }
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "params.json",
       "count": len(items),
@@ -286,8 +276,8 @@ def _status_payload(handle: _SessionHandle) -> dict[str, Any]:
   live = session.liveness_info()
   return {
       "ok": True,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "state": live["state"],
       "alive": live["pid_alive"],
       "heartbeat_age_s": live["heartbeat_age_s"],
@@ -300,31 +290,17 @@ def _events_payload(session: Session, last_n: int) -> dict[str, Any]:
   rows = session.events(last_n=last_n)
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "count": len(rows),
       "events": rows,
   }
 
 
 def _artifacts_payload(session: Session) -> dict[str, Any]:
-  rows = []
-  if session.artifacts.exists():
-    for path in session.artifacts.iterdir():
-      try:
-        stat = path.stat()
-      except OSError:
-        continue
-      if path.is_file():
-        rows.append({
-            "name": path.name,
-            "path": str(path),
-            "bytes": stat.st_size,
-            "modified_at": stat.st_mtime,
-        })
-  rows.sort(key=lambda r: r["modified_at"], reverse=True)
+  rows = session.list_artifacts()
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "count": len(rows),
       "artifacts": rows,
   }
@@ -333,20 +309,20 @@ def _artifacts_payload(session: Session) -> dict[str, Any]:
 def _sessions_payload(handle: _SessionHandle) -> list[dict[str, Any]]:
   pinned: str | None = None
   if handle._pinned is not None:
-    pinned = str(handle._pinned.dir)
+    pinned = handle._pinned.address
   out = []
   for session in iter_sessions(handle.root):  # Newest first, by started_at.
     info = session.info()
     live = session.liveness_info()
     out.append({
-        "session_dir": str(session.dir),
-        "session": _session_key(session),
+        "session_dir": session.address,
+        "session": session.key,
         "task": info.get("task"),
         "num_envs": info.get("num_envs"),
         "started_at": info.get("started_at"),
         "state": live["state"],
         "iteration": session.status().get("iteration"),
-        "pinned": str(session.dir) == pinned,
+        "pinned": session.address == pinned,
     })
   return out
 
@@ -359,8 +335,8 @@ def _switch_payload(handle: _SessionHandle, target: str) -> dict[str, Any]:
   info = session.info()
   return {
       "ok": True,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "state": session.liveness(),
       "task": info.get("task"),
       "started_at": info.get("started_at"),
@@ -376,7 +352,7 @@ def _list_metrics_impl(handle: _SessionHandle, contains: str | None) -> dict[str
   session = handle.get()
   if session.liveness() == "dead":
     names = _offline_metric_names(session, contains=contains)
-    return {"ok": True, "session": _session_key(session), "live": False,
+    return {"ok": True, "session": session.key, "live": False,
             "count": len(names), "metrics": names}
   return _call(handle, "list_metrics", contains=contains)
 
@@ -403,7 +379,7 @@ def _plot_metrics_impl(
   else:
     payload = _call(handle, "plot_metrics", names=names, last_n=last_n,
                     smooth=smooth, title=title)
-  return _image_result(payload)
+  return _image_result(payload, session=session)
 
 
 def _list_parameters_impl(
@@ -433,18 +409,26 @@ def _image_format(suffix: str) -> str:
 
 
 def _prepare_image(
-    path: Path, byte_limit: int = IMAGE_BYTE_LIMIT, max_dim: int = IMAGE_MAX_DIM
+    source: Path | bytes, byte_limit: int = IMAGE_BYTE_LIMIT,
+    max_dim: int = IMAGE_MAX_DIM, suffix: str = "",
 ) -> tuple[bytes | None, str, str | None]:
-  """Read an image, re-encoding it when it would blow the reply budget.
+  """Size an image for the reply, re-encoding it when it would blow the budget.
 
-  Returns ``(data, format, note)``. Files at or under ``byte_limit`` pass
+  Takes bytes, or a path to read them from -- bytes, because the picture may
+  have arrived through the session rather than off this filesystem, and
+  nothing about fitting it in a reply depends on where it came from. With
+  bytes, pass ``suffix`` so the format is known.
+
+  Returns ``(data, format, note)``. Images at or under ``byte_limit`` pass
   through untouched. Larger ones are downscaled to ``max_dim`` on the longest
   side and re-encoded (PNG first for PNG sources, then JPEG). When even that
   cannot fit the budget, ``data`` is ``None`` and ``note`` says why, so the
   caller can fall back to the file path.
   """
-  fmt = _image_format(path.suffix)
-  data = path.read_bytes()
+  if isinstance(source, (bytes, bytearray)):
+    data, fmt = bytes(source), _image_format(suffix)
+  else:
+    data, fmt = source.read_bytes(), _image_format(source.suffix)
   if len(data) <= byte_limit:
     return data, fmt, None
   original_kb = len(data) // 1024
@@ -480,23 +464,48 @@ def _prepare_image(
   )
 
 
-def _image_result(payload: dict[str, Any], key: str = "image_path") -> Any:
+def _image_bytes(session: Session | None, file: Path) -> bytes | None:
+  """The picture the trainer just wrote, through the session where possible.
+
+  The session first, because ``read_artifact`` is the way that still works
+  when the trainer is on another machine and the path in the payload names a
+  file this process cannot open. The filesystem second, for a picture written
+  somewhere other than the run's artifacts -- and it is what answers when the
+  two disagree about existence, not about content: every tool that returns an
+  ``image_path`` writes into ``artifacts/``.
+  """
+  if session is not None:
+    try:
+      return session.read_artifact(file.name)
+    except (OSError, ValueError):
+      pass
+  try:
+    return file.read_bytes()
+  except OSError:
+    return None
+
+
+def _image_result(payload: dict[str, Any], key: str = "image_path",
+                  session: Session | None = None) -> Any:
   """Attach the picture to a payload without dropping the numbers around it.
 
   Returns ``[payload, Image]``; every supported SDK generation converts that
   list into a JSON text block plus an image block, so the agent sees the
   structured result *and* the frame. Oversized files are downscaled first;
-  when even that is not enough, or the file cannot be decoded, the payload
-  comes back alone with an ``image_note`` explaining why.
+  when even that is not enough, or the picture cannot be read, the payload
+  comes back alone -- with an ``image_note`` when something went wrong that a
+  reader would otherwise have to guess at.
   """
   path = payload.get(key)
   if not payload.get("ok") or not path:
     return payload
   file = Path(path)
-  if not file.exists():
+  data = _image_bytes(session, file)
+  if data is None:
     return payload
   try:
-    data, fmt, note = _prepare_image(file, byte_limit=IMAGE_BYTE_LIMIT, max_dim=IMAGE_MAX_DIM)
+    data, fmt, note = _prepare_image(data, byte_limit=IMAGE_BYTE_LIMIT,
+                                     max_dim=IMAGE_MAX_DIM, suffix=file.suffix)
   except Exception as exc:  # A corrupt file must not eat the numeric result.
     return {**payload, "image_note": f"could not read {file.name}: {exc}"}
   if data is None:
@@ -550,7 +559,7 @@ def create_mcp_server(
                       session_dir=str(pinned.dir) if pinned else None)
 
   try:
-    print(f"[rlmcp-server] pinned session: {handle.get().dir}", file=sys.stderr)
+    print(f"[rlmcp-server] pinned session: {handle.get().address}", file=sys.stderr)
   except (FileNotFoundError, RuntimeError) as exc:
     # No run yet; the first tool call (or switch_session) pins one.
     print(f"[rlmcp-server] no session pinned yet: {exc}", file=sys.stderr)
@@ -668,6 +677,50 @@ def create_mcp_server(
     return _call(handle, "reset_parameters", keys=keys)
 
   @mcp.tool()
+  def add_reward(
+      name: str,
+      source: str,
+      weight: float = 1.0,
+      params: dict[str, Any] | None = None,
+      rationale: str = "",
+  ) -> dict[str, Any]:
+    """Add a reward term this task does not have, written by you, live.
+
+    Reach for this only when no existing weight expresses what you want:
+    ``list_parameters(category="reward")`` first, because a term the task
+    already ships is always the better lever. What this is for is the case
+    where the reward function is genuinely missing a term -- nothing scores
+    the thing you are trying to encourage.
+
+    The function is compiled and called once against the live environment
+    before it is installed, so a term that raises or returns the wrong shape
+    costs you an error message rather than the run. Once installed it scores
+    from the next batch, and its weight is tunable as ``reward.<name>.weight``
+    like any other.
+
+    The source is saved into the session and the event log records its digest,
+    so the run stays reproducible: ``rlmcp rewards export`` writes the terms
+    back out as a task module plus the config lines to go with it. Do that
+    before the run's session is gone, or the term exists nowhere.
+
+    Note that this executes the Python you pass inside the training process.
+
+    Args:
+      name: the term name, a Python identifier. It becomes the config field
+        and the parameter key.
+      source: the text of a function taking ``(env, **params)`` and returning
+        one score per environment -- a tensor of shape ``(num_envs,)``. It is
+        compiled with ``torch`` and the task's ``mdp`` module already in
+        scope; import anything else it needs at the top.
+      weight: the term's weight. Sign matters: negative is a penalty.
+      params: keyword arguments passed to the function on every call.
+      rationale: why this term is needed; recorded in the event log and in the
+        header of the saved source.
+    """
+    return _call(handle, "add_reward", name=name, source=source,
+                 weight=weight, params=params or {}, rationale=rationale)
+
+  @mcp.tool()
   def reset_environments(
       env_ids: list[int] | None = None,
       where: dict[str, Any] | None = None,
@@ -705,7 +758,8 @@ def create_mcp_server(
         "level": 2} on a locomotion task. See ``get_training_status`` for what
         this environment supports.
     """
-    return _image_result(_call(handle, "screenshot", env_id=env_id, where=where))
+    return _image_result(_call(handle, "screenshot", env_id=env_id, where=where),
+                         session=handle.get())
 
   @mcp.tool()
   def record_video(
@@ -835,7 +889,8 @@ def create_mcp_server(
       components: substring filter on joint names, e.g. ["knee", "ankle"].
     """
     return _image_result(
-        _call(handle, "plot_trace", channels=channels, components=components, title=title)
+        _call(handle, "plot_trace", channels=channels, components=components, title=title),
+        session=handle.get(),
     )
 
   # Extension commands and curriculum.
@@ -860,7 +915,7 @@ def create_mcp_server(
       args: keyword arguments for it, e.g. {"terrains": ["flat"], "max_level": 4}.
     """
     result = _call(handle, cmd, timeout=600.0, **(args or {}))
-    return _image_result(result)
+    return _image_result(result, session=handle.get())
 
   @mcp.tool()
   def curriculum_status() -> dict[str, Any]:
