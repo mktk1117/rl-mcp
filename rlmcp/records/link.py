@@ -63,7 +63,9 @@ class RecordLink:
     self.record_id = record_id
     # Where the task package lives. None means "the directory the run was
     # launched from", which is true of every launch this project has made;
-    # "" means do not stamp the code at all.
+    # "" means do not stamp here -- and keep a stamp the record already has,
+    # because a launcher that materialized the code wrote it before this
+    # process existed (KEEPS_LAUNCHER_STAMP).
     self.code_root = code_root
     self.slot = slot or os.environ.get("RLMCP_SLOT") or "local"
     self.strict = strict
@@ -143,10 +145,22 @@ class RecordLink:
           "be reaped by heartbeat staleness if the process dies."
       )
 
+  KEEPS_LAUNCHER_STAMP = True
+  """``code_root=""`` keeps a stamp the record already carries.
+
+  A launcher that materializes the code before the process exists -- a
+  studio, a fleet -- stamps the record itself and then runs the trainer from
+  a plain directory. From there the trainer can see nothing truer than what
+  the launcher wrote, so "do not stamp" means exactly that, not "stamp
+  nothing over it". A launcher checks this attribute before relying on it.
+  """
+
   def _stamp_code(self) -> dict[str, Any]:
     """What the package looked like at launch. Never raises, never blocks."""
-    if self.code_root == "" or self.record is None:
+    if self.record is None:
       return {}
+    if self.code_root == "":
+      return dict(self.record.code or {})
     from rlmcp.records.snapshot import capture
 
     code = capture(self.code_root or Path.cwd(), record_id=self.record.id)
