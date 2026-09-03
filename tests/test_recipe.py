@@ -684,6 +684,13 @@ def test_a_recipe_says_which_packages_it_does_not_know(bundle, tmp_path):
       tmp_path / "recipe" / "launch.sh").read_text()
   assert any(m.startswith("the task packages") for m in payload["missing"])
 
+  # Whoever builds the recipe can say which modules register the task.
+  payload = build(store, "002", tmp_path / "recipe2", policy=False,
+                  task_packages=["shand.tasks", "shand.rlmcp_ext"])
+  manifest = json.loads((tmp_path / "recipe2" / "recipe.json").read_text())
+  assert manifest["task_packages"] == ["shand.tasks", "shand.rlmcp_ext"]
+  assert not any(m.startswith("the task packages") for m in payload["missing"])
+
 
 def test_the_rerun_record_is_named_after_the_recipe_not_numbered(run_with_a_session):
   """`recipe-002`, then `recipe-002-2`: an id that says what the run is."""

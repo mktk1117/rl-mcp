@@ -1242,6 +1242,9 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Read the intervention history from this session instead")
   q.add_argument("--no-policy", dest="policy", action="store_false",
                  help="Leave the trained weights out (they are the large part)")
+  q.add_argument("--task-package", action="append", default=[], metavar="MODULE",
+                 help="Module whose import registers the task, for a run that did "
+                      "not record its own. Repeatable; goes into recipe.json.")
   q.add_argument("--records-root",
                  help="Records directory (default: $RLMCP_RECORDS or ./records)")
 
@@ -1614,7 +1617,8 @@ def _dispatch(args: argparse.Namespace) -> int:
     try:
       _emit({"ok": True, **build(store, args.record_id, out,
                                  session_dir=args.from_session,
-                                 policy=args.policy)})
+                                 policy=args.policy,
+                                 task_packages=args.task_package)})
     except ValueError as exc:
       _emit({"ok": False, "error": str(exc)})
       return 1

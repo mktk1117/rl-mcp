@@ -180,7 +180,8 @@ def _windows(schedule: StageSchedule,
 
 def build(store: Any, record_id: str, out: Path | str,
           session_dir: str | None = None,
-          policy: bool = True) -> dict[str, Any]:
+          policy: bool = True,
+          task_packages: list[str] | None = None) -> dict[str, Any]:
   """Write a runnable recipe directory for ``record_id``.
 
   Every part is best-effort and says so: a run with no code snapshot still gets
@@ -190,6 +191,8 @@ def build(store: Any, record_id: str, out: Path | str,
 
   ``policy=False`` leaves the trained weights out. They are the largest thing
   here by far, and a recipe meant only to be *read* does not need them.
+  ``task_packages`` names the modules that register the task, for a run made
+  before the session recorded them; the session's own list wins when it has one.
   """
   record = store.get_record(record_id)
   if record is None:
@@ -245,7 +248,8 @@ def build(store: Any, record_id: str, out: Path | str,
   _write_json(out / "expect.json", expectations)
   (out / "phases.md").write_text(_phases(record, records))
   manifest, launch_missing = _manifest(record, session, store, package is not None,
-                                       weights, expectations)
+                                       weights, expectations,
+                                       task_packages=task_packages)
   missing += launch_missing
   _write_json(out / MANIFEST, manifest)
   (out / "launch.sh").write_text(_launch(manifest))
@@ -645,7 +649,8 @@ MANIFEST_VERSION = 1
 
 def _manifest(record: RunRecord, session: Path, store: Any, has_package: bool,
               weights: dict[str, Any] | None,
-              expectations: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+              expectations: dict[str, Any],
+              task_packages: list[str] | None = None) -> tuple[dict[str, Any], list[str]]:
   """Everything a launcher needs to run this recipe, and what is not known.
 
   The task packages whose import registers the task, the launch config, the
@@ -658,6 +663,8 @@ def _manifest(record: RunRecord, session: Path, store: Any, has_package: bool,
     info = json.loads((session / "session.json").read_text())
   missing: list[str] = []
   packages = [str(p) for p in (info.get("task_packages") or []) if p]
+  if not packages:
+    packages = [str(p) for p in (task_packages or []) if p]
   if not packages:
     missing.append(
         "the task packages (this run did not record which modules register "
