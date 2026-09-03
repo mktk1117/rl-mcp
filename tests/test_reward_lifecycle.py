@@ -14,16 +14,13 @@ at 3.0, since 3.0 is what the run being reproduced actually used.
 
 from __future__ import annotations
 
-import dataclasses
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
-import torch
 from conftest import FakeSimAdapter
 
 from rlmcp import rewards_export
 from rlmcp.core.controller import RlMcp
-from rlmcp.core.parameters.spec import ParameterCategory, ParameterSpec
 from rlmcp.core.reward_source import RewardSourceError
 from rlmcp.session import Session
 
@@ -50,7 +47,7 @@ class _RewardSimAdapter(FakeSimAdapter):
   def __init__(self, num_envs: int = 12):
     super().__init__(num_envs=num_envs)
     self.env = _Env(num_envs)
-    self.added: Dict[str, Any] = {}
+    self.added: dict[str, Any] = {}
 
   def add_reward_term(self, name, func, weight, params=None):
     if name in self.added:
@@ -68,8 +65,7 @@ def lab(tmp_path):
   sim = _RewardSimAdapter()
   controller = RlMcp(sim_adapter=sim, session_dir=tmp_path / "session",
                      session_info={"task": "Fake-Walk-v0"})
-  yield controller
-  controller.session  # No teardown needed; the session is a directory.
+  yield controller  # No teardown needed; the session is a directory.
 
 
 def _add(lab, **kwargs):
@@ -162,7 +158,7 @@ def test_export_writes_an_implementation_and_its_config_lines(lab, tmp_path):
   # torch is in scope when a term is compiled but not when the export is
   # imported, so the module has to bring it itself or NameError on first call.
   assert "import torch" in implementation
-  namespace: Dict[str, Any] = {}
+  namespace: dict[str, Any] = {}
   exec(compile(implementation, "added_rewards.py", "exec"), namespace)
   assert namespace["upright"](_Env(NUM_ENVS_EXPORTED)).shape == (
       NUM_ENVS_EXPORTED,)

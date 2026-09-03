@@ -20,7 +20,7 @@ the actual contract being relied on.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pytest
 import torch
@@ -44,28 +44,28 @@ def upright(env, scale: float = 1.0):
 class _RewardTermCfg:
   func: Any = None
   weight: float = 0.0
-  params: Dict[str, Any] = dataclasses.field(default_factory=dict)
+  params: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 class _RewardManager:
   """mjlab's RewardManager, reduced to the parts the surgery touches."""
 
-  def __init__(self, terms: Dict[str, _RewardTermCfg], num_envs: int = NUM_ENVS):
+  def __init__(self, terms: dict[str, _RewardTermCfg], num_envs: int = NUM_ENVS):
     self.num_envs = num_envs
     self.device = "cpu"
     self.cfg = dict(terms)
-    self._term_names: List[str] = list(terms)
-    self._term_cfgs: List[_RewardTermCfg] = list(terms.values())
-    self._class_term_cfgs: List[_RewardTermCfg] = []
+    self._term_names: list[str] = list(terms)
+    self._term_cfgs: list[_RewardTermCfg] = list(terms.values())
+    self._class_term_cfgs: list[_RewardTermCfg] = []
     self._episode_sums = {
         name: torch.zeros(num_envs) for name in self._term_names
     }
     self._reward_buf = torch.zeros(num_envs)
     self._step_reward = torch.zeros((num_envs, len(self._term_names)))
-    self.resolved: List[str] = []
+    self.resolved: list[str] = []
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return self._term_names
 
   def get_term_cfg(self, name: str) -> _RewardTermCfg:
@@ -77,7 +77,7 @@ class _RewardManager:
   def compute(self, dt: float = 0.02) -> torch.Tensor:
     """The real loop, including the two buffers a partial install breaks."""
     self._reward_buf[:] = 0.0
-    for index, (name, cfg) in enumerate(zip(self._term_names, self._term_cfgs)):
+    for index, (name, cfg) in enumerate(zip(self._term_names, self._term_cfgs, strict=True)):
       value = cfg.func(self._env, **cfg.params) * cfg.weight * dt
       self._reward_buf += value
       self._episode_sums[name] += value
@@ -86,7 +86,7 @@ class _RewardManager:
 
 
 class _Env:
-  def __init__(self, terms: Optional[Dict[str, _RewardTermCfg]] = None):
+  def __init__(self, terms: dict[str, _RewardTermCfg] | None = None):
     self.num_envs = NUM_ENVS
     self.device = "cpu"
     if terms is None:

@@ -401,7 +401,8 @@ def _resolve_args(command, tmp_path):
     if arg == SOURCE_PLACEHOLDER:
       path = tmp_path / "reward_source.py"
       path.write_text("def upright(env):\n  return torch.ones(env.num_envs)\n")
-      arg = str(path)
+      args.append(str(path))
+      continue
     args.append(arg)
   return args
 

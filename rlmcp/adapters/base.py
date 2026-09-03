@@ -306,8 +306,8 @@ class SimAdapter(ABC):
       name: str,
       func: Any,
       weight: float,
-      params: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      params: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Append a reward term to the running environment.
 
     The counterpart of :meth:`set_parameter` for the case where no existing
@@ -327,7 +327,7 @@ class SimAdapter(ABC):
     """
     raise NotSupported("add_reward_term")
 
-  def capture_env_terms(self) -> Dict[str, Any]:
+  def capture_env_terms(self) -> dict[str, Any]:
     """Snapshot the terms that define what a policy trained against.
 
     The rewards it was paid, the observations it saw and the actions it

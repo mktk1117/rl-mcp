@@ -24,7 +24,8 @@ term costs a message, not the run.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import contextlib
+from typing import Any
 
 
 class RewardInstallError(RuntimeError):
@@ -37,8 +38,8 @@ def install_reward_term(
     name: str,
     func: Any,
     weight: float,
-    params: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
   """Add ``name`` to the live reward manager and return what it did.
 
   Args:
@@ -161,7 +162,7 @@ def _term_cfg_type(manager: Any) -> type:
   )
 
 
-def _cfg_entries(manager: Any) -> Dict[str, Any]:
+def _cfg_entries(manager: Any) -> dict[str, Any]:
   """``manager.cfg`` as a name -> term-cfg mapping, dict or dataclass."""
   cfg = getattr(manager, "cfg", None)
   if isinstance(cfg, dict):
@@ -182,13 +183,11 @@ def _record_in_cfg(manager: Any, name: str, term_cfg: Any) -> None:
   if isinstance(cfg, dict):
     cfg[name] = term_cfg
   elif cfg is not None:
-    try:
+    with contextlib.suppress(Exception):
       setattr(cfg, name, term_cfg)
-    except Exception:
-      pass
 
 
-def _trial_call(env: Any, manager: Any, *, name: str, term_cfg: Any) -> Dict[str, Any]:
+def _trial_call(env: Any, manager: Any, *, name: str, term_cfg: Any) -> dict[str, Any]:
   """Call the term once and check its result, before the manager knows of it."""
   import torch
 

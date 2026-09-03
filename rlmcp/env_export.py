@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from rlmcp.session import Session
 
@@ -54,9 +54,9 @@ class Rendered:
   terms_module: str = ""
   config_module: str = ""
   readme: str = ""
-  imports: List[str] = field(default_factory=list)
-  unrendered: List[str] = field(default_factory=list)
-  missing_source: List[str] = field(default_factory=list)
+  imports: list[str] = field(default_factory=list)
+  unrendered: list[str] = field(default_factory=list)
+  missing_source: list[str] = field(default_factory=list)
 
 
 class _Imports:
@@ -65,14 +65,14 @@ class _Imports:
   def __init__(self) -> None:
     self._pairs: set = set()
 
-  def add(self, module: Optional[str], name: Optional[str]) -> None:
+  def add(self, module: str | None, name: str | None) -> None:
     if module and name and module != "builtins":
       self._pairs.add((module, name, None))
 
   def add_alias(self, module: str, name: str, alias: str) -> None:
     self._pairs.add((module, name, alias))
 
-  def lines(self) -> List[str]:
+  def lines(self) -> list[str]:
     out = []
     for module, name, alias in sorted(self._pairs):
       suffix = f" as {alias}" if alias else ""
@@ -84,7 +84,7 @@ class _Imports:
 
 
 def render_value(
-    value: Any, imports: _Imports, unrendered: List[str], *, where: str = ""
+    value: Any, imports: _Imports, unrendered: list[str], *, where: str = ""
 ) -> str:
   """Turn :func:`~rlmcp.adapters.manager_based.term_capture.encode_value`
   output back into constructible Python, collecting the imports it needs."""
@@ -140,9 +140,9 @@ def render_value(
 # Reading the run.
 
 
-def _final_reward_values(session: Session) -> Dict[str, Any]:
+def _final_reward_values(session: Session) -> dict[str, Any]:
   """Reward parameters as the run left them, keyed by their dotted path."""
-  out: Dict[str, Any] = {}
+  out: dict[str, Any] = {}
   for key, spec in (session.params() or {}).items():
     if not key.startswith("reward."):
       continue
@@ -152,7 +152,7 @@ def _final_reward_values(session: Session) -> Dict[str, Any]:
 
 
 def _overlay_weight(
-    term: Dict[str, Any], final: Dict[str, Any]) -> Tuple[float, Optional[float]]:
+    term: dict[str, Any], final: dict[str, Any]) -> tuple[float, float | None]:
   """The weight to export, and the configured one when tuning moved it."""
   configured = term.get("weight")
   key = f"reward.{term.get('name')}.weight"
@@ -165,7 +165,7 @@ def _overlay_weight(
   return (float(configured) if configured is not None else 0.0), None
 
 
-def _source_of(term: Dict[str, Any], missing: List[str], label: str) -> Optional[str]:
+def _source_of(term: dict[str, Any], missing: list[str], label: str) -> str | None:
   info = term.get("func") or {}
   if info.get("available") and info.get("source"):
     return info["source"]
@@ -180,7 +180,7 @@ def _source_of(term: Dict[str, Any], missing: List[str], label: str) -> Optional
 
 
 def render_terms_module(
-    snapshot: Dict[str, Any], rendered: Rendered) -> str:
+    snapshot: dict[str, Any], rendered: Rendered) -> str:
   """Every implementation, inlined once even when several terms share it."""
   lines = [
       '"""Implementations of every term this policy trained under.',
@@ -197,7 +197,7 @@ def render_terms_module(
   lines += ['"""', "", "from __future__ import annotations", "",
             "import torch  # noqa: F401 - terms are written against it.", ""]
 
-  body: List[str] = []
+  body: list[str] = []
   seen: set = set()
   # Actions are deliberately absent: an action term is a backend class named
   # by its config, not a function with source of its own, so there is nothing
@@ -210,16 +210,16 @@ def render_terms_module(
 
   if not body:
     body = ["# No term source was captured for this run.", ""]
-  return "\n".join(lines + [""] + body).rstrip() + "\n"
+  return "\n".join([*lines, "", *body]).rstrip() + "\n"
 
 
-def _iter_terms(snapshot: Dict[str, Any], section: str) -> List[Dict[str, Any]]:
+def _iter_terms(snapshot: dict[str, Any], section: str) -> list[dict[str, Any]]:
   value = snapshot.get(section)
   return list(value) if isinstance(value, list) else []
 
 
 def _emit_source(
-    term: Dict[str, Any], label: str, body: List[str], seen: set,
+    term: dict[str, Any], label: str, body: list[str], seen: set,
     rendered: Rendered) -> None:
   info = term.get("func") or {}
   key = (info.get("module"), info.get("qualname"))
@@ -235,14 +235,14 @@ def _emit_source(
   body.append("")
 
 
-def render_config_module(snapshot: Dict[str, Any], session: Session,
+def render_config_module(snapshot: dict[str, Any], session: Session,
                          rendered: Rendered) -> str:
   """The config half: one cfg class per manager, over ``mdp_terms``."""
   imports = _Imports()
   unrendered = rendered.unrendered
   final = _final_reward_values(session)
 
-  blocks: List[str] = []
+  blocks: list[str] = []
   blocks.append(_render_rewards(snapshot, final, imports, unrendered))
   blocks.append(_render_observations(snapshot, imports, unrendered))
   blocks.append(_render_actions(snapshot, imports, unrendered))
@@ -271,7 +271,7 @@ def render_config_module(snapshot: Dict[str, Any], session: Session,
   ]
   import_lines = imports.lines()
   if import_lines:
-    header += import_lines + [""]
+    header += [*import_lines, ""]
   # Works dropped into a package and as a loose directory on sys.path, which
   # are the two ways this actually gets used.
   header += [
@@ -316,7 +316,7 @@ def _render_observations(snapshot, imports, unrendered) -> str:
   if not groups:
     lines.append("  pass")
     return "\n".join(lines) + "\n\n"
-  bodies: List[str] = []
+  bodies: list[str] = []
   for group, spec in groups.items():
     cls = _group_class_name(group)
     body = ["  @dataclass", f"  class {cls}:"]
@@ -381,7 +381,7 @@ def _render_actions(snapshot, imports, unrendered) -> str:
   return "\n".join(lines) + "\n"
 
 
-def render_readme(snapshot: Dict[str, Any], session: Session,
+def render_readme(snapshot: dict[str, Any], session: Session,
                   rendered: Rendered) -> str:
   task = snapshot.get("task") or "(unknown task)"
   rewards = len(_iter_terms(snapshot, "rewards"))
@@ -442,7 +442,7 @@ def render_export(session: Session) -> Rendered:
   return rendered
 
 
-def export_env(session: Session, out_dir: Path | str) -> Dict[str, Any]:
+def export_env(session: Session, out_dir: Path | str) -> dict[str, Any]:
   """Write the export into ``out_dir``.
 
   Returns a payload naming what was written and what could not be, or
@@ -493,15 +493,15 @@ def export_env(session: Session, out_dir: Path | str) -> Dict[str, Any]:
   }
 
 
-def describe(payload: Dict[str, Any]) -> str:
+def describe(payload: dict[str, Any]) -> str:
   """A human summary for the CLI."""
   if not payload.get("ok"):
     return payload.get("error", "Nothing to export.")
   counts = payload["counts"]
   lines = [
-      f"Exported {counts['rewards']} reward, {counts['observations']} "
+      (f"Exported {counts['rewards']} reward, {counts['observations']} "
       f"observation and {counts['actions']} action term(s) to "
-      f"{payload['out_dir']}",
+      f"{payload['out_dir']}"),
       f"  implementations: {payload['implementation']}",
       f"  config:          {payload['config']}",
   ]
@@ -518,10 +518,10 @@ def describe(payload: Dict[str, Any]) -> str:
 
 
 __all__ = [
-    "CFG_STEM",
-    "Rendered",
-    "TERMS_STEM",
-    "describe",
-    "export_env",
-    "render_export",
+  "CFG_STEM",
+  "TERMS_STEM",
+  "Rendered",
+  "describe",
+  "export_env",
+  "render_export",
 ]

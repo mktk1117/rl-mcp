@@ -681,9 +681,9 @@ def create_mcp_server(
       name: str,
       source: str,
       weight: float = 1.0,
-      params: Optional[Dict[str, Any]] = None,
+      params: dict[str, Any] | None = None,
       rationale: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Add a reward term this task does not have, written by you, live.
 
     Reach for this only when no existing weight expresses what you want:

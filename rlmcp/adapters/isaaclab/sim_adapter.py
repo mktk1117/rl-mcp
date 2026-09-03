@@ -25,8 +25,8 @@ from rlmcp.adapters.manager_based import metrics as state_metrics
 from rlmcp.adapters.manager_based import terms as state_terms
 from rlmcp.adapters.manager_based.access import ParameterAccess
 from rlmcp.adapters.manager_based.reward_terms import install_reward_term
-from rlmcp.adapters.manager_based.term_capture import capture_env_terms
 from rlmcp.adapters.manager_based.sampling import StateSampler
+from rlmcp.adapters.manager_based.term_capture import capture_env_terms
 from rlmcp.core.parameters.spec import ParameterSpec
 
 

@@ -33,12 +33,14 @@ text is recognisably the same term.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import inspect
 import re
 import textwrap
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -87,7 +89,7 @@ def compile_reward_source(
     source: str,
     *,
     name: str,
-    namespace: Optional[Dict[str, Any]] = None,
+    namespace: dict[str, Any] | None = None,
 ) -> CompiledReward:
   """Compile ``source`` into a reward function called ``name``.
 
@@ -124,10 +126,10 @@ def compile_reward_source(
         f"Reward term '{name}' does not parse: {exc.msg} (line {exc.lineno})."
     ) from exc
 
-  module_ns: Dict[str, Any] = dict(namespace or {})
+  module_ns: dict[str, Any] = dict(namespace or {})
   module_ns.setdefault("__name__", f"rlmcp_reward_{name}")
   try:
-    exec(code, module_ns)  # noqa: S102 - executing agent source is the feature.
+    exec(code, module_ns)
   except Exception as exc:
     raise RewardSourceError(
         f"Reward term '{name}' failed while its source was being executed "
@@ -143,10 +145,8 @@ def compile_reward_source(
   # which is how the env capture reads every other term -- cannot read it.
   # Carrying the source on the object itself keeps that one code path working
   # for agent-written terms instead of needing a second one.
-  try:
+  with contextlib.suppress(AttributeError, TypeError):  # builtins only
     setattr(func, SOURCE_ATTR, text)
-  except (AttributeError, TypeError):  # pragma: no cover - builtins only.
-    pass
 
   return CompiledReward(
       name=name,
@@ -157,7 +157,7 @@ def compile_reward_source(
   )
 
 
-def _pick_function(module_ns: Dict[str, Any], *, name: str) -> tuple:
+def _pick_function(module_ns: dict[str, Any], *, name: str) -> tuple:
   """The one function the source defined, or an error naming the ambiguity."""
   defined = {
       key: value

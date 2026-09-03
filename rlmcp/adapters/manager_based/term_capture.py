@@ -36,9 +36,10 @@ to that scene's ordering.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import inspect
-from typing import Any, Dict, List
+from typing import Any
 
 from rlmcp.core.reward_source import SOURCE_ATTR
 
@@ -50,15 +51,15 @@ this is almost certainly a whole module misidentified as a function; recording
 it would bloat every session for no gain."""
 
 
-def capture_env_terms(env: Any) -> Dict[str, Any]:
+def capture_env_terms(env: Any) -> dict[str, Any]:
   """Snapshot the reward, observation and action terms of ``env``.
 
   Never raises for a manager that is absent or shaped unexpectedly: the
   section is simply missing or empty, and ``problems`` says why. A capture is
   a convenience taken at run start, and it must not be able to stop a run.
   """
-  problems: List[str] = []
-  snapshot: Dict[str, Any] = {
+  problems: list[str] = []
+  snapshot: dict[str, Any] = {
       "schema_version": SCHEMA_VERSION,
       "rewards": _capture_rewards(env, problems),
       "observations": _capture_observations(env, problems),
@@ -71,9 +72,9 @@ def capture_env_terms(env: Any) -> Dict[str, Any]:
   return snapshot
 
 
-def _capture_cfg_types(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+def _capture_cfg_types(snapshot: dict[str, Any]) -> dict[str, Any]:
   """Where each manager's term-config class came from, read off a real term."""
-  out: Dict[str, Any] = {}
+  out: dict[str, Any] = {}
   for section, key in (("rewards", "reward"), ("actions", "action")):
     for term in snapshot.get(section) or []:
       captured = term.get("_cfg_type")
@@ -91,19 +92,19 @@ def _capture_cfg_types(snapshot: Dict[str, Any]) -> Dict[str, Any]:
   return out
 
 
-def _cfg_type_of(cfg: Any) -> Dict[str, str]:
+def _cfg_type_of(cfg: Any) -> dict[str, str]:
   return {"module": type(cfg).__module__, "name": type(cfg).__name__}
 
 
 # Per-manager capture.
 
 
-def _capture_rewards(env: Any, problems: List[str]) -> List[Dict[str, Any]]:
+def _capture_rewards(env: Any, problems: list[str]) -> list[dict[str, Any]]:
   manager = getattr(env, "reward_manager", None)
   if manager is None:
     problems.append("no reward_manager on this environment")
     return []
-  out: List[Dict[str, Any]] = []
+  out: list[dict[str, Any]] = []
   for name in list(getattr(manager, "active_terms", []) or []):
     try:
       cfg = manager.get_term_cfg(name)
@@ -121,17 +122,17 @@ def _capture_rewards(env: Any, problems: List[str]) -> List[Dict[str, Any]]:
   return out
 
 
-def _capture_observations(env: Any, problems: List[str]) -> Dict[str, Any]:
+def _capture_observations(env: Any, problems: list[str]) -> dict[str, Any]:
   manager = getattr(env, "observation_manager", None)
   if manager is None:
     problems.append("no observation_manager on this environment")
     return {}
-  groups: Dict[str, Any] = {}
+  groups: dict[str, Any] = {}
   active = getattr(manager, "active_terms", {}) or {}
   concatenate = getattr(manager, "group_obs_concatenate", {}) or {}
   dims = getattr(manager, "group_obs_term_dim", {}) or {}
   for group, names in active.items():
-    terms: List[Dict[str, Any]] = []
+    terms: list[dict[str, Any]] = []
     for index, name in enumerate(list(names or [])):
       try:
         cfg = manager.get_term_cfg(group, name)
@@ -139,7 +140,7 @@ def _capture_observations(env: Any, problems: List[str]) -> Dict[str, Any]:
         problems.append(
             f"observation term '{group}.{name}' could not be read: {exc}")
         continue
-      entry: Dict[str, Any] = {
+      entry: dict[str, Any] = {
           "name": name,
           "_cfg_type": _cfg_type_of(cfg),
           "params": encode_value(getattr(cfg, "params", {}) or {}),
@@ -165,12 +166,12 @@ def _capture_observations(env: Any, problems: List[str]) -> Dict[str, Any]:
   return groups
 
 
-def _capture_actions(env: Any, problems: List[str]) -> List[Dict[str, Any]]:
+def _capture_actions(env: Any, problems: list[str]) -> list[dict[str, Any]]:
   manager = getattr(env, "action_manager", None)
   if manager is None:
     problems.append("no action_manager on this environment")
     return []
-  out: List[Dict[str, Any]] = []
+  out: list[dict[str, Any]] = []
   for name in list(getattr(manager, "active_terms", []) or []):
     cfg = None
     try:
@@ -179,14 +180,12 @@ def _capture_actions(env: Any, problems: List[str]) -> List[Dict[str, Any]]:
     except Exception as exc:
       problems.append(f"action term '{name}' could not be read: {exc}")
       continue
-    entry: Dict[str, Any] = {"name": name, "cfg": encode_value(cfg)}
+    entry: dict[str, Any] = {"name": name, "cfg": encode_value(cfg)}
     if cfg is not None:
       entry["_cfg_type"] = _cfg_type_of(cfg)
-    try:
+    with contextlib.suppress(Exception):
       entry["dim"] = int(manager.action_term_dim[
           list(manager.active_terms).index(name)])
-    except Exception:
-      pass
     out.append(entry)
   return out
 
@@ -195,7 +194,7 @@ def _capture_actions(env: Any, problems: List[str]) -> List[Dict[str, Any]]:
 
 
 def capture_callable(
-    func: Any, problems: List[str], *, label: str = "") -> Dict[str, Any]:
+    func: Any, problems: list[str], *, label: str = "") -> dict[str, Any]:
   """Describe a term's ``func``: where it came from and, ideally, its source.
 
   A class-based term arrives here as the *instance* the manager built, so the
@@ -229,7 +228,7 @@ def capture_callable(
   elif inspect.isclass(func):
     kind = "class"
 
-  info: Dict[str, Any] = {
+  info: dict[str, Any] = {
       "module": getattr(target, "__module__", None),
       "qualname": getattr(target, "__qualname__", getattr(target, "__name__", None)),
       "name": getattr(target, "__name__", None),
@@ -308,8 +307,8 @@ def encode_value(value: Any, _depth: int = 0) -> Any:
           "reason": f"a {type(value).__name__}"}
 
 
-def _encode_dataclass(value: Any, depth: int) -> Dict[str, Any]:
-  fields: Dict[str, Any] = {}
+def _encode_dataclass(value: Any, depth: int) -> dict[str, Any]:
+  fields: dict[str, Any] = {}
   names_set = {
       f.name for f in dataclasses.fields(value)
       if f.name.endswith("_names") and getattr(value, f.name, None) is not None

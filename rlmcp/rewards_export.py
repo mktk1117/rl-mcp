@@ -34,7 +34,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from rlmcp.session import Session
 
@@ -49,12 +49,12 @@ class AddedReward:
   name: str
   func_name: str
   weight: float
-  params: Dict[str, Any] = field(default_factory=dict)
+  params: dict[str, Any] = field(default_factory=dict)
   digest: str = ""
   iteration: int = 0
   rationale: str = ""
   source: str = ""
-  added_weight: Optional[float] = None
+  added_weight: float | None = None
   """The weight it was added with, when tuning has since moved it."""
 
 
@@ -88,14 +88,14 @@ def _strip_header(text: str) -> str:
   return "\n".join(text.splitlines()[start:]).strip() + "\n"
 
 
-def collect_added_rewards(session: Session) -> List[AddedReward]:
+def collect_added_rewards(session: Session) -> list[AddedReward]:
   """Every reward term added during this run, oldest first.
 
   Later events for the same name win, which matters only for a session that
   was replayed into: the term the run ended with is the term to export.
   """
   live_weights = _live_weights(session)
-  by_name: Dict[str, AddedReward] = {}
+  by_name: dict[str, AddedReward] = {}
   for event in session.events() or []:
     if event.get("kind") != "add_reward_term":
       continue
@@ -128,9 +128,9 @@ def collect_added_rewards(session: Session) -> List[AddedReward]:
   return list(by_name.values())
 
 
-def _live_weights(session: Session) -> Dict[str, float]:
+def _live_weights(session: Session) -> dict[str, float]:
   """Reward weights as the parameter snapshot last saw them."""
-  out: Dict[str, float] = {}
+  out: dict[str, float] = {}
   for key, spec in (session.params() or {}).items():
     if not key.startswith("reward.") or not key.endswith(".weight"):
       continue
@@ -140,7 +140,7 @@ def _live_weights(session: Session) -> Dict[str, float]:
   return out
 
 
-def render_module(rewards: List[AddedReward], *, task: str = "") -> str:
+def render_module(rewards: list[AddedReward], *, task: str = "") -> str:
   """The implementation file: every added function, in one module."""
   lines = [
       '"""Reward terms added by an agent during a training run.',
@@ -167,11 +167,11 @@ def render_module(rewards: List[AddedReward], *, task: str = "") -> str:
   return "\n".join(lines).rstrip() + "\n"
 
 
-def render_cfg(rewards: List[AddedReward], *, module: str = MODULE_STEM) -> str:
+def render_cfg(rewards: list[AddedReward], *, module: str = MODULE_STEM) -> str:
   """The config half: one ``RewTerm`` line per term, weights as they stand."""
   lines = [
-      '"""Config lines for the reward terms in '
-      f'{module}.py.',
+      ('"""Config lines for the reward terms in '
+      f'{module}.py.'),
       "",
       "Paste these fields into the task's RewardsCfg. The import is written",
       f"against `{module}` as a sibling module; point it at wherever the",
@@ -207,7 +207,7 @@ def export_added_rewards(
     out_dir: Path | str,
     *,
     task: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
   """Write the implementation module and the config snippet into ``out_dir``.
 
   Returns a payload naming what was written, or ``{"count": 0}`` with no files
@@ -247,7 +247,7 @@ def export_added_rewards(
   }
 
 
-def describe(payload: Dict[str, Any]) -> str:
+def describe(payload: dict[str, Any]) -> str:
   """A human line for the CLI, since the JSON is for the agent."""
   if not payload.get("count"):
     return "No reward terms were added during this run; nothing to export."
@@ -262,12 +262,12 @@ def describe(payload: Dict[str, Any]) -> str:
 
 
 __all__ = [
-    "AddedReward",
-    "CFG_STEM",
-    "MODULE_STEM",
-    "collect_added_rewards",
-    "describe",
-    "export_added_rewards",
-    "render_cfg",
-    "render_module",
+  "CFG_STEM",
+  "MODULE_STEM",
+  "AddedReward",
+  "collect_added_rewards",
+  "describe",
+  "export_added_rewards",
+  "render_cfg",
+  "render_module",
 ]

@@ -19,15 +19,16 @@ import dataclasses
 import importlib
 import json
 import sys
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 import torch
 
 from rlmcp import env_export
 from rlmcp.adapters.manager_based.term_capture import (
-    capture_env_terms,
-    encode_value,
+  capture_env_terms,
+  encode_value,
 )
 from rlmcp.session import Session
 
@@ -41,7 +42,7 @@ NUM_ENVS = 4
 @dataclasses.dataclass
 class SceneEntityCfg:
   name: str
-  joint_names: Optional[tuple] = None
+  joint_names: tuple | None = None
   joint_ids: Any = dataclasses.field(default_factory=lambda: slice(None))
   preserve_order: bool = False
 
@@ -50,16 +51,16 @@ class SceneEntityCfg:
 class RewardTermCfg:
   func: Callable[..., Any]
   weight: float
-  params: Dict[str, Any] = dataclasses.field(default_factory=dict)
+  params: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
 class ObservationTermCfg:
   func: Callable[..., Any]
-  params: Dict[str, Any] = dataclasses.field(default_factory=dict)
-  noise: Optional[float] = None
-  scale: Optional[float] = None
-  clip: Optional[tuple] = None
+  params: dict[str, Any] = dataclasses.field(default_factory=dict)
+  noise: float | None = None
+  scale: float | None = None
+  clip: tuple | None = None
   history_length: int = 0
 
 
@@ -67,7 +68,7 @@ class ObservationTermCfg:
 class JointActionCfg:
   entity_name: str
   scale: float = 1.0
-  clip: Optional[tuple] = None
+  clip: tuple | None = None
 
 
 # Terms with real source, so inspect.getsource has something to read.
@@ -90,11 +91,11 @@ def joint_pos_rel(env, asset_cfg: Any = None):
 
 
 class _RewardManager:
-  def __init__(self, terms: Dict[str, RewardTermCfg]):
+  def __init__(self, terms: dict[str, RewardTermCfg]):
     self._terms = dict(terms)
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   def get_term_cfg(self, name: str) -> RewardTermCfg:
@@ -102,19 +103,19 @@ class _RewardManager:
 
 
 class _ObservationManager:
-  def __init__(self, groups: Dict[str, Dict[str, ObservationTermCfg]]):
+  def __init__(self, groups: dict[str, dict[str, ObservationTermCfg]]):
     self._groups = groups
 
   @property
-  def active_terms(self) -> Dict[str, List[str]]:
+  def active_terms(self) -> dict[str, list[str]]:
     return {g: list(t) for g, t in self._groups.items()}
 
   @property
-  def group_obs_concatenate(self) -> Dict[str, bool]:
-    return {g: True for g in self._groups}
+  def group_obs_concatenate(self) -> dict[str, bool]:
+    return dict.fromkeys(self._groups, True)
 
   @property
-  def group_obs_term_dim(self) -> Dict[str, List[tuple]]:
+  def group_obs_term_dim(self) -> dict[str, list[tuple]]:
     return {"policy": [(3,), (12,)]}
 
   def get_term_cfg(self, group: str, name: str) -> ObservationTermCfg:
@@ -127,15 +128,15 @@ class _ActionTerm:
 
 
 class _ActionManager:
-  def __init__(self, terms: Dict[str, Any]):
+  def __init__(self, terms: dict[str, Any]):
     self._terms = dict(terms)
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   @property
-  def action_term_dim(self) -> List[int]:
+  def action_term_dim(self) -> list[int]:
     return [12]
 
   def get_term(self, name: str) -> _ActionTerm:
@@ -145,7 +146,7 @@ class _ActionManager:
 class _Env:
   """A manager-based env with all three managers the export reads."""
 
-  def __init__(self, rewards: Optional[Dict[str, RewardTermCfg]] = None):
+  def __init__(self, rewards: dict[str, RewardTermCfg] | None = None):
     self.num_envs = NUM_ENVS
     self.device = "cpu"
     if rewards is None:
