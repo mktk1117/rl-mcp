@@ -180,29 +180,15 @@ batches inside the training process; parameter edits apply between batches, so
 they cannot race the simulator. Never pause training to look at it. A separate
 probe process (its own small env) is also fine and does not touch the run.
 
-## Branches: open PRs against `main`, never against `integration`
+## Branches: branch from `origin/main`, open PRs against `main`
 
-`integration` is **not a branch you target**. It is rebuilt by CI as *main plus
-every open PR merged together* (`.github/workflows/integration.yml`), so that a
-studio feature needing code spread across two or three unlanded PRs has one
-branch to develop against.
-
-That makes it a **build artifact**, and opening a PR against it is a mistake
-with a delayed cost: the work lands somewhere that is thrown away and rebuilt,
-review happens against a moving base, and nothing reaches `main`.
-
-```
-  branch from origin/main  →  PR against main  →  CI rebuilds integration
-```
-
-So:
-
-* **Branch from `origin/main`**, not from whatever is checked out. This
-  worktree is often on `integration` precisely because something was being
-  developed against it.
-* **Open the PR against `main`.** It reaches `integration` on its own, within a
-  CI run, and it reaches `integration` *because* it is open — so there is
-  nothing to do afterwards.
+* **Branch from `origin/main`**, not from whatever is checked out. The shared
+  checkout is often on some feature branch mid-review.
+* **Open the PR against `main`.** There is no other target. (There used to be
+  a CI-built `integration` branch of main plus every open PR; it was removed
+  because two long-lived overlapping PRs kept it permanently red and nothing
+  consumed it. To test against unlanded PRs, merge their branches into a local
+  worktree.)
 * **Use a fresh worktree** (`git worktree add`) rather than switching this one.
   Several agents work in this repository at once; `git worktree list` usually
   shows a handful, and moving the shared checkout out from under one of them is
