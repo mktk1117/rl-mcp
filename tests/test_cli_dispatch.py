@@ -45,6 +45,10 @@ _REQUIRED_ARGS: dict[str, list[str]] = {
 # stdio. Their interception is tested separately, below.
 _LAUNCHERS = {"train", "serve"}
 
+# Daemons: parsed by argparse like any command, but they serve until killed
+# and never return, so the sweep below cannot call them.
+_DAEMONS = {"hostd"}
+
 
 def subcommands() -> list[str]:
   sub = next(
@@ -53,7 +57,7 @@ def subcommands() -> list[str]:
   return sorted(sub.choices)
 
 
-SUBCOMMANDS = [c for c in subcommands() if c not in _LAUNCHERS]
+SUBCOMMANDS = [c for c in subcommands() if c not in _LAUNCHERS and c not in _DAEMONS]
 
 
 @pytest.fixture
