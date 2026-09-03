@@ -796,7 +796,7 @@ rlmcp add-reward upright /tmp/upright.py --weight 1.5 \
 
 The source is one function taking `(env, **params)` and returning one score per
 environment — a tensor of shape `(num_envs,)`. It is compiled with `torch` and
-the task's `mdp` module already in scope, and **called once against the live
+the module an existing reward term lives in as `mdp`, and **called once against the live
 environment before it is installed**: a term that raises, returns the wrong
 shape, or produces a NaN costs you an error message rather than the run. The
 manager is left untouched in every one of those cases.
@@ -859,21 +859,30 @@ exported_env/
   README.md      what it is, what it pairs with, what did not survive
 ```
 
-**Self-contained on purpose.** Implementations are inlined rather than
-imported, so the export runs without the task package installed at the version
-the run used. Each term's source is captured from the live manager while the
-run is alive — including terms an agent [added](#add-reward) mid-run, which
-exist nowhere else.
+**Inlined with what each term reaches.** A term's source alone does not run —
+it reads its module's constants and helpers and the names its module imported,
+and a default argument such as `asset_cfg=_DEFAULT_ASSET_CFG` is evaluated at
+`def` time. So each term is cut out of its module with that closure: the
+functions, the constants and helpers they use, the imports that bind the rest,
+relative imports made absolute. What the module imported from *elsewhere* is
+still imported, and `README.md` lists it under "What it still imports", naming
+which of those are the task package's own modules (which then has to be
+installed; the recipe's `package/` is the version that ran). Each term's source
+is captured from the live manager while the run is alive — including terms an
+agent [added](#add-reward) mid-run, which exist nowhere else. Two modules that
+define the same name differently do not shadow each other: the second is
+renamed with its module's slug, and the config refers to the renamed symbol.
 
 **Weights are the ones the run ended on**, not the ones the config shipped
 with, because those are what the checkpoint actually trained against. The
 configured value stays as a comment.
 
 **What could not be rendered is named, never guessed.** A term whose source
-cannot be read, or a param holding an object that cannot be reconstructed from
-its fields, is reported in `README.md` and left out of the config rather than
-approximated. A config that quietly differs from the one that trained the
-policy is worse than one that says where it stopped.
+cannot be read is commented out of the config with the reason, so the config
+still constructs and says what has to be supplied by hand; a param holding an
+object that cannot be reconstructed from its fields is written as a commented
+`repr`. Both are listed in `README.md`. A config that quietly differs from the
+one that trained the policy is worse than one that says where it stopped.
 
 Rewards, observations and actions only. Terminations and events shape
 *training* rather than the policy's interface, and a checkpoint pairs with the

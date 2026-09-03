@@ -142,19 +142,31 @@ recipe-011/
   policy/           the weights the run ended on
   config.json       the resolved parameters it started from
   curriculum.json   the ladder — loads into StageSchedule.from_dict unchanged
-  launch.sh         the command, as close as the record can say
+  launch.sh         the command: packages, config, ladder, seed, length
   phases.md         the warm-start chain, flattened
   expect.json       the numbers a replay is checked against
   README.md         generated
 ```
 
+**`launch.sh` is a launch, not a suggestion.** Everything the recipe carries is
+on its command line: the modules whose import registers the task
+(`--task-package`, recorded in the session at launch), `config.json`
+(`--config-json`, applied before the first batch), `curriculum.json`
+(`--curriculum-json`, started from its first rung), the seed, the env count,
+and `--max-iterations` set to where the original stopped. Flags after the
+record id go straight to `rlmcp-train`, so `./launch.sh 020 --records-root
+records-reorient --run-name again` is the whole incantation. A run made before
+task packages were recorded gets a script that reads them from
+`$TASK_PACKAGES`, and `missing` says so.
+
 **`package/` and `env/` are not duplicates.** The package is the repository at
 the commit the run launched with — the thing to develop in, and only as good as
 that repository still existing. `env/` is the environment as it was *running*:
 the reward, observation and action terms with their final weights, every
-implementation inlined as source, so it needs nothing installed. A reward term
-an agent [added mid-run](tools.md#add-reward) exists only there. See
-[`rlmcp env export`](tools.md#env), which is the same machinery.
+implementation inlined as source with the module-level names it reaches. A
+reward term an agent [added mid-run](tools.md#add-reward) exists only there.
+See [`rlmcp env export`](tools.md#env), which is the same machinery, for what
+it still has to import.
 
 **The policy travels with it**, so a recipe is a pair rather than a procedure
 you have to trust: `policy/` holds the checkpoint the run ended on, resolved the
@@ -171,7 +183,11 @@ rlmcp recipe verify recipe-011/ --session <the new run's session>
 `verify` compares the new run's final metrics against the ones the original
 *claimed* — `expect.json`'s `metrics`, the numbers a human wrote into the
 record — inside a relative band (20% by default, `--tolerance` to change it).
-It exits non-zero when a metric lands outside, so it works in a script.
+It exits non-zero when a metric lands outside, so it works in a script. A
+claimed name is matched to the telemetry key that ends in it — a record says
+`joint_vel_rms`, the run publishes `rlmcp/joint_vel_rms` — and each check
+names the key it used; two keys ending the same way is an ambiguity, reported
+as `missing`.
 
 The band is loose on purpose: that is roughly where two runs of the same recipe
 differ from seed and GPU nondeterminism alone, and a tighter default would fail
@@ -188,9 +204,14 @@ entropy had collapsed does not belong in a replay as "wait 900 iterations, then
 panic". It becomes the value that rung *starts* with, carrying the reason it was
 needed. A run that had a curriculum keeps its rungs and their promotion
 conditions — those were written before the run, so they are real — and the
-mid-rung edits fold into the rung that was active when they happened. A run with
-no curriculum gets one rung per change, each held for as long as the original
-ran before the next one. Refused edits are left out: they never applied.
+mid-rung edits fold into the rung that was active when they happened, as the
+event log's rung entries say. An edit the log cannot place — the run entered a
+rung it never logged the iteration of — is listed under `missing` and in the
+notes rather than folded anywhere: a five-rung ladder that starts every rung at
+the values of an edit made on rung three looks exactly like a recipe and is a
+different experiment. A run with no curriculum gets one rung per change, each
+held for as long as the original ran before the next one. Refused edits are
+left out: they never applied.
 
 **A recipe starts where the policy did.** Warm-start edges are walked back
 until a run that trained from scratch, and that run is phase 1. Given
