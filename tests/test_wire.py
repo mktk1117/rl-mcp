@@ -219,3 +219,45 @@ def test_connect_picks_the_transport_from_the_address(local, remote, server):
   assert isinstance(again, wire.WireSession) and again.status() == local.status()
   with pytest.raises(ValueError):
     wire.WireSession(server.url + "/v1/host")
+
+
+# Trees: the code a job runs from.
+
+
+def _archive_of(tmp_path: Path) -> bytes:
+  import subprocess as sp
+  src = tmp_path / "pkg-src"
+  (src / "pkg").mkdir(parents=True)
+  (src / "pkg" / "task.py").write_text("weight = 3.0\n")
+  return sp.run(["tar", "-c", "-C", str(src), "."], capture_output=True, check=True).stdout
+
+
+def test_a_tree_is_pushed_once_and_a_job_runs_from_it(server, root, tmp_path):
+  host = wire.WireHost(server.url, token="s3cret")
+  tree = "0123456789abcdef0123456789abcdef01234567"
+  assert host.has_tree(tree) == ""
+  path = host.push_tree(tree, _archive_of(tmp_path))
+  assert path and Path(path).is_dir()
+  assert (Path(path) / "pkg" / "task.py").read_text() == "weight = 3.0\n"
+  assert Path(path).parent == root / ".rlmcp-hostd" / "trees"
+  assert host.has_tree(tree) == path
+  assert host.push_tree(tree, b"garbage, not a tar") == path, "already held: nothing unpacked"
+
+  job = host.submit_job([sys.executable, "-c", "print(open('pkg/task.py').read())"], cwd=path)
+  for _ in range(100):
+    job = host.job(job["id"])
+    if job["state"] in ("succeeded", "failed"):
+      break
+    time.sleep(0.05)
+  assert job["state"] == "succeeded"
+  assert [line for line in job["log"] if line][-1] == "weight = 3.0"
+
+
+def test_a_tree_id_is_a_git_object_name_and_an_archive_is_a_tar(server, tmp_path):
+  host = wire.WireHost(server.url, token="s3cret")
+  with pytest.raises(wire.WireError) as err:
+    host.push_tree("../etc", _archive_of(tmp_path))
+  assert "400" in str(err.value)
+  with pytest.raises(wire.WireError) as err:
+    host.push_tree("abcdef0123456", b"not a tar at all")
+  assert "400" in str(err.value) and "tar" in str(err.value)
