@@ -213,6 +213,7 @@ def test_at_reset_write_reports_liveness_and_adapter_notes(tmp_path, fake_runner
 def test_refused_write_is_truthful_and_does_not_republish_schema(
     lab, fake_sim, monkeypatch):
   """A write the adapter refuses must say applied=false and change nothing."""
+  lab.service(iteration=0)   # the opening rung publishes once; not what is tested
   published = []
   monkeypatch.setattr(lab.session, "publish_params",
                       published.append)
@@ -984,3 +985,16 @@ def test_a_launch_config_is_applied_before_the_first_batch(tmp_path, fake_sim,
                 if e["kind"] == "set_parameter"]
   finally:
     controller.close()
+
+
+def test_a_stage_entry_republishes_the_parameter_file(lab):
+  """`rlmcp params` and `rlmcp env export` read params.json for the values
+  in force; the opening rung changed them and left the file at the launch
+  values, so an export said fall_penalty -250 while the run had -120."""
+  assert Session.open(lab.session.dir).params()[
+      "reward.action_rate_l2.weight"]["current"] == -0.1   # as launched
+
+  lab.service(iteration=0)   # applies the opening rung: -0.05
+
+  published = Session.open(lab.session.dir).params()
+  assert published["reward.action_rate_l2.weight"]["current"] == -0.05

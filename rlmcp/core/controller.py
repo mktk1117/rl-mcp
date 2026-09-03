@@ -1974,6 +1974,9 @@ class RlMcp:
           f"{self.iteration}: {stage.notes}",
           flush=True,
       )
+    # The rung just changed the parameters; params.json is what `rlmcp params`
+    # and `rlmcp env export` read for the values in force, so it must follow.
+    self.session.publish_params(self.parameters.export_schema_json())
 
   # Shutdown.
 
