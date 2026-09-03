@@ -25,9 +25,13 @@ the units the config used. When an environment did *not* pre-multiply,
 ``FlatEnvSpec.scales_premultiplied_by_dt=False`` turns the conversion off and
 the same key means the same thing.
 
-What cannot be done here is adding a term. ``reward_functions`` binds
+What cannot be done *here* is adding a term. ``reward_functions`` binds
 ``_reward_<name>`` for each key once, at construction; a name that was not in
-the dict then has no function behind it and never will this run.
+the dict then has no function behind it, and a weight without a function is
+nothing to multiply. Writing a new weight is therefore refused, and the
+refusal points at ``add_reward`` -- which supplies the function and lands in
+:mod:`rlmcp.adapters.legged_gym_style.reward_terms`. Once a term is in, its
+weight is served from here like any other.
 """
 
 from __future__ import annotations
@@ -114,8 +118,9 @@ class RewardAccess(AccessProvider):
       if name not in scales:
         raise KeyError(
             f"No reward term '{name}'. Terms are bound once, at construction, "
-            "from the keys reward_scales had then, so one that was not there "
-            f"cannot be added now. Available: {sorted(scales)}."
+            "from the keys reward_scales had then, so a weight alone cannot "
+            "add one -- add_reward can, since it brings the function. "
+            f"Available: {sorted(scales)}."
         )
       scales[name] = weight * self._dt
       return True
@@ -133,8 +138,8 @@ class RewardAccess(AccessProvider):
       return ""
     return (
         "Reward terms are bound once, at construction, from the keys "
-        "reward_scales had then -- a term that was not there cannot be added "
-        "during this run, only re-weighted."
+        "reward_scales had then -- a weight alone cannot add one. "
+        "`rlmcp add-reward` can: it brings the function the term needs."
     )
 
   def describe(self, term: Term, parts: Sequence[str], value: Any) -> str:

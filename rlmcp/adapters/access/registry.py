@@ -45,14 +45,40 @@ class ParameterAccess:
     for provider_type in provider_types or self.PROVIDER_TYPES:
       self.registry.add(provider_type(env))
     self._synthetic: dict[str, Synthetic] = {}
+    self._refresh_synthetic()
+
+  def _refresh_synthetic(self) -> None:
+    """Pick up synthetics that appeared since the last look.
+
+    A reward term added mid-run is the case: its weight is served as a
+    synthetic by the same provider as the task's own, but the provider was
+    asked once, at wrap time, before the term existed. Keys already served
+    keep the object they had -- its recorded default is the value at wrap
+    time, which is what a reset goes back to -- and keys that went away are
+    dropped.
+    """
+    seen: set[str] = set()
     for provider in self.registry:
       for item in provider.synthetic():
-        self._synthetic[item.key] = item
+        seen.add(item.key)
+        self._synthetic.setdefault(item.key, item)
+    for key in list(self._synthetic):
+      if key not in seen:
+        del self._synthetic[key]
+
+  def _lookup_synthetic(self, key: str) -> Synthetic | None:
+    """The synthetic behind ``key``, looking again once if it is new."""
+    item = self._synthetic.get(key)
+    if item is None:
+      self._refresh_synthetic()
+      item = self._synthetic.get(key)
+    return item
 
   # Discovery.
 
   def discover(self) -> list[ParameterSpec]:
     """Every tunable leaf reachable from every provider's terms."""
+    self._refresh_synthetic()
     specs: list[ParameterSpec] = []
     for provider in self.registry:
       for term in provider.terms():
@@ -135,7 +161,7 @@ class ParameterAccess:
   # Read and write.
 
   def get(self, key: str) -> Any:
-    item = self._synthetic.get(key)
+    item = self._lookup_synthetic(key)
     if item is not None:
       return item.getter()
     _, term, parts = self._split(key)
@@ -151,7 +177,7 @@ class ParameterAccess:
     was. A write that lands but only applies later ('at_reset') says so in the
     returned notes.
     """
-    item = self._synthetic.get(key)
+    item = self._lookup_synthetic(key)
     if item is not None:
       self._refuse_if_not_live(key, item.liveness)
       if not item.setter(value):

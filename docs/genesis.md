@@ -142,7 +142,7 @@ without any of this.
 | pitch / roll termination limits | `env_cfg`, read in `step()` | live |
 | a command range | `commands_limits`, **not** `command_cfg` | live |
 | `episode_length_s` | baked into `max_episode_length` at init | refused |
-| a reward term that was not in `reward_scales` at init | never bound in `reward_functions` | cannot be added |
+| a reward term the task never had | `rlmcp add-reward` writes it into `reward_functions`, `reward_scales` and `episode_sums`, which `step()` walks | live |
 | the PPO knobs, checkpoints, `stop` | the rsl_rl runner, through `attach_runner` | live |
 
 ## What the real run changed

@@ -25,6 +25,7 @@ from rlmcp.adapters.base import NotSupported, SimAdapter
 from rlmcp.adapters.genesis import rendering
 from rlmcp.adapters.legged_gym_style import metrics as flat_metrics
 from rlmcp.adapters.legged_gym_style.access import ParameterAccess
+from rlmcp.adapters.legged_gym_style.reward_terms import install_reward_term
 from rlmcp.adapters.legged_gym_style.sampling import StateSampler
 from rlmcp.adapters.legged_gym_style.spec import FlatEnvSpec, detect
 from rlmcp.core.parameters.spec import ParameterSpec
@@ -64,6 +65,19 @@ class GenesisSimAdapter(SimAdapter):
 
   def last_set_notes(self) -> dict[str, Any]:
     return dict(self._last_set_notes)
+
+  def add_reward_term(
+      self,
+      name: str,
+      func: Any,
+      weight: float,
+      params: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
+    """Append a term to the environment's own reward dicts. See the base
+    class, and :mod:`rlmcp.adapters.legged_gym_style.reward_terms` for why
+    three dict writes are the whole of it here."""
+    return install_reward_term(
+        self.env, self.spec, name=name, func=func, weight=weight, params=params)
 
   # Introspection.
 

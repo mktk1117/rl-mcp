@@ -34,6 +34,16 @@ class FlatEnvSpec:
   reward_cfg: str = "reward_cfg"
   """Parameters the reward functions read, ``tracking_sigma`` and friends."""
 
+  reward_functions: str = "reward_functions"
+  """``{term_name: callable}``, bound once at construction from the keys of
+  ``reward_scales``. ``step()`` walks it, so a term appended here scores from
+  the next step -- see :mod:`.reward_terms`."""
+
+  episode_sums: str = "episode_sums"
+  """``{term_name: tensor}`` of per-environment running totals, one per bound
+  term. ``reset_idx`` reports and zeroes every entry, so a term without one
+  raises there rather than being ignored."""
+
   command_cfg: str = "command_cfg"
   env_cfg: str = "env_cfg"
   obs_cfg: str = "obs_cfg"

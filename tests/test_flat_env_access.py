@@ -130,11 +130,13 @@ def test_an_env_that_did_not_premultiply_needs_no_conversion(env):
   assert env.reward_scales["action_rate"] == pytest.approx(-0.02)
 
 
-def test_a_term_that_was_not_bound_at_construction_cannot_be_added(access):
+def test_a_weight_alone_cannot_add_a_term_and_the_refusal_says_what_can(access):
   with pytest.raises(KeyError) as excinfo:
     access.set("reward.feet_air_time.weight", 1.0)
   assert "bound once" in str(excinfo.value), (
       "the message should say why the term is missing, not only which exist")
+  assert "add-reward" in str(excinfo.value), (
+      "a weight is not a term; the message should name the verb that adds one")
 
 
 # Command ranges: the write has to reach the sampler, not just the config.

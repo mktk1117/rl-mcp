@@ -27,9 +27,7 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
-
-class RewardInstallError(RuntimeError):
-  """A compiled term could not be installed, with the manager left unchanged."""
+from rlmcp.adapters.reward_terms import RewardInstallError, trial_call
 
 
 def install_reward_term(
@@ -189,41 +187,6 @@ def _record_in_cfg(manager: Any, name: str, term_cfg: Any) -> None:
 
 def _trial_call(env: Any, manager: Any, *, name: str, term_cfg: Any) -> dict[str, Any]:
   """Call the term once and check its result, before the manager knows of it."""
-  import torch
-
-  try:
-    value = term_cfg.func(env, **term_cfg.params)
-  except TypeError as exc:
-    raise RewardInstallError(
-        f"Reward term '{name}' could not be called as func(env, **params) "
-        f"with params {sorted(term_cfg.params)}: {exc}"
-    ) from exc
-  except Exception as exc:
-    raise RewardInstallError(
-        f"Reward term '{name}' raised on its trial call "
-        f"({type(exc).__name__}: {exc}). It was not installed, and the run is "
-        "unaffected."
-    ) from exc
-
-  if not isinstance(value, torch.Tensor):
-    raise RewardInstallError(
-        f"Reward term '{name}' returned {type(value).__name__}, but a term "
-        "has to return a torch tensor of one score per environment."
-    )
   num_envs = int(getattr(manager, "num_envs", getattr(env, "num_envs", 0)))
-  if tuple(value.shape) != (num_envs,):
-    raise RewardInstallError(
-        f"Reward term '{name}' returned shape {tuple(value.shape)}, but the "
-        f"manager needs ({num_envs},) -- one score per environment. A term "
-        "that reduces over joints usually wants a sum or mean over dim=1."
-    )
-  if not bool(torch.isfinite(value).all()):
-    raise RewardInstallError(
-        f"Reward term '{name}' returned non-finite values on its trial call. "
-        "A NaN here becomes a NaN gradient; fix the term before adding it."
-    )
-  return {
-      "min": float(value.min()),
-      "max": float(value.max()),
-      "mean": float(value.mean()),
-  }
+  return trial_call(env, name=name, func=term_cfg.func, params=term_cfg.params,
+                    num_envs=num_envs)

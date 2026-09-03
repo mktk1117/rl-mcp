@@ -395,10 +395,11 @@ class FakeFlatEnv:
             strict=True,
         )
     )
-    self.reward_functions = {}
+    self.reward_functions, self.episode_sums = {}, {}
     for name in self.reward_scales:
       self.reward_scales[name] *= self.dt
       self.reward_functions[name] = lambda: torch.ones(self.num_envs)
+      self.episode_sums[name] = torch.zeros(num_envs)
 
     # The per-step buffers step() writes, which is where traces read from.
     n, j = num_envs, len(self.env_cfg["joint_names"])

@@ -47,6 +47,10 @@ CALLS = {
     "get_parameter": {"key": "reward.tracking_lin_vel.weight"},
     "set_parameter": {"key": "reward.tracking_lin_vel.weight", "value": 1.5,
                       "rationale": "conformance"},
+    "add_reward": {"name": "upright",
+                   "source": "def upright(env, scale: float = 1.0):\n"
+                             "  return torch.ones(env.num_envs) * scale\n",
+                   "weight": 0.5, "rationale": "conformance"},
     "reset_parameters": {},
     "reset_envs": {"env_ids": [0]},
     "list_metrics": {},
@@ -86,7 +90,7 @@ ORDER = [
     "record_trace", "diagnose", "plot_trace", "plot_metrics",
     "screenshot", "record_video", "progress_video", "live_view",
     # Then the ones that change the run.
-    "set_parameter", "reset_parameters", "reset_envs",
+    "set_parameter", "add_reward", "reset_parameters", "reset_envs",
     "curriculum_advance", "curriculum_goto", "curriculum_auto",
     "save_checkpoint", "load_checkpoint", "note", "feedback", "cancel_job",
     # Pause blocks servicing until it is undone, so its undo follows it
