@@ -508,15 +508,12 @@ def _telemetry_key(name: str, candidate: dict[str, Any]) -> str | None:
 
   A record's metrics are named by a person -- ``joint_vel_rms`` -- while the
   telemetry publishes ``rlmcp/joint_vel_rms``, and a run made under another
-  harness published ``mcplab/joint_vel_rms``. The exact key wins; otherwise
-  the one key whose last path segment is the name. Two candidates is an
-  ambiguity, not a match.
+  harness published ``mcplab/joint_vel_rms``. The same rule a curriculum
+  condition uses to find its metric: exact key, else the one key ending in it.
   """
-  if name in candidate:
-    return name
-  tail = name.rsplit("/", 1)[-1]
-  matches = [k for k in candidate if k.rsplit("/", 1)[-1] == tail]
-  return matches[0] if len(matches) == 1 else None
+  from rlmcp.core.curriculum import resolve_metric
+
+  return resolve_metric(name, candidate)
 
 
 def _as_number(value: Any) -> float | None:

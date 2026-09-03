@@ -166,3 +166,20 @@ def test_a_stage_with_no_conditions_holds_forever():
   )
   for it in range(50):
     assert plan.evaluate(it, PASSING) is None
+
+
+def test_a_condition_finds_its_metric_under_another_harness_prefix():
+  """A ladder from a run under mcplab names `mcplab/holding_frac`; this run
+  publishes `rlmcp/holding_frac`. The rung sat at streak 0 for a thousand
+  iterations with the condition met, because the key did not match."""
+  from rlmcp.core.curriculum import Condition, resolve_metric
+  metrics = {"rlmcp/holding_frac": 0.99, "Metrics/orientation/episode_success": 0.4}
+
+  ok, current = Condition("mcplab/holding_frac", ">=", 0.6).check(metrics)
+
+  assert (ok, current) == (True, 0.99)
+  assert resolve_metric("holding_frac", metrics) == "rlmcp/holding_frac"
+  # Two keys ending the same way is an ambiguity, not a match.
+  both = {"rlmcp/x/rate": 1.0, "mcplab/y/rate": 1.0}
+  assert resolve_metric("rate", both) is None
+  assert Condition("rate", ">=", 0.5).check(both) == (False, None)
