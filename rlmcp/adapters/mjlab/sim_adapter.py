@@ -19,30 +19,32 @@ so nothing here needs a restart or a checkpoint round-trip.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+import contextlib
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
 from rlmcp.adapters.base import NotSupported, SimAdapter
-from rlmcp.adapters.manager_based.access import ParameterAccess
 from rlmcp.adapters.manager_based.reward_terms import install_reward_term
 from rlmcp.adapters.manager_based.term_capture import capture_env_terms
 from rlmcp.adapters.manager_based import metrics as state_metrics
 from rlmcp.adapters.manager_based import terms as state_terms
-from rlmcp.adapters.mjlab.state import live_view, rendering
+from rlmcp.adapters.manager_based.access import ParameterAccess
 from rlmcp.adapters.manager_based.sampling import StateSampler
+from rlmcp.adapters.mjlab.state import live_view, rendering
 from rlmcp.core.parameters.spec import ParameterSpec
 
 
 class MjlabSimAdapter(SimAdapter):
   """Live control surface over one ``ManagerBasedRlEnv``."""
 
-  def __init__(self, env: Any, robot_name: Optional[str] = None):
+  def __init__(self, env: Any, robot_name: str | None = None):
     self.env = env
     self.robot_name = robot_name or self._resolve_robot_name(env)
     self.parameters = ParameterAccess(env)
     self.sampler = StateSampler(env, self.robot_name)
-    self._last_set_notes: Dict[str, Any] = {}
+    self._last_set_notes: dict[str, Any] = {}
 
   @staticmethod
   def _resolve_robot_name(env: Any) -> str:
@@ -68,16 +70,16 @@ class MjlabSimAdapter(SimAdapter):
   def step_dt(self) -> float:
     return float(self.env.step_dt)
 
-  def joint_names(self) -> List[str]:
+  def joint_names(self) -> list[str]:
     return list(self.robot.joint_names)
 
-  def max_episode_length(self) -> Optional[float]:
+  def max_episode_length(self) -> float | None:
     value = getattr(self.env, "max_episode_length", None)
     return float(value) if value else None
 
   # Parameters.
 
-  def discover_parameters(self) -> List[ParameterSpec]:
+  def discover_parameters(self) -> list[ParameterSpec]:
     return self.parameters.discover()
 
   def get_parameter(self, key: str) -> Any:
@@ -101,44 +103,44 @@ class MjlabSimAdapter(SimAdapter):
       name: str,
       func: Any,
       weight: float,
-      params: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      params: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Append a reward term to the live manager. See the base class."""
     return install_reward_term(
         self.env, name=name, func=func, weight=weight, params=params)
 
-  def capture_env_terms(self) -> Dict[str, Any]:
+  def capture_env_terms(self) -> dict[str, Any]:
     """Snapshot reward, observation and action terms. See the base class."""
     return capture_env_terms(self.env)
 
-  def last_set_notes(self) -> Dict[str, Any]:
+  def last_set_notes(self) -> dict[str, Any]:
     return dict(self._last_set_notes)
 
-  def parameter_domains(self) -> List[str]:
+  def parameter_domains(self) -> list[str]:
     return self.parameters.domains()
 
   # State sampling and metrics.
 
-  def sample_state(self, env_id: int = 0) -> Dict[str, np.ndarray]:
+  def sample_state(self, env_id: int = 0) -> dict[str, np.ndarray]:
     """One step of trace channels (vocabulary in :mod:`rlmcp.adapters.base`)."""
     return self.sampler.sample(env_id)
 
-  def trace_labels(self) -> Dict[str, List[str]]:
+  def trace_labels(self) -> dict[str, list[str]]:
     """Component names derived from the live env: joints, action terms, command."""
     return self.sampler.labels()
 
-  def summary_metrics(self) -> Dict[str, float]:
+  def summary_metrics(self) -> dict[str, float]:
     return state_metrics.summary_metrics(self.env, self.robot_name)
 
   # Manager terms.
 
-  def reward_terms(self) -> Dict[str, float]:
+  def reward_terms(self) -> dict[str, float]:
     found = state_terms.reward_terms(self.env)
     if not found:
       raise NotSupported("reward_terms")
     return found
 
-  def termination_terms(self) -> Dict[str, float]:
+  def termination_terms(self) -> dict[str, float]:
     return state_terms.termination_terms(self.env)
 
   # Rendering.
@@ -165,7 +167,7 @@ class MjlabSimAdapter(SimAdapter):
 
   # Episodes.
 
-  def reset_envs(self, env_ids: Optional[Sequence[int]] = None) -> Dict[str, Any]:
+  def reset_envs(self, env_ids: Sequence[int] | None = None) -> dict[str, Any]:
     """Start fresh episodes, through the same path a termination takes.
 
     A manager-based environment restarts a subset of its environments with
@@ -207,10 +209,8 @@ class MjlabSimAdapter(SimAdapter):
         # the restarted episode a clock already at the time limit.
         clock = getattr(self.env, "episode_length_buf", None)
         if clock is not None:
-          try:
+          with contextlib.suppress(Exception):
             clock[chosen] = 0
-          except Exception:
-            pass
         return {"num_reset": len(chosen), "method": name}
 
     if env_ids is None and callable(getattr(self.env, "reset", None)):
@@ -225,10 +225,10 @@ class MjlabSimAdapter(SimAdapter):
 
   # Env state, for checkpointing the curriculum alongside the policy.
 
-  def get_env_state(self) -> Dict[str, Any]:
+  def get_env_state(self) -> dict[str, Any]:
     """Generic env state only; extensions add their own through the registry."""
     return {"common_step_counter": int(getattr(self.env, "common_step_counter", 0))}
 
-  def set_env_state(self, state: Dict[str, Any]) -> None:
+  def set_env_state(self, state: dict[str, Any]) -> None:
     if "common_step_counter" in state:
       self.env.common_step_counter = int(state["common_step_counter"])

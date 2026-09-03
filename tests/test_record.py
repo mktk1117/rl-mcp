@@ -642,7 +642,7 @@ def test_check_reports_the_unanswered_count_without_reshaping_its_payload(
   payload = _payload(capsys)
 
   # Everything an existing parser reads is still exactly where it was.
-  assert set(("ok", "errors", "warnings", "records")) <= set(payload)
+  assert {"ok", "errors", "warnings", "records"} <= set(payload)
   assert payload["feedback"] == {
       "total": 1, "unanswered": 1, "runs_with_unanswered": [record.id]}
 

@@ -19,10 +19,10 @@ number that stays the same when somebody changes the control frequency.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 
-def _mean_over_envs(values: Any) -> List[float]:
+def _mean_over_envs(values: Any) -> list[float]:
   """A per-env tensor or array to plain floats, one per column."""
   if values is None:
     return []
@@ -37,7 +37,7 @@ def _mean_over_envs(values: Any) -> List[float]:
   return []
 
 
-def reward_terms(env: Any) -> Dict[str, float]:
+def reward_terms(env: Any) -> dict[str, float]:
   """Per-term reward on the last step, averaged over the environments.
 
   Empty when the environment has no reward manager -- the caller turns that
@@ -72,7 +72,7 @@ def reward_terms(env: Any) -> Dict[str, float]:
   return {}
 
 
-def termination_terms(env: Any) -> Dict[str, float]:
+def termination_terms(env: Any) -> dict[str, float]:
   """Fraction of environments each termination term fired on, last step.
 
   Includes the terms that did not fire, as ``0.0``. A list that silently drops
@@ -84,7 +84,7 @@ def termination_terms(env: Any) -> Dict[str, float]:
   if manager is None:
     return {}
   names = list(getattr(manager, "active_terms", []) or [])
-  out: Dict[str, float] = {}
+  out: dict[str, float] = {}
   for name in names:
     try:
       fired = manager.get_term(name)

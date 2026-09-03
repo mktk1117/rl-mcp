@@ -4,7 +4,6 @@ real investigation time twice. These pin the check that now runs at startup."""
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional, Tuple
 
 import pytest
 
@@ -78,10 +77,10 @@ def test_report_names_both_sides():
 @dataclasses.dataclass
 class _Cfg:
   debug_vis: bool = True
-  viz_marker_color: Tuple[float, float, float, float] = MARKER_YELLOW
-  viz_face_colors: Tuple[Tuple[float, float, float, float], ...] = (OBJECT_RED,)
+  viz_marker_color: tuple[float, float, float, float] = MARKER_YELLOW
+  viz_face_colors: tuple[tuple[float, float, float, float], ...] = (OBJECT_RED,)
   unrelated: float = 1.0
-  optional_color: Optional[Tuple[float, ...]] = None
+  optional_color: tuple[float, ...] | None = None
 
 
 class _Term:

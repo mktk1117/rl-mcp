@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from rlmcp.adapters.manager_based.access.base import AccessProvider, Term
 from rlmcp.core.parameters.spec import ParameterCategory
@@ -13,7 +14,7 @@ class RewardAccess(AccessProvider):
   category = ParameterCategory.REWARD
   manager_attr = "reward_manager"
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     return [
         Term(key=name, root=cfg, label=f"reward '{name}'")
         for name, cfg in self._term_cfgs().items()

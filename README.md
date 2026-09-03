@@ -218,6 +218,7 @@ afterwards.
 | [docs/isaaclab.md](docs/isaaclab.md) | Driving an IsaacLab run: the one line, cameras, what differs from mjlab. |
 | [docs/records.md](docs/records.md) | Hypotheses, verdicts, feedback, code snapshots, the record graph. |
 | [docs/design.md](docs/design.md) | How it fits together, how parameters are found, other simulators. |
+| [docs/style.md](docs/style.md) | The style guide: two spaces, what ruff checks, and why each rule is on or off. |
 | [AGENTS.md](AGENTS.md) | Contributing to this repository. |
 
 ## How it works, briefly

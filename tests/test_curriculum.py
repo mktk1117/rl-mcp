@@ -21,7 +21,7 @@ STAGE_NAMES = ["0_easy", "1_medium", "2_hard", "3_full"]
 
 def _plan(**kwargs) -> StageSchedule:
   """A four-rung ladder in the core's own vocabulary: parameters and commands."""
-  defaults = dict(min_iterations=5, hold_iterations=2, auto_promote=True)
+  defaults = {"min_iterations": 5, "hold_iterations": 2, "auto_promote": True}
   defaults.update(kwargs)
   auto = defaults.pop("auto_promote")
   stages = []

@@ -466,3 +466,23 @@ def test_the_summary_is_json_shaped_for_a_result_payload():
   assert summary["stage"] == "1_harder"
   assert summary["through_iteration"] == 700
   assert summary["calls"] == [{"cmd": "set_difficulty", "args": {"level": 3}}]
+
+
+def test_read_events_takes_an_open_session_as_well_as_a_directory(tmp_path):
+  """The reader a run's history goes through must not require a filesystem.
+
+  `play` hands it a directory; anything reading a run it cannot open files in
+  hands it the session, which answers the same question over whatever
+  transport it has.
+  """
+  from rlmcp.session import Session
+
+  session = Session(tmp_path / "sess").create({})
+  session.append_event("curriculum_stage", {"to": "1_harder", "iteration": 10})
+
+  from_dir = read_events(session.dir)
+  from_session = read_events(session)
+
+  assert [e["to"] for e in from_dir] == ["1_harder"]
+  assert from_session == from_dir
+  assert stage_names(session) == ["1_harder"]

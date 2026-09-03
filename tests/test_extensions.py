@@ -8,7 +8,7 @@ having one, without anything else changing.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -27,7 +27,7 @@ class Objects(Extension):
     super().__init__(env=None)
     self._available = available
     self.object_set = ["cube"]
-    self.calls: List[str] = []
+    self.calls: list[str] = []
 
   def available(self) -> bool:
     return self._available
@@ -35,7 +35,7 @@ class Objects(Extension):
   def commands(self):
     return {"set_objects": self.cmd_set_objects}
 
-  def metrics(self) -> Dict[str, float]:
+  def metrics(self) -> dict[str, float]:
     return {"rlmcp/object_variety": float(len(self.object_set))}
 
   def select_envs(self, **criteria):
@@ -44,16 +44,16 @@ class Objects(Extension):
       return None
     return [7] if obj in self.object_set else []
 
-  def describe(self) -> Dict[str, Any]:
+  def describe(self) -> dict[str, Any]:
     return {"object_set": list(self.object_set)}
 
-  def snapshot(self) -> Dict[str, Any]:
+  def snapshot(self) -> dict[str, Any]:
     return {"object_set": list(self.object_set)}
 
-  def restore(self, state: Dict[str, Any]) -> None:
+  def restore(self, state: dict[str, Any]) -> None:
     self.object_set = list(state["object_set"])
 
-  def cmd_set_objects(self, names: List[str]) -> Dict[str, Any]:
+  def cmd_set_objects(self, names: list[str]) -> dict[str, Any]:
     """Choose which objects appear in the scene."""
     self.calls.append("set_objects")
     self.object_set = list(names)
@@ -151,7 +151,7 @@ def test_restore_reports_success_per_extension():
 
 
 def test_hook_failures_are_reported_once_per_extension_and_hook():
-  reports: List[tuple] = []
+  reports: list[tuple] = []
   registry = ExtensionRegistry([Noisy(env=None), Objects()])
   registry.set_error_sink(lambda name, hook, msg: reports.append((name, hook, msg)))
 
@@ -184,7 +184,7 @@ def test_command_clashes_are_first_wins_and_reported():
       return {"rival": True}
 
   objects = Objects()
-  reports: List[tuple] = []
+  reports: list[tuple] = []
   registry = ExtensionRegistry([objects, Rival(env=None)])
   registry.set_error_sink(lambda name, hook, msg: reports.append((name, hook, msg)))
 
@@ -200,7 +200,7 @@ def test_command_clashes_are_first_wins_and_reported():
 
 
 def test_on_iteration_and_close_are_aggregated_with_failures_contained():
-  calls: List[Any] = []
+  calls: list[Any] = []
 
   class Lifecycle(Extension):
     name = "lifecycle"
@@ -223,7 +223,7 @@ def test_on_iteration_and_close_are_aggregated_with_failures_contained():
     def on_iteration(self, iteration, metrics):
       raise RuntimeError("mid-iteration crash")
 
-  reports: List[tuple] = []
+  reports: list[tuple] = []
   registry = ExtensionRegistry([Dying(env=None), Lifecycle(env=None)])
   registry.set_error_sink(lambda name, hook, msg: reports.append((name, hook)))
 
@@ -247,7 +247,7 @@ class WatchJob(DeferredJob):
 
   def __init__(self, env_id: int, steps_needed: int, **kwargs):
     super().__init__(env_id=env_id, steps_needed=steps_needed, **kwargs)
-    self.samples: List[Dict[str, Any]] = []
+    self.samples: list[dict[str, Any]] = []
 
   def feed(self, lab):
     sample = lab.sim.sample_state(self.env_id)
@@ -553,7 +553,7 @@ def test_terrain_plan_is_expressed_as_ordinary_stages(terrain_module):
 
 def test_each_terrain_stage_keeps_what_came_before(terrain_module):
   plan = terrain_module.build_terrain_plan(ROUGH, num_levels=10)
-  for earlier, later in zip(plan.stages, plan.stages[1:]):
+  for earlier, later in zip(plan.stages, plan.stages[1:], strict=False):
     assert set(earlier.apply[0].args["terrains"]).issubset(
         set(later.apply[0].args["terrains"])
     )

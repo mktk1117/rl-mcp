@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from rlmcp.adapters.manager_based.access import paths
 from rlmcp.adapters.manager_based.access.base import AccessProvider, Term
@@ -19,7 +20,7 @@ class TerminationAccess(AccessProvider):
   # returns, and it is not a tuning knob in any case.
   skip_keys = paths.SKIP_KEYS | {"time_out"}
 
-  def terms(self) -> List[Term]:
+  def terms(self) -> list[Term]:
     return [
         Term(key=name, root=cfg, label=f"termination '{name}'")
         for name, cfg in self._term_cfgs().items()

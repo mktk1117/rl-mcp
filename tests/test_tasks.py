@@ -19,7 +19,6 @@ import pytest
 
 from rlmcp import tasks
 
-
 #: The list a fake task package registers into. It has to live in a module a
 #: generated package can import by name, because the whole point of the
 #: attribution test is that registration happens *during* the import.
@@ -109,6 +108,26 @@ def test_a_task_is_attributed_to_the_import_that_registered_it(
   assert rows["Shipped-With-The-Backend"]["package"] == ""
 
 
+def test_each_package_is_credited_with_its_own_tasks(
+    fake_backend, package, monkeypatch):
+  """Two packages is the case that tells attribution from a first-one-wins.
+
+  With one package named, crediting it with everything that appeared and
+  crediting it with what its own import registered are the same answer. With
+  two they are not, and the wrong one sends somebody reading a task they are
+  building to a package that has nothing to do with it.
+  """
+  monkeypatch.delenv(tasks.TASK_PACKAGES_ENV, raising=False)
+  package("first_tasks", ["First-Rough-G1"])
+  package("second_tasks", ["Second-Rough-G1"])
+
+  rows = {row["task"]: row
+          for row in tasks.registered(["first_tasks", "second_tasks"])["tasks"]}
+
+  assert rows["First-Rough-G1"]["package"] == "first_tasks"
+  assert rows["Second-Rough-G1"]["package"] == "second_tasks"
+
+
 def test_an_absent_backend_is_a_reason_rather_than_an_empty_list(monkeypatch):
   def missing():
     raise ImportError("No module named 'mjlab'")
@@ -195,7 +214,7 @@ def test_the_cli_says_what_to_do_when_nothing_registers_a_task(
   from rlmcp.cli import main
 
   monkeypatch.setattr(tasks, "BACKENDS", (
-      {"backend": "fake", "ids": lambda: [], "describe": lambda t: {}, "note": ""},
+      {"backend": "fake", "ids": list, "describe": lambda t: {}, "note": ""},
   ))
   monkeypatch.delenv(tasks.TASK_PACKAGES_ENV, raising=False)
   monkeypatch.chdir(tmp_path)

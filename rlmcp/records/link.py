@@ -17,7 +17,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from rlmcp.records.record import RunRecord
 from rlmcp.records.store import StoreError, summarize_lease
@@ -40,7 +40,7 @@ def task_from_session(session_dir: Any) -> str:
   """
   try:
     info = json.loads((Path(str(session_dir)) / "session.json").read_text())
-  except Exception:  # noqa: BLE001 -- no session fact is worth stalling a launch.
+  except Exception:
     return ""
   task = info.get("task")
   return str(task).strip() if task else ""
@@ -52,12 +52,12 @@ class RecordLink:
   def __init__(
       self,
       store: Any,
-      record_id: Optional[str] = None,
+      record_id: str | None = None,
       slot: str = "",
       strict: bool = False,
       heartbeat_seconds: float = 60.0,
       ttl_seconds: float = 900.0,
-      code_root: Optional[str] = None,
+      code_root: str | None = None,
   ):
     self.store = store
     self.record_id = record_id
@@ -69,7 +69,7 @@ class RecordLink:
     self.strict = strict
     self.heartbeat_seconds = heartbeat_seconds
     self.ttl_seconds = ttl_seconds
-    self.record: Optional[RunRecord] = None
+    self.record: RunRecord | None = None
     self.notes: list = []
     self._last_heartbeat = 0.0
     self._config_pending = False
@@ -96,7 +96,7 @@ class RecordLink:
 
   # Lifecycle.
 
-  def start(self, session_dir: str, config: Optional[Dict[str, Any]] = None) -> None:
+  def start(self, session_dir: str, config: dict[str, Any] | None = None) -> None:
     """Attach the session and take a slot. Called once, at wrap time."""
     if self.record is None:
       return
@@ -143,7 +143,7 @@ class RecordLink:
           "be reaped by heartbeat staleness if the process dies."
       )
 
-  def _stamp_code(self) -> Dict[str, Any]:
+  def _stamp_code(self) -> dict[str, Any]:
     """What the package looked like at launch. Never raises, never blocks."""
     if self.code_root == "" or self.record is None:
       return {}
@@ -161,7 +161,7 @@ class RecordLink:
       )
     return code
 
-  def snapshot_config(self, config: Dict[str, Any]) -> None:
+  def snapshot_config(self, config: dict[str, Any]) -> None:
     """Record the resolved config, once everything has contributed to it.
 
     Taken at the first iteration rather than at wrap time: the runner attaches
@@ -211,6 +211,7 @@ class RecordLink:
           if record.lease is not None or record.verdict != "running":
             return False
           record.touch()
+          return None  # Anything but False: write the record.
 
         refreshed = self.store.update_record(self.record.id, touch_leaseless)
         if refreshed is not None:
@@ -220,7 +221,7 @@ class RecordLink:
 
   def attach_asset(
       self, path: str, caption: str = "", kind: str = "videos"
-  ) -> Optional[str]:
+  ) -> str | None:
     """Copy an artifact into the record's media store and list it.
 
     This is how evidence produced *during* a run reaches the record without
@@ -244,11 +245,11 @@ class RecordLink:
         if any(entry and entry[0] == key for entry in entries):
           return False
         entries.append([key, caption])
+        return None  # Anything but False: write the record.
 
       updated = self.store.update_record(self.record.id, add_asset)
       if updated is not None:
         self.record = updated
-      return key
     except Exception as exc:
       if not self._asset_warned:
         self._asset_warned = True
@@ -258,6 +259,8 @@ class RecordLink:
             "artifacts directory."
         )
       return None
+    else:
+      return key
 
   def finish(self, reason: str = "") -> None:
     """Release the slot. The verdict stays for an explicit close-out."""
@@ -278,7 +281,7 @@ class RecordLink:
 
   # Reporting.
 
-  def status(self) -> Dict[str, Any]:
+  def status(self) -> dict[str, Any]:
     """The lab's contribution to the live status payload."""
     if self.record is None:
       return {"registered": False, "warning": "run has no lab record"}
@@ -295,8 +298,8 @@ class RecordLink:
     }
 
   def check_falsifier(
-      self, metrics: Dict[str, float], iteration: Optional[int] = None
-  ) -> Dict[str, Any]:
+      self, metrics: dict[str, float], iteration: int | None = None
+  ) -> dict[str, Any]:
     """Has the run already disproved its own hypothesis?"""
     if self.record is None:
       return {"registered": False}
@@ -308,12 +311,12 @@ class RecordLink:
 
 
 def open_link(
-    record_id: Optional[str] = None,
-    root: Optional[str] = None,
+    record_id: str | None = None,
+    root: str | None = None,
     slot: str = "",
     strict: bool = False,
     slots: int = 1,
-    code_root: Optional[str] = None,
+    code_root: str | None = None,
 ) -> RecordLink:
   """Open the records and bind a record, if one was named."""
   from rlmcp.records.filestore import open_store

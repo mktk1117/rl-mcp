@@ -20,14 +20,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
 from rlmcp.cli import build_parser, main
 
 # Arguments that make a subcommand well-formed. Anything absent needs none.
-_REQUIRED_ARGS: Dict[str, List[str]] = {
+_REQUIRED_ARGS: dict[str, list[str]] = {
     "get": ["reward.foot_slip.weight"],
     "set": ["reward.foot_slip.weight", "-0.2"],
     "run": ["get_status"],
@@ -46,7 +46,7 @@ _REQUIRED_ARGS: Dict[str, List[str]] = {
 _LAUNCHERS = {"train", "serve"}
 
 
-def subcommands() -> List[str]:
+def subcommands() -> list[str]:
   sub = next(
       a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)
   )
@@ -108,7 +108,7 @@ def test_every_subcommand_dispatches(command, dead_session, tmp_path, monkeypatc
 @pytest.mark.parametrize("command", sorted(_LAUNCHERS))
 def test_launchers_hand_off_without_argparse_touching_their_flags(command, monkeypatch):
   """`rlmcp train --num-envs 4` must reach the trainer, flags intact."""
-  seen: Dict[str, Any] = {}
+  seen: dict[str, Any] = {}
 
   def fake_main(argv=None):
     seen["argv"] = argv

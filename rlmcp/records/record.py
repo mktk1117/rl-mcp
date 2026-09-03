@@ -33,9 +33,10 @@ import os
 import re
 import socket
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from rlmcp.core.curriculum import Condition
 
@@ -153,7 +154,7 @@ class Feedback:
   kind: str = "steer"
   author: str = "user"
   at: float = field(default_factory=time.time)
-  iteration: Optional[int] = None
+  iteration: int | None = None
   """Training iteration when it was said, when the run was live to hear it."""
 
   interpretation: str = ""
@@ -170,10 +171,10 @@ class Feedback:
   keeps the ledger from reading as though every remark moved the project.
   """
 
-  affects: List[str] = field(default_factory=list)
+  affects: list[str] = field(default_factory=list)
   """Other run ids this remark changed. The entry lives on the run that was
   live when it was said; this is its blast radius."""
-  artifacts: List[str] = field(default_factory=list)
+  artifacts: list[str] = field(default_factory=list)
   """Paths that exist because of it."""
 
   @property
@@ -185,7 +186,7 @@ class Feedback:
     """An instruction with no recorded response."""
     return self.kind in OWED_A_RESPONSE and not self.answered
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "text": self.text,
         "kind": self.kind,
@@ -200,7 +201,7 @@ class Feedback:
     }
 
   @staticmethod
-  def from_dict(d: Any) -> "Feedback":
+  def from_dict(d: Any) -> Feedback:
     # Tolerate a bare string: that is what a hand-edited record and a rough
     # import both produce, and losing the remark would be worse than defaulting
     # its kind.
@@ -228,11 +229,11 @@ class Weights:
   run: str
   checkpoint: str = ""
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {"run": self.run, "checkpoint": self.checkpoint}
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "Weights":
+  def from_dict(d: dict[str, Any]) -> Weights:
     return Weights(run=d["run"], checkpoint=d.get("checkpoint", ""))
 
   def describe(self) -> str:
@@ -252,7 +253,7 @@ class Falsifier:
   """
 
   prose: str = ""
-  conditions: List[Condition] = field(default_factory=list)
+  conditions: list[Condition] = field(default_factory=list)
   check_after: int = 0
   """Iteration before which the falsifier means nothing.
 
@@ -261,7 +262,7 @@ class Falsifier:
   read-point: "do not read this run before N".
   """
 
-  def check(self, metrics: Dict[str, float], iteration: Optional[int] = None) -> Dict[str, Any]:
+  def check(self, metrics: dict[str, float], iteration: int | None = None) -> dict[str, Any]:
     """Evaluate every condition against a metric snapshot.
 
     Returns ``fired`` (any condition met), ``undecidable`` (a condition whose
@@ -278,7 +279,7 @@ class Falsifier:
           "prose": self.prose,
       }
 
-    checks: List[Dict[str, Any]] = []
+    checks: list[dict[str, Any]] = []
     fired = False
     undecidable = False
     for condition in self.conditions:
@@ -306,7 +307,7 @@ class Falsifier:
   def is_empty(self) -> bool:
     return not self.prose.strip() and not self.conditions
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "prose": self.prose,
         "conditions": [c.to_dict() for c in self.conditions],
@@ -314,7 +315,7 @@ class Falsifier:
     }
 
   @staticmethod
-  def from_dict(d: Any) -> "Falsifier":
+  def from_dict(d: Any) -> Falsifier:
     # Tolerate a bare string, which is what a human writes first.
     if isinstance(d, str):
       return Falsifier(prose=d)
@@ -352,7 +353,7 @@ class Lease:
   ttl_seconds: float = 900.0
   owner: str = "runner"
 
-  def expired(self, now: Optional[float] = None) -> bool:
+  def expired(self, now: float | None = None) -> bool:
     return (now or time.time()) - self.renewed_at > self.ttl_seconds
 
   def holder_is_gone(self) -> bool:
@@ -378,14 +379,14 @@ class Lease:
       return False
     return False
 
-  def dead(self, now: Optional[float] = None) -> bool:
+  def dead(self, now: float | None = None) -> bool:
     """Expired, or held by a process that is demonstrably gone."""
     return self.expired(now) or self.holder_is_gone()
 
-  def age_seconds(self, now: Optional[float] = None) -> float:
+  def age_seconds(self, now: float | None = None) -> float:
     return (now or time.time()) - self.acquired_at
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "slot": self.slot,
         "holder": self.holder,
@@ -398,7 +399,7 @@ class Lease:
     }
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "Lease":
+  def from_dict(d: dict[str, Any]) -> Lease:
     return Lease(
         slot=d["slot"],
         holder=d.get("holder", ""),
@@ -450,18 +451,18 @@ class RunRecord:
   hypothesis: str = ""
   prediction: str = ""
   falsifier: Falsifier = field(default_factory=Falsifier)
-  change: List[str] = field(default_factory=list)
+  change: list[str] = field(default_factory=list)
 
   # Written after the run.
   outcome: str = ""
-  metrics: List[List[str]] = field(default_factory=list)
+  metrics: list[list[str]] = field(default_factory=list)
   """Free ``[name, value]`` string pairs.
 
   Deliberately unstructured: this is the slot that has to hold a number, a fired
   falsifier, and "9.5 h of GPU with no run record" equally well.
   """
 
-  feedback: List[Feedback] = field(default_factory=list)
+  feedback: list[Feedback] = field(default_factory=list)
   """What humans said about this run, oldest first. Append-only.
 
   Written whenever it arrives rather than at either of the two write points:
@@ -470,32 +471,32 @@ class RunRecord:
   """
 
   # Ancestry.
-  parent: Optional[str] = None
+  parent: str | None = None
   """Config ancestry. The recipe is the fold of ``change`` from the root."""
-  weights: Optional[Weights] = None
+  weights: Weights | None = None
   """Warm start, or None for from scratch. A different edge from ``parent``."""
-  prior: Optional[str] = None
+  prior: str | None = None
   """Resource dependency -- a motion prior, a pretrained encoder."""
 
   # Provenance.
   proposed_by: str = "human"
   """``human``, ``orchestrator``, or the name of the policy that proposed it."""
-  session: Optional[str] = None
+  session: str | None = None
   """The rlmcp session directory, so metrics and events stay recoverable."""
-  config: Dict[str, Any] = field(default_factory=dict)
+  config: dict[str, Any] = field(default_factory=dict)
   """Resolved parameter snapshot at launch -- not the source file."""
-  code: Dict[str, Any] = field(default_factory=dict)
+  code: dict[str, Any] = field(default_factory=dict)
   """What the task package was at launch -- see :mod:`rlmcp.records.snapshot`.
 
   The config half of a recipe has always been recorded; this is the other half.
   Empty means nobody stamped it, which is what every record written before this
   field existed says, and what a run launched outside a repository says too.
   """
-  links: Dict[str, str] = field(default_factory=dict)
-  assets: Dict[str, List[List[str]]] = field(default_factory=dict)
+  links: dict[str, str] = field(default_factory=dict)
+  assets: dict[str, list[list[str]]] = field(default_factory=dict)
   """``{"videos": [[path, caption]], "plots": [[path, caption]]}``."""
-  lease: Optional[Lease] = None
-  tags: List[str] = field(default_factory=list)
+  lease: Lease | None = None
+  tags: list[str] = field(default_factory=list)
 
   created_at: float = field(default_factory=time.time)
   updated_at: float = field(default_factory=time.time)
@@ -545,7 +546,7 @@ class RunRecord:
       sentence = sentence[: limit - 1].rsplit(" ", 1)[0] + "…"
     return sentence
 
-  def outstanding_feedback(self) -> List[Tuple[int, "Feedback"]]:
+  def outstanding_feedback(self) -> list[tuple[int, Feedback]]:
     """Instructions with no recorded response, with their indices.
 
     The index travels with the entry because it is how a response is later
@@ -553,14 +554,14 @@ class RunRecord:
     """
     return [(i, f) for i, f in enumerate(self.feedback) if f.outstanding]
 
-  def feedback_kinds(self) -> Dict[str, int]:
+  def feedback_kinds(self) -> dict[str, int]:
     """``{kind: count}``, for a badge that says what kind without opening it."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for entry in self.feedback:
       counts[entry.kind] = counts.get(entry.kind, 0) + 1
     return counts
 
-  def summary(self) -> Dict[str, Any]:
+  def summary(self) -> dict[str, Any]:
     """The row form, for listings and index tables.
 
     ``headline`` here is the *display* sentence -- :meth:`one_line`, so written
@@ -591,7 +592,7 @@ class RunRecord:
 
   # Serialisation.
 
-  def to_dict(self) -> Dict[str, Any]:
+  def to_dict(self) -> dict[str, Any]:
     return {
         "schema_version": self.schema_version,
         "id": self.id,
@@ -626,7 +627,7 @@ class RunRecord:
     }
 
   @staticmethod
-  def from_dict(d: Dict[str, Any]) -> "RunRecord":
+  def from_dict(d: dict[str, Any]) -> RunRecord:
     weights = d.get("weights")
     lease = d.get("lease")
     return RunRecord(
@@ -664,8 +665,8 @@ class RunRecord:
 
 
 def fold_recipe(
-    record_id: str, records: Dict[str, RunRecord]
-) -> List[Tuple[str, List[str]]]:
+    record_id: str, records: dict[str, RunRecord]
+) -> list[tuple[str, list[str]]]:
   """The recipe at a node: every ``change`` from the root down to it.
 
   Nothing stores this. Walking the config edges is what keeps provenance and the
@@ -674,8 +675,8 @@ def fold_recipe(
   Raises:
     ValueError: if the ``parent`` chain contains a cycle.
   """
-  chain: List[Tuple[str, List[str]]] = []
-  seen: List[str] = []
+  chain: list[tuple[str, list[str]]] = []
+  seen: list[str] = []
   current = records.get(record_id)
   while current is not None:
     if current.id in seen:
@@ -689,11 +690,11 @@ def fold_recipe(
   return chain
 
 
-def ancestors(record_id: str, records: Dict[str, RunRecord]) -> List[str]:
+def ancestors(record_id: str, records: dict[str, RunRecord]) -> list[str]:
   """Ids from the root down to (and including) ``record_id``."""
   return [rid for rid, _ in fold_recipe(record_id, records)]
 
 
-def children(record_id: str, records: Sequence[RunRecord]) -> List[RunRecord]:
+def children(record_id: str, records: Sequence[RunRecord]) -> list[RunRecord]:
   """Records whose config parent is ``record_id``."""
   return [r for r in records if r.parent == record_id]

@@ -13,18 +13,19 @@ out with a note; it never takes a training run down.
 from __future__ import annotations
 
 import warnings
-from typing import Any, Callable, Dict, Iterable, List, Optional, Type
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from rlmcp.core.extensions import Extension
 
 ENTRY_POINT_GROUP = "rlmcp.extensions"
 """Entry point group a third-party package uses to publish an extension."""
 
-_REGISTRY: Dict[str, Type[Extension]] = {}
+_REGISTRY: dict[str, type[Extension]] = {}
 _PLUGINS_LOADED = False
 
 
-def register(extension_type: Type[Extension]) -> Type[Extension]:
+def register(extension_type: type[Extension]) -> type[Extension]:
   """Class decorator that makes an extension discoverable.
 
   The class's ``name`` is its identifier -- in the status payload, in checkpoint
@@ -52,13 +53,13 @@ def unregister(name: str) -> bool:
   return _REGISTRY.pop(name, None) is not None
 
 
-def registered() -> Dict[str, Type[Extension]]:
+def registered() -> dict[str, type[Extension]]:
   """Every registered extension type, keyed by name."""
   load_plugins()
   return dict(_REGISTRY)
 
 
-def catalog() -> List[Dict[str, Any]]:
+def catalog() -> list[dict[str, Any]]:
   """What is installed, for ``rlmcp extensions`` and for documentation."""
   out = []
   for name, extension_type in sorted(registered().items()):
@@ -73,7 +74,7 @@ def catalog() -> List[Dict[str, Any]]:
   return out
 
 
-def load_plugins() -> List[str]:
+def load_plugins() -> list[str]:
   """Import extensions published by other packages via entry points.
 
   Runs once. A plugin that fails to import warns and is skipped, because a
@@ -89,7 +90,7 @@ def load_plugins() -> List[str]:
   except ImportError:  # pragma: no cover - Python < 3.8.
     return []
 
-  loaded: List[str] = []
+  loaded: list[str] = []
   try:
     points = entry_points(group=ENTRY_POINT_GROUP)
   except TypeError:  # pragma: no cover - older importlib.metadata API.
@@ -113,10 +114,10 @@ def load_plugins() -> List[str]:
 
 def discover(
     env: Any,
-    plot_sink: Optional[Callable[..., Any]] = None,
-    include: Optional[Iterable[str]] = None,
-    exclude: Optional[Iterable[str]] = None,
-) -> List[Extension]:
+    plot_sink: Callable[..., Any] | None = None,
+    include: Iterable[str] | None = None,
+    exclude: Iterable[str] | None = None,
+) -> list[Extension]:
   """Instantiate every registered extension this environment supports.
 
   Args:
@@ -133,7 +134,7 @@ def discover(
   include_set = set(include) if include is not None else None
   exclude_set = set(exclude or ())
 
-  found: List[Extension] = []
+  found: list[Extension] = []
   for name, extension_type in sorted(registered().items()):
     if include_set is not None and name not in include_set:
       continue
@@ -151,8 +152,8 @@ def discover(
 
 
 def _build(
-    extension_type: Type[Extension], env: Any, plot_sink: Optional[Callable[..., Any]]
-) -> Optional[Extension]:
+    extension_type: type[Extension], env: Any, plot_sink: Callable[..., Any] | None
+) -> Extension | None:
   """Construct an extension, with or without a plot sink, tolerating failure.
 
   *Deprecated mechanism:* the ``(env, plot_sink)`` arity probe is kept only so

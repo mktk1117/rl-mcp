@@ -66,6 +66,12 @@ htmlcov/
 /records/
 /records
 
+# A play or train session writes here when nobody said where. Same reasoning as
+# `/records` above, and the same anchoring: a session is a run artifact, not the
+# tool. Four of these files reached a pull request before this line existed.
+/rlmcp_session/
+/rlmcp_session
+
 # A run's raw log is not its record, and is regenerable by re-running.
 *.log
 MUJOCO_LOG.TXT

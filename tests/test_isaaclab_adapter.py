@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pytest
@@ -26,7 +26,7 @@ from rlmcp.core.parameters.spec import ParameterCategory
 class TermCfg:
   func: Any = None
   weight: float = 0.0
-  params: Dict[str, Any] = field(default_factory=dict)
+  params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -67,7 +67,7 @@ class EnvCfg:
 
 
 class FakeArticulation:
-  def __init__(self, names: List[str]):
+  def __init__(self, names: list[str]):
     self.joint_names = list(names)
     self.data = SimpleNamespace(
         joint_pos=torch.zeros(4, len(names)),
@@ -83,9 +83,9 @@ class FakeArticulation:
 class FakeScene:
   """IsaacLab keeps articulations in their own mapping, unlike mjlab."""
 
-  def __init__(self, articulations: Dict[str, FakeArticulation]):
+  def __init__(self, articulations: dict[str, FakeArticulation]):
     self.articulations = articulations
-    self.sensors: Dict[str, Any] = {}
+    self.sensors: dict[str, Any] = {}
 
   def __getitem__(self, key: str) -> Any:
     return self.articulations[key]
@@ -94,11 +94,11 @@ class FakeScene:
 class FakeManager:
   """IsaacLab's manager API, as much of it as discovery uses."""
 
-  def __init__(self, terms: Dict[str, TermCfg]):
+  def __init__(self, terms: dict[str, TermCfg]):
     self._terms = dict(terms)
 
   @property
-  def active_terms(self) -> List[str]:
+  def active_terms(self) -> list[str]:
     return list(self._terms)
 
   def get_term_cfg(self, name: str) -> TermCfg:
@@ -128,7 +128,7 @@ class FakeViewportCameraController:
   these tests exist to pin.
   """
 
-  def __init__(self, cfg: "ViewerCfg", num_envs: int):
+  def __init__(self, cfg: ViewerCfg, num_envs: int):
     self.cfg = cfg
     self._num_envs = num_envs
 
@@ -182,9 +182,9 @@ class FakeIsaacLabEnv:
         FakeViewportCameraController(self.cfg.viewer, self.num_envs)
         if camera == "viewport" else None)
     self.video_recorder = FakeVideoRecorder() if camera == "recorder" else None
-    self.render_calls: List[int] = []
-    self.render_anchors: List[Any] = []
-    self.reset_calls: List[List[int]] = []
+    self.render_calls: list[int] = []
+    self.render_anchors: list[Any] = []
+    self.reset_calls: list[list[int]] = []
     self._frame = frame
 
   def render(self, recompute: bool = False):

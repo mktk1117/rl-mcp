@@ -33,6 +33,65 @@ Commands that need the robot to move (video, traces, diagnosis) are deferred:
 the request stays open, `on_step` feeds it frames, and the response is written
 when the job completes. Everything else answers within one iteration.
 
+## The client surface is the protocol
+
+The directory is how the two sides talk *today*. What they are allowed to say
+is a smaller thing, and it has a name: `SessionClient` in
+[`rlmcp/session.py`](../rlmcp/session.py). Seventeen names, listed in
+`WIRE_SURFACE`:
+
+```
+address  key  name                       what to call this run
+info  status  params                     static, live, tunable
+metrics  metrics_count  events           history
+list_artifacts  read_artifact            what it produced
+submit  poll  wait  call                 commands
+liveness  liveness_info                  is anyone home
+```
+
+`Session` is one implementation of it — the local one, where reaching a run
+means reading its directory. It is the only one today, and on a single machine
+it is the right default: no socket, nothing to crash, and `cat` still works
+when something is wrong.
+
+It exists because it will not be the only one. A run on a GPU box that the
+reader cannot see needs a second implementation over a connection, and the cost
+of writing that is decided here rather than then: **the CLI, the MCP server and
+rl-mcp-studio are written against these names and no others**, so a second
+transport changes one layer instead of every caller.
+
+Which is why two things a filesystem gives away for free are methods:
+`list_artifacts` and `read_artifact`. A caller that reaches a plot by joining
+`session.dir / "artifacts"` compiles, works locally, and cannot be made to work
+at all once the file is on another machine. The same reasoning makes `address`
+opaque: it is a path today and a URL later, and nothing may parse it.
+
+Three streams carry a `seq`: `status.json`, and every row of `metrics.jsonl`
+and `events.jsonl`. It is what lets a reader ask for *what is new* --
+`metrics(since_seq=n)`, `events(since_seq=n)` -- instead of refetching a log
+that only grows, which is the difference between polling a directory and
+polling a network. Numbers are contiguous and one-based, so the last row's
+`seq` is the row count and a cursor read costs two backward block reads rather
+than a scan. A trainer restarted onto the same directory continues the count
+instead of replaying it, because a reader holding `seq=7` must never be handed
+a *different* row 8.
+
+`seq` in a metrics row is bookkeeping sitting in a row of measurements, which
+is a trap: every reader that asks what a run logged walks the row's keys. So
+the non-measurements are named once, in `RESERVED_METRIC_KEYS`, and the four
+places that walked those keys use it. Adding a field to a metrics row without
+adding it there puts that field on the CLI's metric list, on a plot axis, and
+in the studio's headline.
+
+What is still path-shaped, honestly: the trainer side (which owns its
+directory, and should), the registry (machine-local by definition),
+`read_ladder` in `core/replay.py` (a run's `curriculum.json`, which is config
+rather than telemetry and has no home on the protocol yet), `task_from_session`
+in `records/link.py` (deliberate -- it runs on the training process's critical
+path, where a half-written session file must cost the field and not the run),
+and `play`, which needs a real checkpoint file. Those are the next things to
+move, not things that are fine.
+
 ## Where the code is
 
 ```

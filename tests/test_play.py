@@ -11,7 +11,12 @@ Nothing here imports a simulator, and every fixture is built in ``tmp_path``.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
+import types
+from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import pytest
 
@@ -688,8 +693,8 @@ def test_the_session_lists_what_else_could_be_loaded(play_lab, tmp_path):
 def test_a_requested_stop_is_reported_as_a_result_not_as_an_exception(play_lab):
   """`rlmcp stop` against a play session has to end like closing the window:
   the loop unwinds, and what comes back describes the stop."""
-  from rlmcp.play import _stop_state
   from rlmcp.core.controller import SessionStopped
+  from rlmcp.play import _stop_state
 
   assert _stop_state(play_lab) == ""
 
@@ -784,6 +789,57 @@ def test_an_untrained_play_never_looks_for_a_checkpoint(tmp_path, monkeypatch):
   assert looked == []
 
 
+def test_an_untrained_run_asks_for_no_replay_at_all(monkeypatch, play_lab):
+  """The regression: `replay` stayed true with no checkpoint, so the branch
+  that warns "no rlmcp session found next to this checkpoint" ran for a run
+  that never had one -- sending whoever read it looking for a session
+  directory that was never supposed to exist. `--set` still has to arrive."""
+  seen = {}
+
+  def record(cfg, lab, session_dir):
+    seen["cfg"] = cfg
+    raise PlayError("stop here: the conditions are decided")
+
+  monkeypatch.setattr("rlmcp.play._choose_gl_backend", lambda cfg: None)
+  monkeypatch.setattr("rlmcp.play.build_env",
+                      lambda cfg, task, session_dir: (None, play_lab, None, None))
+  monkeypatch.setattr("rlmcp.play._restore_conditions", record)
+
+  with pytest.raises(PlayError, match="stop here"):
+    run_play(PlayConfig(policy="zero", task="Some-Task",
+                        overrides={"reward.action_rate_l2.weight": -0.5}))
+
+  assert seen["cfg"].replay is False
+  assert seen["cfg"].overrides == {"reward.action_rate_l2.weight": -0.5}
+
+
+def test_a_policy_free_run_restores_nothing_and_warns_about_nothing(
+    play_lab, capsys):
+  """What the caller ends up seeing: the task's own play configuration, the
+  `--set` overrides on top, and no note about a missing session."""
+  from rlmcp.play import _restore_conditions
+
+  conditions, restored = _restore_conditions(
+      PlayConfig(policy="zero", task="Some-Task", replay=False,
+                 overrides={"reward.action_rate_l2.weight": -0.5}),
+      play_lab, None)
+
+  assert conditions.warnings == ()
+  assert restored["parameters"] == {"reward.action_rate_l2.weight": -0.5}
+  assert "nothing to replay" not in capsys.readouterr().out
+
+
+def test_a_checkpoint_with_no_session_beside_it_still_warns(play_lab):
+  """The other half of the same branch, and the reason it exists: here the
+  conditions really are missing, and an environment silently back at rung zero
+  makes a good policy look like a bad one."""
+  from rlmcp.play import _restore_conditions
+
+  conditions, _ = _restore_conditions(PlayConfig(quiet=True), play_lab, None)
+
+  assert any("nothing to replay" in w for w in conditions.warnings)
+
+
 def test_the_policy_choice_round_trips_through_the_command_line():
   import argparse
 
@@ -792,6 +848,102 @@ def test_the_policy_choice_round_trips_through_the_command_line():
 
   assert config_from_args(args, {}).policy == "random"
   assert "checkpoint" in POLICIES
+
+
+# ── one server, and mjlab's panel on it ───────────────────────────────────
+class _RecordingViewer:
+  """A stand-in for mjlab's viewer that remembers how it was built."""
+
+  seen: ClassVar[dict[str, Any]] = {}
+
+  def __init__(self, vec_env, policy, **kwargs):
+    _RecordingViewer.seen = dict(kwargs)
+
+  def run(self) -> None:
+    pass
+
+
+def _stub_viewers(monkeypatch) -> None:
+  """Stand in for both mjlab viewers.
+
+  Patched on `mjlab.viewer`, not on `rlmcp.play`: `_view` imports them inside
+  the function, so the name this test has to replace is the one it reads.
+
+  mjlab is not a test dependency -- CI installs neither it nor viser -- so when
+  it is absent the module gets stood up rather than the test skipped. What
+  these three check is which server rlmcp hands the viewer, and that is rlmcp's
+  wiring: it can be wrong on a machine with no simulator on it, so it has to be
+  checkable on one.
+  """
+  # `find_spec`, not a failed import: an mjlab that *is* installed but whose
+  # viewer will not import is a real failure, and standing a blank module up
+  # over it would turn that into three tests quietly passing.
+  if importlib.util.find_spec("mjlab") is None:
+    mjlab = types.ModuleType("mjlab")
+    mjlab_viewer = types.ModuleType("mjlab.viewer")
+    mjlab.viewer = mjlab_viewer
+    monkeypatch.setitem(sys.modules, "mjlab", mjlab)
+    monkeypatch.setitem(sys.modules, "mjlab.viewer", mjlab_viewer)
+  else:
+    import mjlab.viewer as mjlab_viewer
+
+  monkeypatch.setattr(
+      mjlab_viewer, "NativeMujocoViewer", _RecordingViewer, raising=False)
+  monkeypatch.setattr(
+      mjlab_viewer, "ViserPlayViewer", _RecordingViewer, raising=False)
+  _RecordingViewer.seen = {}
+
+
+def _viewer_cfg(mode: str):
+  from rlmcp.play import PlayConfig
+  return PlayConfig(checkpoint=None, mode=mode, task="Example-Task-v0")
+
+
+def test_the_viewer_is_given_the_session_s_own_server(play_lab, monkeypatch):
+  """The bug: a play session served the same environment twice -- mjlab's
+  viewer on its own port with the full GUI, and the session's live view on the
+  port `status` publishes with a much smaller one. Whoever read `status` went
+  to the poorer panel. One server now, and mjlab draws on it."""
+  import rlmcp.play as play_module
+
+  sentinel = object()
+  monkeypatch.setattr(play_lab.live_view, "host_for_viewer", lambda: sentinel)
+  _stub_viewers(monkeypatch)
+
+  env = SimpleNamespace(rlmcp=play_lab)
+  play_module._view(_viewer_cfg("viser"), env, object(), object())
+
+  assert _RecordingViewer.seen.get("viser_server") is sentinel
+
+
+def test_the_native_viewer_is_not_handed_a_viser_server(play_lab, monkeypatch):
+  """`--mode native` opens a window, not a port, and would reject the argument."""
+  import rlmcp.play as play_module
+
+  asked = []
+  monkeypatch.setattr(play_lab.live_view, "host_for_viewer",
+                      lambda: asked.append(1))
+  _stub_viewers(monkeypatch)
+
+  env = SimpleNamespace(rlmcp=play_lab)
+  play_module._view(_viewer_cfg("native"), env, object(), object())
+
+  assert not asked, "a native viewer needs no server bound on its behalf"
+  assert "viser_server" not in _RecordingViewer.seen
+
+
+def test_an_install_without_viser_still_plays(play_lab, monkeypatch):
+  """`host_for_viewer` answers None when no server could be opened. That is the
+  old behaviour exactly: let the viewer open whatever it can."""
+  import rlmcp.play as play_module
+
+  monkeypatch.setattr(play_lab.live_view, "host_for_viewer", lambda: None)
+  _stub_viewers(monkeypatch)
+
+  env = SimpleNamespace(rlmcp=play_lab)
+  play_module._view(_viewer_cfg("viser"), env, object(), object())
+
+  assert "viser_server" not in _RecordingViewer.seen
 
 
 # ── holding an environment open, with nothing serving it ─────────────────

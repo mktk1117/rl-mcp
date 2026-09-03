@@ -33,12 +33,14 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # The decorator-based server class moved between SDK generations: it is
 # ``MCPServer`` in mcp>=2, ``FastMCP`` in mcp 1.x, and the standalone ``fastmcp``
 # package outside the official SDK. The surface we use (tool/resource decorators,
 # Image, run) is the same in all three.
+from rlmcp.session import RESERVED_METRIC_KEYS, Session, iter_sessions
+
 SDK_MISSING = (
     "No MCP server SDK found in this interpreter. Install one with "
     "`pip install mcp` (or `uv pip install mcp`) -- it is deliberately an "
@@ -46,10 +48,12 @@ SDK_MISSING = (
 )
 
 try:
-  from mcp.server.mcpserver import Image, MCPServer as _Server
+  from mcp.server.mcpserver import Image
+  from mcp.server.mcpserver import MCPServer as _Server
 except ImportError:
   try:
-    from mcp.server.fastmcp import FastMCP as _Server, Image
+    from mcp.server.fastmcp import FastMCP as _Server
+    from mcp.server.fastmcp import Image
   except ImportError:
     try:
       from fastmcp import FastMCP as _Server  # type: ignore
@@ -63,8 +67,6 @@ except ImportError:
       Image = None  # type: ignore[assignment]
 
 MCPServer = _Server
-
-from rlmcp.session import Session, iter_sessions
 
 DEFAULT_TIMEOUT = 180.0
 
@@ -81,10 +83,10 @@ class _SessionHandle:
   through the ``switch_session`` tool.
   """
 
-  def __init__(self, session_dir: Optional[str], root: Optional[str]):
+  def __init__(self, session_dir: str | None, root: str | None):
     self.explicit = session_dir
     self.root = root or "."
-    self._pinned: Optional[Session] = None
+    self._pinned: Session | None = None
 
   def get(self) -> Session:
     if self._pinned is None:
@@ -110,26 +112,16 @@ class _SessionHandle:
       self._pinned = found
     else:
       self._pinned = Session.open(target)
-    self.explicit = str(self._pinned.dir)
+    self.explicit = self._pinned.address
     return self._pinned
 
 
-def _session_key(session: Session) -> str:
-  """Short id stamped into every payload: enough to tell runs apart.
-
-  Session directories are conventionally ``<run_dir>/rlmcp``, so the basename
-  alone would name every run the same; the parent disambiguates.
-  """
-  parent = session.dir.parent.name
-  return f"{parent}/{session.dir.name}" if parent else session.dir.name
-
-
-def _dead_error(session: Session, live: Dict[str, Any], cmd: str) -> Dict[str, Any]:
+def _dead_error(session: Session, live: dict[str, Any], cmd: str) -> dict[str, Any]:
   """What a live-command tool answers once the pinned trainer is gone."""
   out = {
       "ok": False,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "error": (
           f"The training process for this session is dead; '{cmd}' needs a "
           "live trainer and will not be serviced."
@@ -147,7 +139,8 @@ def _dead_error(session: Session, live: Dict[str, Any], cmd: str) -> Dict[str, A
   return out
 
 
-def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT, **args: Any) -> Dict[str, Any]:
+def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT,
+          **args: Any) -> dict[str, Any]:
   """Send ``cmd`` to the pinned trainer; refuse up front when it is dead.
 
   "Dead" here is :meth:`Session.liveness`, not the bare pid: a pid that exists
@@ -165,8 +158,8 @@ def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT, **
     result = response.result if isinstance(response.result, dict) else {"result": response.result}
     # "session" is reserved: the server's identity stamp must win over any
     # same-named key a command result carries.
-    return {"ok": True, **result, "session": _session_key(session)}
-  return {"ok": False, "session": _session_key(session), "error": response.error}
+    return {"ok": True, **result, "session": session.key}
+  return {"ok": False, "session": session.key, "error": response.error}
 
 
 # Post-mortem: once the trainer is dead, everything worth asking is still on
@@ -175,23 +168,23 @@ def _call(handle: _SessionHandle, cmd: str, timeout: float = DEFAULT_TIMEOUT, **
 # process (parameter edits, rendering, checkpoints) refuse.
 
 
-def _offline_metric_names(session: Session, contains: Optional[str] = None) -> List[str]:
+def _offline_metric_names(session: Session, contains: str | None = None) -> list[str]:
   rows = session.metrics(last_n=1)
-  names = sorted({k for row in rows for k in row if k not in ("iteration", "t")})
+  names = sorted({k for row in rows for k in row if k not in RESERVED_METRIC_KEYS})
   if contains:
     names = [n for n in names if contains.lower() in n.lower()]
   return names
 
 
 def _offline_metrics_payload(
-    session: Session, names: Optional[List[str]], last_n: int
-) -> Dict[str, Any]:
+    session: Session, names: list[str] | None, last_n: int
+) -> dict[str, Any]:
   from rlmcp.cli import _default_metric_names, _offline_series
 
   chosen = list(names) if names else _default_metric_names(session)
-  payload: Dict[str, Any] = {
+  payload: dict[str, Any] = {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "metrics.jsonl",
       "metrics": _offline_series(session, chosen, last_n=last_n),
@@ -211,11 +204,11 @@ def _offline_metrics_payload(
 
 def _offline_plot_payload(
     session: Session,
-    names: Optional[List[str]],
+    names: list[str] | None,
     last_n: int,
     smooth: int,
-    title: Optional[str] = None,
-) -> Dict[str, Any]:
+    title: str | None = None,
+) -> dict[str, Any]:
   from rlmcp.cli import _default_metric_names, _offline_series
 
   try:
@@ -223,7 +216,7 @@ def _offline_plot_payload(
   except ImportError as exc:
     return {
         "ok": False,
-        "session": _session_key(session),
+        "session": session.key,
         "error": f"Offline plotting needs matplotlib in the server's interpreter ({exc}).",
     }
   chosen = list(names) if names else _default_metric_names(session)
@@ -231,7 +224,7 @@ def _offline_plot_payload(
   if not any(series.values()):
     return {
         "ok": False,
-        "session": _session_key(session),
+        "session": session.key,
         "error": f"No data for {chosen}.",
         "available": _offline_metric_names(session)[:40],
     }
@@ -242,7 +235,7 @@ def _offline_plot_payload(
   ]
   png = plot_metric_series(
       {k: [tuple(p) for p in v] for k, v in series.items()},
-      title=title or f"{session.dir.parent.name} (offline)",
+      title=title or f"{session.name} (offline)",
       smooth_window=max(1, smooth),
       markers=markers,
   )
@@ -250,7 +243,7 @@ def _offline_plot_payload(
   path.write_bytes(png)
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "metrics.jsonl",
       "image_path": str(path),
@@ -259,8 +252,8 @@ def _offline_plot_payload(
 
 
 def _offline_parameters_payload(
-    session: Session, category: Optional[str], contains: Optional[str]
-) -> Dict[str, Any]:
+    session: Session, category: str | None, contains: str | None
+) -> dict[str, Any]:
   schema = session.params()
   items = {
       k: v
@@ -270,7 +263,7 @@ def _offline_parameters_payload(
   }
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "live": False,
       "source": "params.json",
       "count": len(items),
@@ -278,13 +271,13 @@ def _offline_parameters_payload(
   }
 
 
-def _status_payload(handle: _SessionHandle) -> Dict[str, Any]:
+def _status_payload(handle: _SessionHandle) -> dict[str, Any]:
   session = handle.get()
   live = session.liveness_info()
   return {
       "ok": True,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "state": live["state"],
       "alive": live["pid_alive"],
       "heartbeat_age_s": live["heartbeat_age_s"],
@@ -293,62 +286,48 @@ def _status_payload(handle: _SessionHandle) -> Dict[str, Any]:
   }
 
 
-def _events_payload(session: Session, last_n: int) -> Dict[str, Any]:
+def _events_payload(session: Session, last_n: int) -> dict[str, Any]:
   rows = session.events(last_n=last_n)
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "count": len(rows),
       "events": rows,
   }
 
 
-def _artifacts_payload(session: Session) -> Dict[str, Any]:
-  rows = []
-  if session.artifacts.exists():
-    for path in session.artifacts.iterdir():
-      try:
-        stat = path.stat()
-      except OSError:
-        continue
-      if path.is_file():
-        rows.append({
-            "name": path.name,
-            "path": str(path),
-            "bytes": stat.st_size,
-            "modified_at": stat.st_mtime,
-        })
-  rows.sort(key=lambda r: r["modified_at"], reverse=True)
+def _artifacts_payload(session: Session) -> dict[str, Any]:
+  rows = session.list_artifacts()
   return {
       "ok": True,
-      "session": _session_key(session),
+      "session": session.key,
       "count": len(rows),
       "artifacts": rows,
   }
 
 
-def _sessions_payload(handle: _SessionHandle) -> List[Dict[str, Any]]:
-  pinned: Optional[str] = None
+def _sessions_payload(handle: _SessionHandle) -> list[dict[str, Any]]:
+  pinned: str | None = None
   if handle._pinned is not None:
-    pinned = str(handle._pinned.dir)
+    pinned = handle._pinned.address
   out = []
   for session in iter_sessions(handle.root):  # Newest first, by started_at.
     info = session.info()
     live = session.liveness_info()
     out.append({
-        "session_dir": str(session.dir),
-        "session": _session_key(session),
+        "session_dir": session.address,
+        "session": session.key,
         "task": info.get("task"),
         "num_envs": info.get("num_envs"),
         "started_at": info.get("started_at"),
         "state": live["state"],
         "iteration": session.status().get("iteration"),
-        "pinned": str(session.dir) == pinned,
+        "pinned": session.address == pinned,
     })
   return out
 
 
-def _switch_payload(handle: _SessionHandle, target: str) -> Dict[str, Any]:
+def _switch_payload(handle: _SessionHandle, target: str) -> dict[str, Any]:
   try:
     session = handle.switch(target)
   except (FileNotFoundError, RuntimeError) as exc:
@@ -356,8 +335,8 @@ def _switch_payload(handle: _SessionHandle, target: str) -> Dict[str, Any]:
   info = session.info()
   return {
       "ok": True,
-      "session": _session_key(session),
-      "session_dir": str(session.dir),
+      "session": session.key,
+      "session_dir": session.address,
       "state": session.liveness(),
       "task": info.get("task"),
       "started_at": info.get("started_at"),
@@ -369,18 +348,18 @@ def _switch_payload(handle: _SessionHandle, target: str) -> Dict[str, Any]:
 # live/offline routing is plain to read (and testable without an MCP client).
 
 
-def _list_metrics_impl(handle: _SessionHandle, contains: Optional[str]) -> Dict[str, Any]:
+def _list_metrics_impl(handle: _SessionHandle, contains: str | None) -> dict[str, Any]:
   session = handle.get()
   if session.liveness() == "dead":
     names = _offline_metric_names(session, contains=contains)
-    return {"ok": True, "session": _session_key(session), "live": False,
+    return {"ok": True, "session": session.key, "live": False,
             "count": len(names), "metrics": names}
   return _call(handle, "list_metrics", contains=contains)
 
 
 def _get_metrics_impl(
-    handle: _SessionHandle, names: Optional[List[str]], last_n: int
-) -> Dict[str, Any]:
+    handle: _SessionHandle, names: list[str] | None, last_n: int
+) -> dict[str, Any]:
   session = handle.get()
   if session.liveness() == "dead":
     return _offline_metrics_payload(session, names, last_n)
@@ -389,10 +368,10 @@ def _get_metrics_impl(
 
 def _plot_metrics_impl(
     handle: _SessionHandle,
-    names: Optional[List[str]],
+    names: list[str] | None,
     last_n: int,
     smooth: int,
-    title: Optional[str],
+    title: str | None,
 ) -> Any:
   session = handle.get()
   if session.liveness() == "dead":
@@ -400,12 +379,12 @@ def _plot_metrics_impl(
   else:
     payload = _call(handle, "plot_metrics", names=names, last_n=last_n,
                     smooth=smooth, title=title)
-  return _image_result(payload)
+  return _image_result(payload, session=session)
 
 
 def _list_parameters_impl(
-    handle: _SessionHandle, category: Optional[str], contains: Optional[str]
-) -> Dict[str, Any]:
+    handle: _SessionHandle, category: str | None, contains: str | None
+) -> dict[str, Any]:
   session = handle.get()
   if session.liveness() == "dead":
     return _offline_parameters_payload(session, category, contains)
@@ -430,18 +409,26 @@ def _image_format(suffix: str) -> str:
 
 
 def _prepare_image(
-    path: Path, byte_limit: int = IMAGE_BYTE_LIMIT, max_dim: int = IMAGE_MAX_DIM
-) -> Tuple[Optional[bytes], str, Optional[str]]:
-  """Read an image, re-encoding it when it would blow the reply budget.
+    source: Path | bytes, byte_limit: int = IMAGE_BYTE_LIMIT,
+    max_dim: int = IMAGE_MAX_DIM, suffix: str = "",
+) -> tuple[bytes | None, str, str | None]:
+  """Size an image for the reply, re-encoding it when it would blow the budget.
 
-  Returns ``(data, format, note)``. Files at or under ``byte_limit`` pass
+  Takes bytes, or a path to read them from -- bytes, because the picture may
+  have arrived through the session rather than off this filesystem, and
+  nothing about fitting it in a reply depends on where it came from. With
+  bytes, pass ``suffix`` so the format is known.
+
+  Returns ``(data, format, note)``. Images at or under ``byte_limit`` pass
   through untouched. Larger ones are downscaled to ``max_dim`` on the longest
   side and re-encoded (PNG first for PNG sources, then JPEG). When even that
   cannot fit the budget, ``data`` is ``None`` and ``note`` says why, so the
   caller can fall back to the file path.
   """
-  fmt = _image_format(path.suffix)
-  data = path.read_bytes()
+  if isinstance(source, (bytes, bytearray)):
+    data, fmt = bytes(source), _image_format(suffix)
+  else:
+    data, fmt = source.read_bytes(), _image_format(source.suffix)
   if len(data) <= byte_limit:
     return data, fmt, None
   original_kb = len(data) // 1024
@@ -477,23 +464,48 @@ def _prepare_image(
   )
 
 
-def _image_result(payload: Dict[str, Any], key: str = "image_path") -> Any:
+def _image_bytes(session: Session | None, file: Path) -> bytes | None:
+  """The picture the trainer just wrote, through the session where possible.
+
+  The session first, because ``read_artifact`` is the way that still works
+  when the trainer is on another machine and the path in the payload names a
+  file this process cannot open. The filesystem second, for a picture written
+  somewhere other than the run's artifacts -- and it is what answers when the
+  two disagree about existence, not about content: every tool that returns an
+  ``image_path`` writes into ``artifacts/``.
+  """
+  if session is not None:
+    try:
+      return session.read_artifact(file.name)
+    except (OSError, ValueError):
+      pass
+  try:
+    return file.read_bytes()
+  except OSError:
+    return None
+
+
+def _image_result(payload: dict[str, Any], key: str = "image_path",
+                  session: Session | None = None) -> Any:
   """Attach the picture to a payload without dropping the numbers around it.
 
   Returns ``[payload, Image]``; every supported SDK generation converts that
   list into a JSON text block plus an image block, so the agent sees the
   structured result *and* the frame. Oversized files are downscaled first;
-  when even that is not enough, or the file cannot be decoded, the payload
-  comes back alone with an ``image_note`` explaining why.
+  when even that is not enough, or the picture cannot be read, the payload
+  comes back alone -- with an ``image_note`` when something went wrong that a
+  reader would otherwise have to guess at.
   """
   path = payload.get(key)
   if not payload.get("ok") or not path:
     return payload
   file = Path(path)
-  if not file.exists():
+  data = _image_bytes(session, file)
+  if data is None:
     return payload
   try:
-    data, fmt, note = _prepare_image(file, byte_limit=IMAGE_BYTE_LIMIT, max_dim=IMAGE_MAX_DIM)
+    data, fmt, note = _prepare_image(data, byte_limit=IMAGE_BYTE_LIMIT,
+                                     max_dim=IMAGE_MAX_DIM, suffix=file.suffix)
   except Exception as exc:  # A corrupt file must not eat the numeric result.
     return {**payload, "image_note": f"could not read {file.name}: {exc}"}
   if data is None:
@@ -501,7 +513,7 @@ def _image_result(payload: Dict[str, Any], key: str = "image_path") -> Any:
   return [payload, Image(data=data, format=fmt)]
 
 
-def _open_records(root: Optional[str]):
+def _open_records(root: str | None):
   """Open the record store this server writes feedback into.
 
   Resolution is the CLI's: the server's ``--records-root``, then
@@ -515,10 +527,10 @@ def _open_records(root: Optional[str]):
 
 
 def create_mcp_server(
-    session_dir: Optional[str] = None,
-    root: Optional[str] = None,
+    session_dir: str | None = None,
+    root: str | None = None,
     name: str = "rlmcp",
-    records_root: Optional[str] = None,
+    records_root: str | None = None,
 ) -> MCPServer:
   """Build the MCP server exposing one pinned training session.
 
@@ -547,7 +559,7 @@ def create_mcp_server(
                       session_dir=str(pinned.dir) if pinned else None)
 
   try:
-    print(f"[rlmcp-server] pinned session: {handle.get().dir}", file=sys.stderr)
+    print(f"[rlmcp-server] pinned session: {handle.get().address}", file=sys.stderr)
   except (FileNotFoundError, RuntimeError) as exc:
     # No run yet; the first tool call (or switch_session) pins one.
     print(f"[rlmcp-server] no session pinned yet: {exc}", file=sys.stderr)
@@ -557,7 +569,7 @@ def create_mcp_server(
   # Session selection.
 
   @mcp.tool()
-  def list_sessions() -> List[Dict[str, Any]]:
+  def list_sessions() -> list[dict[str, Any]]:
     """List rlmcp sessions under the server's root, newest first.
 
     Each row carries started_at, a running/stalled/dead state, and whether it
@@ -566,7 +578,7 @@ def create_mcp_server(
     return _sessions_payload(handle)
 
   @mcp.tool()
-  def switch_session(target: str = "newest") -> Dict[str, Any]:
+  def switch_session(target: str = "newest") -> dict[str, Any]:
     """Re-point every later tool call at a different session -- the only way
     this server ever changes runs.
 
@@ -588,7 +600,7 @@ def create_mcp_server(
   # Status and telemetry.
 
   @mcp.tool()
-  def get_training_status() -> Dict[str, Any]:
+  def get_training_status() -> dict[str, Any]:
     """Iteration, pause state, curriculum stage, headline metrics, liveness.
 
     Reads the trainer's published heartbeat, so it answers even while the
@@ -598,7 +610,7 @@ def create_mcp_server(
     return _status_payload(handle)
 
   @mcp.tool()
-  def list_metrics(contains: Optional[str] = None) -> Dict[str, Any]:
+  def list_metrics(contains: str | None = None) -> dict[str, Any]:
     """List every metric name recorded so far, optionally filtered by substring.
 
     Answers from metrics.jsonl when the trainer is dead.
@@ -607,8 +619,8 @@ def create_mcp_server(
 
   @mcp.tool()
   def get_metrics(
-      names: Optional[List[str]] = None, last_n: int = 30
-  ) -> Dict[str, Any]:
+      names: list[str] | None = None, last_n: int = 30
+  ) -> dict[str, Any]:
     """Recent values plus a trend summary for the named metrics.
 
     Args:
@@ -622,10 +634,10 @@ def create_mcp_server(
 
   @mcp.tool()
   def plot_metrics(
-      names: Optional[List[str]] = None,
+      names: list[str] | None = None,
       last_n: int = 400,
       smooth: int = 5,
-      title: Optional[str] = None,
+      title: str | None = None,
   ) -> Any:
     """Plot metric curves and return the chart as an image.
 
@@ -638,8 +650,8 @@ def create_mcp_server(
 
   @mcp.tool()
   def list_parameters(
-      category: Optional[str] = None, contains: Optional[str] = None
-  ) -> Dict[str, Any]:
+      category: str | None = None, contains: str | None = None
+  ) -> dict[str, Any]:
     """List tunable parameters with live values, bounds and descriptions.
 
     Categories: reward, termination, domain_randomization, curriculum, action, rl.
@@ -648,7 +660,7 @@ def create_mcp_server(
     return _list_parameters_impl(handle, category, contains)
 
   @mcp.tool()
-  def set_parameter(key: str, value: Any, rationale: str) -> Dict[str, Any]:
+  def set_parameter(key: str, value: Any, rationale: str) -> dict[str, Any]:
     """Change a reward weight, randomization range or PPO hyperparameter live.
 
     Args:
@@ -660,7 +672,7 @@ def create_mcp_server(
     return _call(handle, "set_parameter", key=key, value=value, rationale=rationale)
 
   @mcp.tool()
-  def reset_parameters(keys: Optional[List[str]] = None) -> Dict[str, Any]:
+  def reset_parameters(keys: list[str] | None = None) -> dict[str, Any]:
     """Restore parameters to the values they had when training started."""
     return _call(handle, "reset_parameters", keys=keys)
 
@@ -710,10 +722,10 @@ def create_mcp_server(
 
   @mcp.tool()
   def reset_environments(
-      env_ids: Optional[List[int]] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_ids: list[int] | None = None,
+      where: dict[str, Any] | None = None,
       rationale: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Start fresh episodes in some or all environments.
 
     Episodes, not parameter values -- ``reset_parameters`` is the other one.
@@ -734,8 +746,8 @@ def create_mcp_server(
 
   @mcp.tool()
   def take_screenshot(
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
   ) -> Any:
     """Render one frame of a training environment.
 
@@ -746,14 +758,15 @@ def create_mcp_server(
         "level": 2} on a locomotion task. See ``get_training_status`` for what
         this environment supports.
     """
-    return _image_result(_call(handle, "screenshot", env_id=env_id, where=where))
+    return _image_result(_call(handle, "screenshot", env_id=env_id, where=where),
+                         session=handle.get())
 
   @mcp.tool()
   def record_video(
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Record a clip of the policy as it trains and return the video file path.
 
     Frames are captured during normal rollout steps, so the clip shows real
@@ -766,11 +779,11 @@ def create_mcp_server(
 
   @mcp.tool()
   def set_progress_video(
-      every: Optional[str] = None,
-      seconds: Optional[float] = None,
-      env_id: Optional[int] = None,
-      budget_mb: Optional[float] = None,
-  ) -> Dict[str, Any]:
+      every: str | None = None,
+      seconds: float | None = None,
+      env_id: int | None = None,
+      budget_mb: float | None = None,
+  ) -> dict[str, Any]:
     """Read or change the run's automatic clip schedule.
 
     A run films itself at iteration 0 and at gaps that double after that --
@@ -792,14 +805,14 @@ def create_mcp_server(
 
   @mcp.tool()
   def live_view(
-      enabled: Optional[bool] = None,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-      realtime: Optional[bool] = None,
-      fps: Optional[float] = None,
-      port: Optional[int] = None,
-      paused: Optional[bool] = None,
-  ) -> Dict[str, Any]:
+      enabled: bool | None = None,
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+      realtime: bool | None = None,
+      fps: float | None = None,
+      port: int | None = None,
+      paused: bool | None = None,
+  ) -> dict[str, Any]:
     """Attach a live browser view to the run, re-point it, or detach it.
 
     The view is a 3-D scene served over viser and fed from the training loop,
@@ -837,9 +850,9 @@ def create_mcp_server(
   @mcp.tool()
   def diagnose_motion(
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Record per-step joint signals and report smoothness, tracking, effort and gait.
 
     Returns jerk and high-frequency chatter per joint (which joints are buzzing),
@@ -854,9 +867,9 @@ def create_mcp_server(
   @mcp.tool()
   def record_trace(
       seconds: float = 4.0,
-      env_id: Optional[int] = None,
-      where: Optional[Dict[str, Any]] = None,
-  ) -> Dict[str, Any]:
+      env_id: int | None = None,
+      where: dict[str, Any] | None = None,
+  ) -> dict[str, Any]:
     """Record joint positions/velocities/torques for one env and save them as .npz."""
     return _call(
         handle, "record_trace", timeout=max(DEFAULT_TIMEOUT, seconds * 20 + 90),
@@ -865,9 +878,9 @@ def create_mcp_server(
 
   @mcp.tool()
   def plot_joint_trace(
-      channels: Optional[List[str]] = None,
-      components: Optional[List[str]] = None,
-      title: Optional[str] = None,
+      channels: list[str] | None = None,
+      components: list[str] | None = None,
+      title: str | None = None,
   ) -> Any:
     """Plot the last recorded trace as an image.
 
@@ -876,13 +889,14 @@ def create_mcp_server(
       components: substring filter on joint names, e.g. ["knee", "ankle"].
     """
     return _image_result(
-        _call(handle, "plot_trace", channels=channels, components=components, title=title)
+        _call(handle, "plot_trace", channels=channels, components=components, title=title),
+        session=handle.get(),
     )
 
   # Extension commands and curriculum.
 
   @mcp.tool()
-  def list_commands() -> Dict[str, Any]:
+  def list_commands() -> dict[str, Any]:
     """Every command this run accepts, with a one-line description each.
 
     Beyond the built-in tools, a run exposes whatever its environment supports
@@ -893,7 +907,7 @@ def create_mcp_server(
     return _call(handle, "help")
 
   @mcp.tool()
-  def run_command(cmd: str, args: Optional[Dict[str, Any]] = None) -> Any:
+  def run_command(cmd: str, args: dict[str, Any] | None = None) -> Any:
     """Run any command this run accepts, including extension commands.
 
     Args:
@@ -901,52 +915,52 @@ def create_mcp_server(
       args: keyword arguments for it, e.g. {"terrains": ["flat"], "max_level": 4}.
     """
     result = _call(handle, cmd, timeout=600.0, **(args or {}))
-    return _image_result(result)
+    return _image_result(result, session=handle.get())
 
   @mcp.tool()
-  def curriculum_status() -> Dict[str, Any]:
+  def curriculum_status() -> dict[str, Any]:
     """Current curriculum stage and how close it is to its promotion conditions."""
     return _call(handle, "curriculum_status")
 
   @mcp.tool()
-  def curriculum_advance(reason: str = "manual") -> Dict[str, Any]:
+  def curriculum_advance(reason: str = "manual") -> dict[str, Any]:
     """Promote to the next curriculum stage immediately."""
     return _call(handle, "curriculum_advance", reason=reason)
 
   @mcp.tool()
-  def curriculum_goto(stage: str, reason: str = "manual") -> Dict[str, Any]:
+  def curriculum_goto(stage: str, reason: str = "manual") -> dict[str, Any]:
     """Jump to a named curriculum stage, forward or backward."""
     return _call(handle, "curriculum_goto", stage=stage, reason=reason)
 
   @mcp.tool()
-  def curriculum_auto(enabled: bool = True) -> Dict[str, Any]:
+  def curriculum_auto(enabled: bool = True) -> dict[str, Any]:
     """Turn automatic stage promotion on or off."""
     return _call(handle, "curriculum_auto", enabled=enabled)
 
   # Lifecycle.
 
   @mcp.tool()
-  def pause_training() -> Dict[str, Any]:
+  def pause_training() -> dict[str, Any]:
     """Pause training between iterations; other tools keep working while paused."""
     return _call(handle, "pause")
 
   @mcp.tool()
-  def resume_training() -> Dict[str, Any]:
+  def resume_training() -> dict[str, Any]:
     """Resume a paused run."""
     return _call(handle, "resume")
 
   @mcp.tool()
-  def save_checkpoint(tag: str = "", note: str = "") -> Dict[str, Any]:
+  def save_checkpoint(tag: str = "", note: str = "") -> dict[str, Any]:
     """Save policy weights plus curriculum and terrain state under a tag."""
     return _call(handle, "save_checkpoint", timeout=600.0, tag=tag, note=note)
 
   @mcp.tool()
-  def list_checkpoints() -> Dict[str, Any]:
+  def list_checkpoints() -> dict[str, Any]:
     """List checkpoints saved through rlmcp in this session."""
     return _call(handle, "list_checkpoints")
 
   @mcp.tool()
-  def rollback_to_checkpoint(path: str) -> Dict[str, Any]:
+  def rollback_to_checkpoint(path: str) -> dict[str, Any]:
     """Roll back weights, parameters and curriculum state to a saved checkpoint."""
     return _call(handle, "load_checkpoint", timeout=600.0, path=path)
 
@@ -956,7 +970,7 @@ def create_mcp_server(
       kind: str = "steer",
       author: str = "user",
       interpretation: str = "",
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Record what a human just said about this run, stamped with the iteration.
 
     Call this whenever the user steers, corrects, rejects or approves what the
@@ -977,7 +991,7 @@ def create_mcp_server(
       interpretation: str = "",
       response: str = "",
       changed: bool = True,
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Attach a remark to a run record, live trainer or not.
 
     ``record_feedback`` is for a run that is still going; this is for one that
@@ -1006,7 +1020,7 @@ def create_mcp_server(
       index: int,
       response: str,
       changed: bool = True,
-  ) -> Dict[str, Any]:
+  ) -> dict[str, Any]:
     """Record what was done about one remark on a run record.
 
     ``changed=False`` is a real answer: "looked into it, nothing needed
@@ -1025,11 +1039,11 @@ def create_mcp_server(
 
   @mcp.tool()
   def get_feedback_timeline(
-      kind: Optional[str] = None,
-      author: Optional[str] = None,
+      kind: str | None = None,
+      author: str | None = None,
       outstanding: bool = False,
-      limit: Optional[int] = None,
-  ) -> Dict[str, Any]:
+      limit: int | None = None,
+  ) -> dict[str, Any]:
     """Every remark across the records, oldest first, with what came of it.
 
     ``outstanding=True`` narrows it to instructions nobody has recorded a
@@ -1040,7 +1054,7 @@ def create_mcp_server(
     return {"count": len(rows), "feedback": rows}
 
   @mcp.tool()
-  def set_record_headline(record_id: str, text: str = "") -> Dict[str, Any]:
+  def set_record_headline(record_id: str, text: str = "") -> dict[str, Any]:
     """Set the one-sentence summary a tree or a listing shows for a run.
 
     An empty ``text`` clears it, falling back to the first sentence of the
@@ -1061,12 +1075,12 @@ def create_mcp_server(
             "derived": not updated.headline}
 
   @mcp.tool()
-  def add_note(text: str) -> Dict[str, Any]:
+  def add_note(text: str) -> dict[str, Any]:
     """Record a note in the session event log, next to parameter changes."""
     return _call(handle, "note", text=text)
 
   @mcp.tool()
-  def get_events(last_n: int = 25) -> Dict[str, Any]:
+  def get_events(last_n: int = 25) -> dict[str, Any]:
     """Recent session events: parameter edits, stage changes, checkpoints, notes.
 
     Reads the event log on disk, so it answers for dead runs too.
@@ -1074,7 +1088,7 @@ def create_mcp_server(
     return _events_payload(handle.get(), last_n)
 
   @mcp.tool()
-  def list_artifacts() -> Dict[str, Any]:
+  def list_artifacts() -> dict[str, Any]:
     """Files this run produced -- plots, videos, traces -- newest first.
 
     Purely a disk read; a post-mortem can pull every picture the run left
@@ -1083,7 +1097,7 @@ def create_mcp_server(
     return _artifacts_payload(handle.get())
 
   @mcp.tool()
-  def stop_training(reason: str = "") -> Dict[str, Any]:
+  def stop_training(reason: str = "") -> dict[str, Any]:
     """Ask the training loop to stop cleanly at the next iteration boundary."""
     return _call(handle, "stop_training", reason=reason)
 
@@ -1107,7 +1121,7 @@ def create_mcp_server(
   return mcp
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
   if MCPServer is None:
     print(SDK_MISSING, file=sys.stderr)
     return 1

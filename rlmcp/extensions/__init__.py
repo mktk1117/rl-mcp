@@ -49,6 +49,9 @@ capability that does not apply is simply absent rather than broken.
 from __future__ import annotations
 
 from rlmcp.core.extensions import Extension, ExtensionRegistry
+
+# Importing a built-in module is what runs its @register decorator.
+from rlmcp.extensions import terrain as _terrain  # noqa: F401  (self-registering)
 from rlmcp.extensions.registry import (
     ENTRY_POINT_GROUP,
     catalog,
@@ -58,9 +61,6 @@ from rlmcp.extensions.registry import (
     registered,
     unregister,
 )
-
-# Importing a built-in module is what runs its @register decorator.
-from rlmcp.extensions import terrain as _terrain  # noqa: F401  (self-registering)
 
 __all__ = [
     "ENTRY_POINT_GROUP",

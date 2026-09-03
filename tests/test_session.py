@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from rlmcp.session import Session, iter_sessions
+from rlmcp.session import (
+    RESERVED_METRIC_KEYS,
+    WIRE_SURFACE,
+    Session,
+    SessionClient,
+    iter_sessions,
+)
 
 
 def test_request_response_roundtrip(tmp_path):
@@ -704,3 +710,237 @@ def test_artifacts_are_listable_without_a_live_trainer(tmp_path):
   assert out["ok"] and out["count"] == 2
   assert {r["name"] for r in out["artifacts"]} == {"metrics.png", "clip.mp4"}
   assert all(r["bytes"] > 0 for r in out["artifacts"])
+
+
+# The client surface: what a reader of a run may use, and nothing else.
+
+
+def test_the_local_session_satisfies_the_client_protocol(tmp_path):
+  session = Session(tmp_path / "run" / "rlmcp").create({})
+
+  assert isinstance(session, SessionClient)
+
+
+def test_every_name_on_the_wire_surface_exists(tmp_path):
+  """`WIRE_SURFACE` is the promise; this is the check that it is not fiction."""
+  session = Session(tmp_path / "run" / "rlmcp").create({})
+
+  missing = [name for name in WIRE_SURFACE if not hasattr(session, name)]
+
+  assert missing == []
+
+
+def test_the_wire_surface_does_not_grow_by_accident():
+  """Adding a name here is a decision about the wire, so it is written twice.
+
+  A second implementation lives behind a connection, and every name added to
+  this list is one it has to answer. That should cost a moment's thought and a
+  failing test, not a passing import.
+  """
+  assert set(WIRE_SURFACE) == {
+      "address", "key", "name",
+      "info", "status", "params",
+      "metrics", "metrics_count", "events",
+      "list_artifacts", "read_artifact",
+      "submit", "poll", "wait", "call",
+      "liveness", "liveness_info",
+  }
+
+
+def test_a_session_names_itself_three_ways(tmp_path):
+  session = Session(tmp_path / "2026-01-01_g1" / "rlmcp").create({})
+
+  assert session.address == str(tmp_path / "2026-01-01_g1" / "rlmcp")
+  assert session.key == "2026-01-01_g1/rlmcp"   # tells two runs apart
+  assert session.name == "2026-01-01_g1"        # what a plot title wants
+
+
+def test_key_falls_back_to_the_leaf_at_the_filesystem_root():
+  """A session directly under `/` has no parent name to disambiguate with."""
+  session = Session("/rlmcp")
+
+  assert session.key == "rlmcp"
+  assert session.name == "rlmcp"
+
+
+def test_metrics_count_is_the_total_not_the_window(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  for i in range(5):
+    session.append_metrics(i, {"reward": float(i)})
+
+  assert session.metrics_count() == 5
+  assert len(session.metrics(last_n=2)) == 2
+
+
+def test_metrics_count_of_a_run_that_logged_nothing_is_zero(tmp_path):
+  assert Session(tmp_path / "sess").create({}).metrics_count() == 0
+
+
+def test_list_artifacts_reports_names_sizes_and_newest_first(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  older = session.artifact_path("first.png")
+  older.write_bytes(b"one")
+  newer = session.artifact_path("second.mp4")
+  newer.write_bytes(b"two!")
+  os.utime(older, (1, 1))
+
+  rows = session.list_artifacts()
+
+  assert [r["name"] for r in rows] == ["second.mp4", "first.png"]
+  assert [r["bytes"] for r in rows] == [4, 3]
+
+
+def test_list_artifacts_skips_directories(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  session.artifact_path("keep.png").write_bytes(b"x")
+  (session.artifacts / "traces").mkdir()
+
+  assert [r["name"] for r in session.list_artifacts()] == ["keep.png"]
+
+
+def test_read_artifact_returns_the_bytes(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  session.artifact_path("shot.png").write_bytes(b"\x89PNG")
+
+  assert session.read_artifact("shot.png") == b"\x89PNG"
+
+
+@pytest.mark.parametrize("name", ["../session.json", "/etc/passwd", "sub/shot.png", "", "..", "."])
+def test_read_artifact_refuses_anything_that_is_not_a_bare_name(tmp_path, name):
+  """The argument crosses a network in the remote implementation of this."""
+  session = Session(tmp_path / "sess").create({})
+
+  with pytest.raises(ValueError):
+    session.read_artifact(name)
+
+
+# Sequence numbers: the cursor a reader that is not on this machine needs.
+
+
+def test_status_carries_a_sequence_that_grows(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+
+  seqs = []
+  for i in range(3):
+    session.publish_status({"iteration": i})
+    seqs.append(session.status()["seq"])
+
+  assert seqs == [1, 2, 3]
+
+
+def test_events_and_metrics_are_numbered_from_one(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  session.append_metrics(0, {"reward": 1.0})
+  session.append_metrics(1, {"reward": 2.0})
+  session.append_event("note", {"text": "hello"})
+
+  assert [r["seq"] for r in session.metrics()] == [1, 2]
+  assert [e["seq"] for e in session.events()] == [1]
+
+
+def test_a_second_process_on_the_same_directory_continues_the_count(tmp_path):
+  """A trainer restarted onto a directory must not replay sequence numbers.
+
+  A reader holding `seq=7` would otherwise be handed a different row 8, and
+  would never know it had missed the first one.
+  """
+  first = Session(tmp_path / "sess").create({})
+  first.publish_status({"iteration": 1})
+  first.append_event("note", {"text": "before"})
+  first.append_metrics(0, {"reward": 1.0})
+
+  second = Session(tmp_path / "sess")
+  second.publish_status({"iteration": 2})
+  second.append_event("note", {"text": "after"})
+  second.append_metrics(1, {"reward": 2.0})
+
+  assert second.status()["seq"] == 2
+  assert [e["seq"] for e in second.events()] == [1, 2]
+  assert [r["seq"] for r in second.metrics()] == [1, 2]
+
+
+def test_since_seq_returns_only_what_is_new(tmp_path):
+  session = Session(tmp_path / "sess").create({})
+  for i in range(5):
+    session.append_event("note", {"text": str(i)})
+    session.append_metrics(i, {"reward": float(i)})
+
+  fresh = session.events(since_seq=3)
+
+  assert [e["text"] for e in fresh] == ["3", "4"]
+  assert [r["iteration"] for r in session.metrics(since_seq=3)] == [3, 4]
+  assert session.events(since_seq=5) == []
+  assert len(session.events(since_seq=0)) == 5
+
+
+def test_a_log_written_before_sequences_existed_is_read_once(tmp_path):
+  """Old runs have no cursor: a reader starting from scratch gets their
+  history, and one holding a cursor is not handed it again every poll."""
+  session = Session(tmp_path / "sess").create({})
+  session.events_file.write_text(
+      '{"t": 1.0, "kind": "note", "text": "old"}\n'
+  )
+
+  assert [e["text"] for e in session.events(since_seq=0)] == ["old"]
+  assert session.events(since_seq=1) == []
+
+
+def test_a_sequence_never_shows_up_as_a_metric(tmp_path):
+  """`seq` is bookkeeping in a row of measurements, which is a trap.
+
+  Every reader that asks what a run logged walks the row's keys, so a new
+  field lands on the CLI's metric list and the studio's headline unless it is
+  named as reserved.
+  """
+  from rlmcp.cli import _default_metric_names
+
+  # A task whose metrics the CLI has no preferred name for, so the default
+  # selection falls back to "whatever this run logged" -- which is where a
+  # bookkeeping field becomes something a user is offered to plot.
+  session = Session(tmp_path / "sess").create({})
+  session.append_metrics(0, {"cartpole/angle": 1.0})
+
+  names = {k for row in session.metrics() for k in row if k not in RESERVED_METRIC_KEYS}
+
+  assert names == {"cartpole/angle"}
+  assert _default_metric_names(session) == ["cartpole/angle"]
+
+
+def test_a_picture_is_fetched_through_the_session_not_the_path(tmp_path):
+  """`read_artifact` is the route that survives the trainer being elsewhere."""
+  srv = _server_module()
+  session = Session(tmp_path / "sess").create({})
+  _write_png(session.artifact_path("shot.png"))
+  asked = []
+
+  class Watching(Session):
+    def read_artifact(self, name):
+      asked.append(name)
+      return super().read_artifact(name)
+
+  out = srv._image_result({"ok": True, "image_path": str(session.artifact_path("shot.png"))},
+                          session=Watching(session.dir))
+
+  assert asked == ["shot.png"]
+  assert isinstance(out, list) and len(out) == 2
+
+
+def test_a_picture_outside_the_artifacts_directory_still_arrives(tmp_path):
+  """Not every image a tool returns is one of the run's artifacts."""
+  srv = _server_module()
+  session = Session(tmp_path / "sess").create({})
+  elsewhere = tmp_path / "somewhere" / "frame.png"
+  elsewhere.parent.mkdir()
+  _write_png(elsewhere)
+
+  out = srv._image_result({"ok": True, "image_path": str(elsewhere)}, session=session)
+
+  assert isinstance(out, list) and len(out) == 2
+
+
+def test_a_picture_that_is_nowhere_leaves_the_numbers_alone(tmp_path):
+  srv = _server_module()
+  session = Session(tmp_path / "sess").create({})
+  payload = {"ok": True, "image_path": str(tmp_path / "gone.png")}
+
+  assert srv._image_result(payload, session=session) is payload

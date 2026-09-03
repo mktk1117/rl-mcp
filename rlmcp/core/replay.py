@@ -21,9 +21,12 @@ from __future__ import annotations
 
 import ast
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
+
+from rlmcp.session import read_jsonl
 
 
 @dataclass(frozen=True)
@@ -54,30 +57,30 @@ class Step:
 class Conditions:
   """The environment state a checkpoint was trained under, as replayable steps."""
 
-  steps: Tuple[Step, ...] = ()
+  steps: tuple[Step, ...] = ()
   stage: str = ""
   """The curriculum stage this reconstruction stops at ('' if the run had none)."""
-  stage_names: Tuple[str, ...] = ()
+  stage_names: tuple[str, ...] = ()
   iteration: int = 0
   """Iteration of the last event folded in -- how far through the run this is."""
-  warnings: Tuple[str, ...] = ()
+  warnings: tuple[str, ...] = ()
   """Things the log could not answer. Never raised: a partial replay beats none."""
 
   @property
-  def parameters(self) -> Dict[str, Any]:
+  def parameters(self) -> dict[str, Any]:
     """Final value of every parameter the log touched, last write winning."""
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for step in self.steps:
       if step.kind == "parameter":
         out[step.key] = step.value
     return out
 
   @property
-  def calls(self) -> List[Tuple[str, Dict[str, Any]]]:
+  def calls(self) -> list[tuple[str, dict[str, Any]]]:
     """Every command the log replays, in order."""
     return [(s.key, dict(s.value or {})) for s in self.steps if s.kind == "command"]
 
-  def summary(self) -> Dict[str, Any]:
+  def summary(self) -> dict[str, Any]:
     return {
         "stage": self.stage or None,
         "stage_names": list(self.stage_names),
@@ -89,7 +92,7 @@ class Conditions:
     }
 
 
-def parse_action(text: str) -> Tuple[str, Dict[str, Any]]:
+def parse_action(text: str) -> tuple[str, dict[str, Any]]:
   """Recover a command and its arguments from a logged stage action.
 
   A stage's actions are written to the event log as ``Action.describe()``
@@ -121,7 +124,7 @@ def parse_action(text: str) -> Tuple[str, Dict[str, Any]]:
     # from somewhere else and we would be guessing at the parameter names.
     raise ValueError(f"Positional arguments cannot be replayed: {text!r}")
 
-  args: Dict[str, Any] = {}
+  args: dict[str, Any] = {}
   for keyword in node.keywords:
     if keyword.arg is None:
       raise ValueError(f"**kwargs cannot be replayed: {text!r}")
@@ -134,32 +137,23 @@ def parse_action(text: str) -> Tuple[str, Dict[str, Any]]:
   return node.func.id, args
 
 
-def read_events(session_dir: Path | str) -> List[Dict[str, Any]]:
-  """Load a session's event log, skipping any line that is not whole JSON.
+def read_events(source: Any) -> list[dict[str, Any]]:
+  """A session's event log: from an open session, or from its directory.
 
-  A run killed mid-write leaves a torn last line. That is not a reason to
-  refuse to reconstruct the 4000 iterations in front of it.
+  Anything with an ``events()`` method answers for itself -- which is how this
+  reads a run that is not on this filesystem. A path is read the way
+  :func:`rlmcp.session.read_jsonl` reads one, torn last line and all: a run
+  killed mid-write is not a reason to refuse to reconstruct the 4000
+  iterations in front of it.
   """
-  path = Path(session_dir) / "events.jsonl"
-  if not path.exists():
-    return []
-  events: List[Dict[str, Any]] = []
-  for line in path.read_text(errors="replace").splitlines():
-    line = line.strip()
-    if not line:
-      continue
-    try:
-      event = json.loads(line)
-    except json.JSONDecodeError:
-      continue
-    if isinstance(event, dict):
-      events.append(event)
-  return events
+  events = getattr(source, "events", None)
+  rows = events() if callable(events) else read_jsonl(Path(source) / "events.jsonl")
+  return [row for row in rows if isinstance(row, dict)]
 
 
-def stage_names(session_dir: Path | str) -> List[str]:
+def stage_names(session_dir: Any) -> list[str]:
   """Every stage this run entered, in the order it entered them."""
-  seen: List[str] = []
+  seen: list[str] = []
   for event in read_events(session_dir):
     if event.get("kind") != "curriculum_stage":
       continue
@@ -177,7 +171,7 @@ _LADDER_PATHS = (
 )
 
 
-def read_ladder(session_dir: Path | str) -> Dict[str, Dict[str, Any]]:
+def read_ladder(session_dir: Path | str) -> dict[str, dict[str, Any]]:
   """The run's curriculum stages as data, keyed by name.
 
   The ladder is what was *planned*; the event log is what *happened*. This is
@@ -208,7 +202,7 @@ def read_ladder(session_dir: Path | str) -> Dict[str, Dict[str, Any]]:
 
 def read_conditions(
     session_dir: Path | str,
-    stage: Optional[str] = None,
+    stage: str | None = None,
     *,
     include_parameter_edits: bool = True,
 ) -> Conditions:
@@ -237,8 +231,8 @@ def read_conditions(
         + (", ".join(ordered_names) if ordered_names else "(no stages)")
     )
 
-  steps: List[Step] = []
-  warnings: List[str] = []
+  steps: list[Step] = []
+  warnings: list[str] = []
   current_stage = ""
   last_iteration = 0
 
@@ -292,11 +286,11 @@ def read_conditions(
 
 
 def _stage_calls(
-    applied: Dict[str, Any],
+    applied: dict[str, Any],
     stage: str,
-    ladder: Dict[str, Dict[str, Any]],
-    warnings: List[str],
-) -> List[Tuple[str, Dict[str, Any]]]:
+    ladder: dict[str, dict[str, Any]],
+    warnings: list[str],
+) -> list[tuple[str, dict[str, Any]]]:
   """A stage's actions as data, from the best source that has them.
 
   Three sources, each a fallback for the last. The event log's ``calls`` is
@@ -329,7 +323,7 @@ def _stage_calls(
         if isinstance(entry, dict) and entry.get("cmd")
     ]
 
-  out: List[Tuple[str, Dict[str, Any]]] = []
+  out: list[tuple[str, dict[str, Any]]] = []
   for text in logged:
     try:
       out.append(parse_action(text))
@@ -338,16 +332,16 @@ def _stage_calls(
   return out
 
 
-def apply_conditions(lab: Any, conditions: Conditions) -> Dict[str, Any]:
+def apply_conditions(lab: Any, conditions: Conditions) -> dict[str, Any]:
   """Replay conditions onto a wrapped environment, in order.
 
   ``lab`` is an :class:`~rlmcp.core.controller.RlMcp`. Failures are collected
   rather than raised: a parameter this build of the task no longer has is worth
   saying out loud, but it is not worth throwing away the clip.
   """
-  applied_parameters: Dict[str, Any] = {}
-  applied_calls: List[str] = []
-  errors: List[str] = []
+  applied_parameters: dict[str, Any] = {}
+  applied_calls: list[str] = []
+  errors: list[str] = []
   kinds: set = set()
 
   for step in conditions.steps:
@@ -400,7 +394,7 @@ def _signature_of(lab: Any, cmd: str) -> str:
   import inspect
 
   try:
-    handler = lab._handlers[cmd]  # noqa: SLF001 - diagnostics, not control flow
+    handler = lab._handlers[cmd]
     accepted = [
         name for name in inspect.signature(handler).parameters if name != "self"
     ]
@@ -409,14 +403,14 @@ def _signature_of(lab: Any, cmd: str) -> str:
   return f" (it now takes: {', '.join(accepted) or 'no arguments'})"
 
 
-def parse_overrides(items: Optional[Sequence[str]]) -> Dict[str, Any]:
+def parse_overrides(items: Sequence[str] | None) -> dict[str, Any]:
   """Turn ``key=value`` strings into typed parameter edits.
 
   JSON first, so ``reward.effort.weight=-0.2``, ``enabled=false`` and
   ``command.twist.ranges.lin_vel_x=[1.1,1.7]`` all mean what they look like;
   anything else stays a string.
   """
-  out: Dict[str, Any] = {}
+  out: dict[str, Any] = {}
   for item in items or []:
     if "=" not in item:
       raise ValueError(f"Expected key=value, got '{item}'")
@@ -428,7 +422,7 @@ def parse_overrides(items: Optional[Sequence[str]]) -> Dict[str, Any]:
   return out
 
 
-def with_overrides(conditions: Conditions, overrides: Dict[str, Any]) -> Conditions:
+def with_overrides(conditions: Conditions, overrides: dict[str, Any]) -> Conditions:
   """Append explicit parameter edits, which therefore win over the replay."""
   if not overrides:
     return conditions
