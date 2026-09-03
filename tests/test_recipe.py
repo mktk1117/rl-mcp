@@ -141,6 +141,7 @@ def test_a_recipe_is_a_directory_you_can_launch(bundle):
 
   written = {p.name for p in (tmp_path / "recipe").iterdir()}
   assert written == {"package", "config.json", "curriculum.json", "launch.sh",
+                     "recipe.json",
                      "phases.md", "expect.json", "README.md"}
   assert (tmp_path / "recipe" / "launch.sh").stat().st_mode & 0o111
   # This record has a code snapshot and a config, but no session -- so the
@@ -640,33 +641,36 @@ def test_verify_matches_a_claimed_name_to_its_namespaced_telemetry_key(
   assert report["reproduced"] is True
 
 
-# launch.sh is a launch, not a document.
+# launch.sh is a launch, not a document: recipe.json carries the recipe,
+# `rlmcp train --recipe` reads it, and the record for the rerun says what it is.
 
 
-def test_launch_sh_carries_the_packages_the_config_the_ladder_and_the_seed(
-    run_with_a_session):
+def test_the_manifest_carries_what_a_launcher_needs(run_with_a_session):
   """Run 010's launch.sh had no task package, never applied curriculum.json or
-  config.json, and did not say how long to train. It could not reproduce a run
-  whose ladder was the whole recipe."""
+  config.json, and did not say how long to train. Everything a launcher needs
+  is in recipe.json now, and launch.sh is one command over it."""
   store, tmp_path, _ = run_with_a_session
 
   payload = build(store, "002", tmp_path / "recipe")
 
+  manifest = json.loads((tmp_path / "recipe" / "recipe.json").read_text())
+  assert manifest["task"] == "Shand"
+  assert manifest["task_packages"] == ["shand.tasks", "shand.rlmcp_ext"]
+  assert manifest["seed"] == 7
+  assert manifest["iterations"] == 4300              # where the original stopped
+  assert manifest["num_envs"] == 4096
+  assert manifest["package"] == "package"            # the restored task package
+  assert manifest["policy"] == "policy/model_4300.pt"
+  assert manifest["expect"] == {"goals_per_min": "16.8"}
+  assert manifest["from_run"] == "002"
   script = (tmp_path / "recipe" / "launch.sh").read_text()
-  assert 'TASK_PACKAGES=("shand.tasks" "shand.rlmcp_ext")' in script
-  assert '"${TASK_PACKAGES[@]/#/--task-package=}"' in script
-  assert '--config-json "$HERE/config.json"' in script
-  assert '--curriculum-json "$HERE/curriculum.json"' in script
-  assert "--seed 7" in script
-  assert "--max-iterations 4300" in script      # where the original stopped
-  assert "--num-envs 4096" in script
-  assert 'PYTHONPATH="$HERE/package' in script   # the restored package imports
+  assert 'rlmcp train --recipe "$HERE"' in script
   assert not [m for m in payload["missing"] if "seed" in m or "packages" in m]
 
 
-def test_launch_sh_says_which_packages_it_does_not_know(bundle, tmp_path):
-  """A run made before task packages were recorded still gets a script that
-  can be launched, with the gap named in `missing` and read from $TASK_PACKAGES."""
+def test_a_recipe_says_which_packages_it_does_not_know(bundle, tmp_path):
+  """A run made before task packages were recorded still gets a launchable
+  recipe, with the gap named in `missing` and launch.sh reading $TASK_PACKAGES."""
   store, _, _ = bundle
   session = _session_with_events(tmp_path, [], THREE_RUNGS)
   (session.parent / "params" / "env.yaml").write_text(json.dumps({"seed": 42}))
@@ -674,7 +678,34 @@ def test_launch_sh_says_which_packages_it_does_not_know(bundle, tmp_path):
 
   payload = build(store, "002", tmp_path / "recipe", policy=False)
 
-  script = (tmp_path / "recipe" / "launch.sh").read_text()
-  assert 'read -r -a TASK_PACKAGES <<< "${TASK_PACKAGES:-}"' in script
-  assert "--seed 42" in script                  # read off params/env.yaml
+  manifest = json.loads((tmp_path / "recipe" / "recipe.json").read_text())
+  assert manifest["task_packages"] == [] and manifest["seed"] == 42
+  assert 'read -r -a TASK_PACKAGES <<< "${TASK_PACKAGES:-}"' in (
+      tmp_path / "recipe" / "launch.sh").read_text()
   assert any(m.startswith("the task packages") for m in payload["missing"])
+
+
+def test_the_rerun_record_is_named_after_the_recipe_not_numbered(run_with_a_session):
+  """`recipe-002`, then `recipe-002-2`: an id that says what the run is."""
+  from rlmcp.records.recipe import load_manifest, open_reproduction_record
+  store, tmp_path, _ = run_with_a_session
+  build(store, "002", tmp_path / "recipe")
+  manifest = load_manifest(tmp_path / "recipe")
+
+  first = open_reproduction_record(store, manifest, tmp_path / "recipe")
+  second = open_reproduction_record(store, manifest, tmp_path / "recipe")
+
+  assert (first.id, second.id) == ("recipe-002", "recipe-002-2")
+  assert first.parent == "002" and first.task == "Shand"
+  assert "16.8" in first.prediction and first.proposed_by == "recipe"
+  # `recipe-002-*` also matches the second's directory; the store must not
+  # hand back the wrong record for a named id that prefixes another.
+  assert store.get_record("recipe-002").id == "recipe-002"
+  assert store.get_record("recipe-002-2").id == "recipe-002-2"
+  assert (tmp_path / "records" / "runs" / "recipe-002-recipe_002" / "PLAN.md").exists()
+
+
+def test_a_recipe_with_no_manifest_is_refused_by_name(tmp_path):
+  from rlmcp.records.recipe import load_manifest
+  with pytest.raises(ValueError, match=r"recipe\.json"):
+    load_manifest(tmp_path)

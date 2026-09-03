@@ -113,6 +113,14 @@ def _warn(message: str) -> None:
   print(f"[rlmcp] {message}", file=sys.stderr, flush=True)
 
 
+def _meta_id(directory: Path) -> str | None:
+  """The id a run directory's meta.json claims, or None."""
+  try:
+    return str(json.loads((directory / "meta.json").read_text()).get("id"))
+  except (OSError, ValueError, AttributeError):
+    return None
+
+
 def _safe_component(value: Any, what: str) -> str:
   """One plain path component, or a refusal.
 
@@ -231,6 +239,14 @@ class FileStore:
   def _find_dir(self, record_id: str) -> Path | None:
     rid = _safe_component(record_id, "record id")
     matches = sorted(self.runs_dir.glob(f"{rid}-*"))
+    if len(matches) > 1:
+      # `recipe-002-*` also matches `recipe-002-2-<slug>`: a named id can be
+      # the prefix of another. The directory whose meta.json says it is this
+      # record is the one; the warning below is for genuine duplicates.
+      owned = [m for m in matches if _meta_id(m) == rid]
+      if len(owned) == 1:
+        return owned[0]
+      matches = owned or matches
     if len(matches) > 1:
       _warn(
           f"record id {rid} matches {len(matches)} directories "
@@ -400,21 +416,47 @@ class FileStore:
       head = entry.name.split("-", 1)[0]
       if head.isdigit():
         id_floor = max(id_floor, int(head))
-    seq_floor = max((r.seq for r in self.list_records()), default=0)
     next_id = max(self._counter(conn, "id"), id_floor + 1, self._tombstone_floor() + 1)
-    next_seq = max(self._counter(conn, "seq"), seq_floor + 1)
     self._advance(conn, "id", next_id + 1)
+    return str(next_id).zfill(3), self._allocate_seq(conn)
+
+  def _allocate_seq(self, conn: sqlite3.Connection) -> int:
+    """The next seq alone, under the write lock."""
+    seq_floor = max((r.seq for r in self.list_records()), default=0)
+    next_seq = max(self._counter(conn, "seq"), seq_floor + 1)
     self._advance(conn, "seq", next_seq + 1)
-    return str(next_id).zfill(3), next_seq
+    return next_seq
 
   # Records.
 
-  def new_record(self, slug: str, **fields: Any) -> RunRecord:
+  def new_record(self, slug: str, record_id: str | None = None,
+                 **fields: Any) -> RunRecord:
     fields = copy.deepcopy(fields)  # The record owns its data from here on.
     with self._tx() as conn:
-      record_id, seq = self._allocate(conn)
-      record = RunRecord(id=record_id, slug=slugify(slug), seq=seq, **fields)
+      if record_id:
+        wanted = _safe_component(record_id, "record id")
+        if self._find_dir(wanted) is not None or self.get_record(wanted) is not None:
+          raise StoreError(f"Record id {wanted!r} is already taken.")
+        # Only a seq: the numbered ids are not disturbed by a named one.
+        seq = self._allocate_seq(conn)
+        record = RunRecord(id=wanted, slug=slugify(slug), seq=seq, **fields)
+      else:
+        allocated, seq = self._allocate(conn)
+        record = RunRecord(id=allocated, slug=slugify(slug), seq=seq, **fields)
       return self._persist(record, conn)
+
+  def free_id(self, stem: str) -> str:
+    """``stem`` if no record has it, else ``stem-2``, ``stem-3`` ...
+
+    For ids that carry meaning: the second rerun of run 010's recipe is
+    ``recipe-010-2``, which says what it is where ``013`` would not.
+    """
+    candidate = _safe_component(stem, "record id")
+    n = 1
+    while self._find_dir(candidate) is not None or self.get_record(candidate) is not None:
+      n += 1
+      candidate = f"{stem}-{n}"
+    return candidate
 
   def put_record(self, record: RunRecord) -> RunRecord:
     with self._tx() as conn:

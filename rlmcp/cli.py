@@ -489,6 +489,7 @@ def _record_command(args: argparse.Namespace) -> int:
   if action == "new":
     record = store.new_record(
         args.slug,
+        record_id=args.record_id or None,
         stage=args.stage,
         hypothesis=args.hypothesis,
         prediction=args.prediction,
@@ -1284,6 +1285,9 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Which problem this run is about (the environment id). "
                       "Filled in from the live session at launch if omitted")
   q.add_argument("--proposed-by", default="human")
+  q.add_argument("--id", dest="record_id", default="",
+                 help="Name the id instead of taking the next number, e.g. "
+                      "recipe-010 for a rerun of run 010's recipe. Refused if taken.")
 
   q = record_sub.add_parser("list", help="List records")
   q.add_argument("--stage")

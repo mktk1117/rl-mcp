@@ -54,3 +54,40 @@ def test_the_flags_parse_beside_the_existing_ones():
                       "k.json", "--task-package", "shand.tasks", "--seed", "7"])
   assert (args.curriculum_json, args.config_json) == ("c.json", "k.json")
   assert args.task_package == ["shand.tasks"]
+
+
+def test_a_recipe_fills_the_blanks_and_explicit_flags_win(tmp_path):
+  """`rlmcp train --recipe DIR`: task, packages, config, ladder, seed, envs,
+  length and code root from recipe.json; a flag given on the line wins."""
+  from rlmcp.records.filestore import FileStore
+  from rlmcp.train import apply_recipe
+  recipe = tmp_path / "recipe"
+  (recipe / "package").mkdir(parents=True)
+  (recipe / "config.json").write_text("{}")
+  (recipe / "curriculum.json").write_text(json.dumps({"stages": []}))
+  (recipe / "recipe.json").write_text(json.dumps({
+      "schema_version": 1, "from_run": "010", "task": "Sharpa-Reorient-Cube",
+      "task_packages": ["shand.tasks"], "seed": 42, "num_envs": 2048,
+      "iterations": 6906, "package": "package", "expect": {"joint_vel_rms": "2.8"}}))
+  FileStore(tmp_path / "records", slots=1)
+
+  args = _parse_args(["--recipe", str(recipe), "--num-envs", "64",
+                      "--records-root", str(tmp_path / "records")])
+  manifest = apply_recipe(args)
+
+  assert manifest["from_run"] == "010"
+  assert args.task == "Sharpa-Reorient-Cube"
+  assert args.task_package == ["shand.tasks"]
+  assert args.config_json.endswith("config.json")
+  assert args.curriculum_json.endswith("curriculum.json")
+  assert (args.seed, args.max_iterations) == (42, 6906)
+  assert args.num_envs == 64                      # the explicit flag won
+  assert args.code_root == str(recipe / "package")
+  assert args.record_run == "recipe-010"          # opened for the rerun
+  opened = FileStore(tmp_path / "records", slots=1).get_record("recipe-010")
+  assert opened.task == "Sharpa-Reorient-Cube"
+
+
+def test_without_a_recipe_the_task_is_still_required():
+  args = _parse_args(["--num-envs", "4"])
+  assert args.task == "" and args.recipe == ""

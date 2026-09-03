@@ -41,7 +41,16 @@ def _prog_name(subcommand: str) -> str:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(prog=_prog_name("rlmcp train"),
                                    description=__doc__.splitlines()[0])
-  parser.add_argument("task", help="Registered mjlab task id")
+  parser.add_argument("task", nargs="?", default="",
+                      help="Registered mjlab task id (taken from --recipe when given)")
+  parser.add_argument(
+      "--recipe", default="", metavar="DIR",
+      help="A directory written by `rlmcp recipe build`. Its recipe.json fills "
+           "in the task, --task-package, --config-json, --curriculum-json, "
+           "--seed, --num-envs, --max-iterations and --code-root; any of them "
+           "given here wins. Without --record-run, opens the record for the "
+           "rerun as recipe-<run>.",
+  )
   parser.add_argument("--num-envs", type=int, default=None)
   parser.add_argument("--max-iterations", type=int, default=None)
   parser.add_argument("--device", default="cuda:0")
@@ -178,8 +187,62 @@ def load_config_json(path: str) -> dict[str, Any]:
   return dict(raw)
 
 
+def apply_recipe(args: argparse.Namespace) -> dict[str, Any] | None:
+  """Fill the parser's blanks from ``--recipe``, and open its record.
+
+  Explicit flags win over the manifest, so a rerun with more envs or a
+  different device is one flag away. The recipe's ``package/`` goes first on
+  ``sys.path`` and becomes the code root, so the task package that trains is
+  the one the original run had, not whichever one is installed.
+  """
+  if not args.recipe:
+    return None
+  from rlmcp.records.recipe import load_manifest
+
+  manifest = load_manifest(args.recipe)
+  where = Path(manifest["dir"])
+  args.task = args.task or manifest["task"]
+  for package in manifest.get("task_packages") or []:
+    if package not in args.task_package:
+      args.task_package.append(package)
+  if not args.config_json and (where / manifest.get("config", "config.json")).exists():
+    args.config_json = str(where / manifest.get("config", "config.json"))
+  if not args.curriculum_json and (
+      where / manifest.get("curriculum", "curriculum.json")).exists():
+    args.curriculum_json = str(where / manifest.get("curriculum", "curriculum.json"))
+  if args.seed is None and manifest.get("seed") is not None:
+    args.seed = int(manifest["seed"])
+  if args.num_envs is None and manifest.get("num_envs"):
+    args.num_envs = int(manifest["num_envs"])
+  if args.max_iterations is None and manifest.get("iterations"):
+    args.max_iterations = int(manifest["iterations"])
+  package = manifest.get("package")
+  if package and (where / package).is_dir():
+    sys.path.insert(0, str(where / package))
+    if args.code_root is None:
+      args.code_root = str(where / package)
+  if not args.record_run:
+    from rlmcp.records import open_store
+    from rlmcp.records.recipe import open_reproduction_record
+
+    store = open_store(args.records_root or None)
+    record = open_reproduction_record(store, manifest, where)
+    args.record_run = record.id
+    print(f"[rlmcp-train] opened record {record.id} for the rerun of "
+          f"{manifest.get('from_run')} (records: {getattr(store, 'root', '')})")
+  return manifest
+
+
 def main(argv: list[str] | None = None) -> int:
   args = _parse_args(argv)
+  try:
+    apply_recipe(args)
+  except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"[rlmcp-train] --recipe: {exc}")
+    return 2
+  if not args.task:
+    print("[rlmcp-train] name a task, or pass --recipe <dir>.")
+    return 2
 
   # Checked before anything expensive starts: a mistyped cadence should cost a
   # line, not a traceback out of the middle of environment construction.
