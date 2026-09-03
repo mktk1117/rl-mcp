@@ -25,9 +25,10 @@ a hash to match. Claim "statistically equivalent", never "identical".
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from rlmcp.core.curriculum import CurriculumStage, StageSchedule
 from rlmcp.records.record import RunRecord, fold_recipe
@@ -35,9 +36,11 @@ from rlmcp.records.record import RunRecord, fold_recipe
 DEFAULT_MIN_ITERATIONS = 100
 
 
-def distil(interventions: List[Dict[str, Any]],
-           ladder: Optional[Dict[str, Dict[str, Any]]] = None,
-           entered: Optional[List[str]] = None) -> StageSchedule:
+def distil(interventions: list[dict[str, Any]],
+           ladder: dict[str, dict[str, Any]] | None = None,
+           entered: list[str] | None = None,
+           entries: dict[str, int] | None = None,
+           unplaced: list[dict[str, Any]] | None = None) -> StageSchedule:
   """The ladder that would have produced this run's history.
 
   Two shapes, because runs come in two kinds. A run that *had* a curriculum
@@ -47,33 +50,59 @@ def distil(interventions: List[Dict[str, Any]],
   last value winning. A run with no curriculum gets one rung per group of
   edits, held for as long as the original ran before the next change.
 
-  ``ladder`` and ``entered`` are what :mod:`rlmcp.core.replay` reads off a
-  session: the stages as planned, and the names in the order they were entered.
-  Only the rungs the run actually reached are in the recipe -- a rung it never
-  climbed is a plan, not a result.
+  ``ladder``, ``entered`` and ``entries`` are what :mod:`rlmcp.core.replay`
+  reads off a session: the stages as planned, the names in the order they were
+  entered, and the iteration each was entered at. Only the rungs the run
+  actually reached are in the recipe -- a rung it never climbed is a plan, not
+  a result.
+
+  An edit is folded into a rung only when that rung's window is known: its
+  entry iteration and the next rung's. A ladder whose entry iterations were
+  not logged gets its edits in ``unplaced`` (and in the notes) rather than
+  smeared across every rung, because a five-rung ladder that starts every rung
+  at the values of an edit made on rung three looks exactly like a recipe and
+  is a different experiment.
   """
   edits = [i for i in interventions
            if i["kind"] == "set_parameter" and "(refused)" not in i["what"]]
   stage_changes = [i for i in interventions if i["kind"] == "curriculum_stage"]
+  if unplaced is None:
+    unplaced = []
 
   if ladder:
-    names = [n for n in (entered or list(ladder)) if n in ladder]
+    names = [n for n in (entered or list(entries or {}) or list(ladder))
+             if n in ladder]
     stages = [CurriculumStage.from_dict(ladder[name]) for name in names]
     if stages:
       schedule = StageSchedule(stages)
-      entry = _entry_iterations(schedule, stage_changes)
-      for stage in schedule.stages:
-        start = entry.get(stage.name, 0)
-        end = _next_entry(entry, schedule, stage.name)
-        for edit in edits:
-          if start <= edit["iteration"] < end:
-            key, value = _parsed(edit)
-            if key is not None:
-              stage.parameters[key] = value
-              stage.notes = _append_note(stage.notes, edit)
+      entry = dict(entries) if entries else _entry_iterations(schedule, stage_changes)
+      entry.setdefault(schedule.stages[0].name, 0)
+      windows = _windows(schedule, entry)
+      for edit in edits:
+        key, value = _parsed(edit)
+        if key is None:
+          continue
+        home = next((s for s, (start, end) in windows.items()
+                     if start is not None and end is not None
+                     and start <= edit["iteration"] < end), None)
+        if home is None:
+          unplaced.append(edit)
+          continue
+        stage = next(s for s in schedule.stages if s.name == home)
+        stage.parameters[key] = value
+        stage.notes = _append_note(stage.notes, edit)
+      if unplaced:
+        last = schedule.stages[-1]
+        last.notes = _append_note(
+            last.notes,
+            {"iteration": unplaced[0]["iteration"],
+             "what": (f"{len(unplaced)} edit(s) could not be placed in a rung: the "
+                      "event log does not say when the rungs were entered. They "
+                      "are listed in the recipe's README and NOT folded in."),
+             "why": ""})
       return schedule
 
-  stages: List[CurriculumStage] = []
+  stages: list[CurriculumStage] = []
   for index, edit in enumerate(edits):
     key, value = _parsed(edit)
     if key is None:
@@ -92,7 +121,7 @@ def distil(interventions: List[Dict[str, Any]],
   return StageSchedule(stages)
 
 
-def _parsed(edit: Dict[str, Any]) -> tuple:
+def _parsed(edit: dict[str, Any]) -> tuple:
   """``key`` and the value it was set to, read out of the phrased line."""
   what = edit["what"]
   if ": " not in what or " → " not in what:
@@ -105,7 +134,7 @@ def _parsed(edit: Dict[str, Any]) -> tuple:
     return key, new
 
 
-def _append_note(notes: str, edit: Dict[str, Any]) -> str:
+def _append_note(notes: str, edit: dict[str, Any]) -> str:
   line = f"it {edit['iteration']}: {edit['what']}"
   if edit.get("why"):
     line += f" — {edit['why']}"
@@ -113,27 +142,45 @@ def _append_note(notes: str, edit: Dict[str, Any]) -> str:
 
 
 def _entry_iterations(schedule: StageSchedule,
-                      stage_changes: List[Dict[str, Any]]) -> Dict[str, int]:
+                      stage_changes: list[dict[str, Any]]) -> dict[str, int]:
+  """Entry iterations read back off phrased stage lines, for callers with no
+  event log. ``replay.stage_entries`` is the source when there is one."""
   entered = {schedule.stages[0].name: 0}
   for change in stage_changes:
     name = change["what"].split("→")[-1].strip()
-    entered.setdefault(name, change["iteration"])
+    if name in {s.name for s in schedule.stages}:
+      entered.setdefault(name, change["iteration"])
   return entered
 
 
-def _next_entry(entered: Dict[str, int], schedule: StageSchedule,
-                name: str) -> int:
+def _windows(schedule: StageSchedule,
+             entered: dict[str, int]) -> dict[str, tuple[int | None, int | None]]:
+  """Each rung's ``[start, end)`` in iterations; None where the log is silent.
+
+  A rung's window ends where the next rung starts. The last rung in the recipe
+  is open-ended; a rung that was never entered (it is in the ladder but not in
+  the log) has no window at all, so nothing folds into it -- and neither does
+  anything fold into the rung before it, whose end is then unknown.
+  """
   names = [s.name for s in schedule.stages]
-  index = names.index(name)
-  for later in names[index + 1:]:
-    if later in entered:
-      return entered[later]
-  return 1 << 30
+  windows: dict[str, tuple[int | None, int | None]] = {}
+  for index, name in enumerate(names):
+    if name not in entered:
+      windows[name] = (None, None)
+      continue
+    if index + 1 == len(names):
+      windows[name] = (entered[name], 1 << 30)
+      continue
+    # The window closes where the next rung opens. If the log never says the
+    # next rung was entered, this rung's end is unknown -- not infinite.
+    following = names[index + 1]
+    windows[name] = (entered[name], entered.get(following))
+  return windows
 
 
 def build(store: Any, record_id: str, out: Path | str,
-          session_dir: Optional[str] = None,
-          policy: bool = True) -> Dict[str, Any]:
+          session_dir: str | None = None,
+          policy: bool = True) -> dict[str, Any]:
   """Write a runnable recipe directory for ``record_id``.
 
   Every part is best-effort and says so: a run with no code snapshot still gets
@@ -153,9 +200,16 @@ def build(store: Any, record_id: str, out: Path | str,
   records = {r.id: r for r in store.list_records()}
   chain = phase_chain(record, records)
   session = Path(session_dir or record.session or "")
-  interventions, ladder, entered = _history(session)
-  schedule = distil(interventions, ladder, entered)
-  missing: List[str] = []
+  interventions, ladder, entered, entries = _history(session)
+  unplaced: list[dict[str, Any]] = []
+  schedule = distil(interventions, ladder, entered, entries, unplaced)
+  missing: list[str] = []
+  if unplaced:
+    missing.append(
+        f"the rung for {len(unplaced)} mid-run edit(s) -- the event log does not "
+        "say when the rungs were entered, so they are listed here and not "
+        "folded into the ladder: "
+        + "; ".join(f"it {e['iteration']}: {e['what']}" for e in unplaced))
   if not ladder and entered:
     # The rungs are named in the log but the ladder itself was never written
     # down, so the promotion conditions are gone. Say so: a recipe that quietly
@@ -187,9 +241,13 @@ def build(store: Any, record_id: str, out: Path | str,
   if policy and weights is None:
     missing.append("the trained policy (no checkpoint found for this run)")
 
-  _write_json(out / "expect.json", _expectations(record, session, weights))
+  expectations = _expectations(record, session, weights)
+  _write_json(out / "expect.json", expectations)
   (out / "phases.md").write_text(_phases(record, records))
-  (out / "launch.sh").write_text(_launch(record, session, package is not None))
+  launch, launch_missing = _launch(record, session, package is not None,
+                                   iterations=expectations.get("final_iteration"))
+  missing += launch_missing
+  (out / "launch.sh").write_text(launch)
   (out / "launch.sh").chmod(0o755)
   (out / "README.md").write_text(
       _readme(record, schedule, interventions, missing, env, weights))
@@ -209,7 +267,7 @@ def build(store: Any, record_id: str, out: Path | str,
   }
 
 
-def _write_env(session: Path, destination: Path) -> Dict[str, Any]:
+def _write_env(session: Path, destination: Path) -> dict[str, Any]:
   """The env config and its inlined implementations, from the run's capture."""
   if not session or not (session / "session.json").exists():
     return {"ok": False, "error": "this run has no session directory to read"}
@@ -218,11 +276,11 @@ def _write_env(session: Path, destination: Path) -> Dict[str, Any]:
 
   try:
     return env_export.export_env(Session(session), destination)
-  except Exception as exc:  # noqa: BLE001 -- never fail the whole recipe.
+  except Exception as exc:
     return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
-def _copy_policy(session: Path, destination: Path) -> Optional[Dict[str, Any]]:
+def _copy_policy(session: Path, destination: Path) -> dict[str, Any] | None:
   """Copy the run's final checkpoint into the recipe.
 
   ``play.find_checkpoint`` resolves it, so a recipe and ``rlmcp play`` agree on
@@ -236,9 +294,22 @@ def _copy_policy(session: Path, destination: Path) -> Optional[Dict[str, Any]]:
 
   if not session:
     return None
-  try:
-    checkpoint = find_checkpoint(session)
-  except (PlayError, OSError):
+  # The trainer's checkpoints sit in the run directory, one above the session;
+  # `<session>/checkpoints/` holds the ones an agent saved by name mid-run.
+  # Resolving from the session would stop at those -- `pre-smoothness-fix.pt`
+  # is not what a run ended on -- so the run directory is asked first and the
+  # session only when the run directory has nothing.
+  checkpoint = None
+  for candidate in (session.parent, session):
+    try:
+      found = find_checkpoint(candidate)
+    except (PlayError, OSError):
+      continue
+    if checkpoint_iteration(found) >= 0 or checkpoint is None:
+      checkpoint = found
+    if checkpoint_iteration(checkpoint) >= 0:
+      break
+  if checkpoint is None:
     return None
   destination.mkdir(parents=True, exist_ok=True)
   target = destination / checkpoint.name
@@ -265,7 +336,7 @@ it. Tighten it per check when the metric deserves it."""
 
 
 def verify(recipe_dir: Path | str, session_dir: Path | str,
-           tolerance: float = DEFAULT_TOLERANCE) -> Dict[str, Any]:
+           tolerance: float = DEFAULT_TOLERANCE) -> dict[str, Any]:
   """Did running this recipe get back to where the original run got?
 
   Compares the metrics the original run *claimed* -- ``expect.json``'s
@@ -300,7 +371,7 @@ def verify(recipe_dir: Path | str, session_dir: Path | str,
     # still worth diffing by eye, and saying so beats inventing a verdict.
     expected = {}
 
-  checks: List[Dict[str, Any]] = []
+  checks: list[dict[str, Any]] = []
   for name, raw in expected.items():
     # A record's metrics are typed by whoever wrote them, and `record close`
     # takes them as text -- "16.8" is the normal shape, not the exception.
@@ -311,7 +382,8 @@ def verify(recipe_dir: Path | str, session_dir: Path | str,
       checks.append({"metric": name, "expected": raw, "got": None,
                      "status": "not a number"})
       continue
-    got = candidate.get(name)
+    key = _telemetry_key(name, candidate)
+    got = candidate.get(key) if key else None
     if got is None:
       checks.append({"metric": name, "expected": want, "got": None,
                      "status": "missing"})
@@ -320,6 +392,7 @@ def verify(recipe_dir: Path | str, session_dir: Path | str,
     within = abs(got - want) <= band if band else got == want
     checks.append({
         "metric": name,
+        "key": key,
         "expected": want,
         "got": got,
         "delta": got - want,
@@ -361,18 +434,19 @@ def _history(session: Path) -> tuple:
   from rlmcp.records.interventions import from_session
 
   if not session or not session.exists():
-    return [], {}, []
+    return [], {}, [], {}
   try:
     interventions = from_session(session)
-  except Exception:  # noqa: BLE001 -- an unreadable log costs the notes, not the recipe.
+  except Exception:
     interventions = []
   try:
-    return interventions, replay.read_ladder(session), replay.stage_names(session)
-  except Exception:  # noqa: BLE001 -- same rule: the recipe still gets written.
-    return interventions, {}, []
+    entries = replay.stage_entries(session)
+    return interventions, replay.read_ladder(session), list(entries), entries
+  except Exception:
+    return interventions, {}, [], {}
 
 
-def _restore_package(record: RunRecord, destination: Path) -> Optional[Path]:
+def _restore_package(record: RunRecord, destination: Path) -> Path | None:
   code = record.code or {}
   if code.get("kind") != "git" or not code.get("tree"):
     return None
@@ -380,12 +454,12 @@ def _restore_package(record: RunRecord, destination: Path) -> Optional[Path]:
 
   try:
     return snapshot.restore(code["repo"], code["tree"], destination)
-  except Exception:  # noqa: BLE001 -- a pruned tree must not fail the recipe.
+  except Exception:
     return None
 
 
-def _expectations(record: RunRecord, session: Optional[Path] = None,
-                  weights: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _expectations(record: RunRecord, session: Path | None = None,
+                  weights: dict[str, Any] | None = None) -> dict[str, Any]:
   """What a replay is checked against. Numbers, never a hash.
 
   Two sets, and the difference matters. ``metrics`` are the ones a human wrote
@@ -395,10 +469,10 @@ def _expectations(record: RunRecord, session: Optional[Path] = None,
   second, which is what makes "similar performance" a check rather than an
   impression.
   """
-  expectations: Dict[str, Any] = {
+  expectations: dict[str, Any] = {
       "from_run": record.id,
       "verdict": record.verdict,
-      "metrics": {name: value for name, value in (record.metrics or [])},
+      "metrics": dict(record.metrics or []),
       "falsifier": record.falsifier.prose if record.falsifier else "",
       "note": ("RL is not bit-reproducible -- GPU nondeterminism, a different "
                "env count or seed all move the weights. Check these numbers as "
@@ -424,7 +498,23 @@ def _size(size_mb: float) -> str:
   return f"{round(size_mb * 1000):d} KB"
 
 
-def _as_number(value: Any) -> Optional[float]:
+def _telemetry_key(name: str, candidate: dict[str, Any]) -> str | None:
+  """The telemetry key a claimed metric name refers to.
+
+  A record's metrics are named by a person -- ``joint_vel_rms`` -- while the
+  telemetry publishes ``rlmcp/joint_vel_rms``, and a run made under another
+  harness published ``mcplab/joint_vel_rms``. The exact key wins; otherwise
+  the one key whose last path segment is the name. Two candidates is an
+  ambiguity, not a match.
+  """
+  if name in candidate:
+    return name
+  tail = name.rsplit("/", 1)[-1]
+  matches = [k for k in candidate if k.rsplit("/", 1)[-1] == tail]
+  return matches[0] if len(matches) == 1 else None
+
+
+def _as_number(value: Any) -> float | None:
   """A metric's value as a float, whether it was written as one or as text."""
   if isinstance(value, bool):
     return None
@@ -438,7 +528,7 @@ def _as_number(value: Any) -> Optional[float]:
   return None
 
 
-def _final_metrics(session: Optional[Path]) -> tuple:
+def _final_metrics(session: Path | None) -> tuple:
   """The last telemetry row this run published, and the iteration it was at."""
   if not session or not (session / "session.json").exists():
     return {}, None
@@ -446,7 +536,7 @@ def _final_metrics(session: Optional[Path]) -> tuple:
 
   try:
     rows = Session(session).metrics(last_n=1)
-  except Exception:  # noqa: BLE001 -- an unreadable log costs the band, not the recipe.
+  except Exception:
     return {}, None
   if not rows:
     return {}, None
@@ -459,7 +549,7 @@ def _final_metrics(session: Optional[Path]) -> tuple:
 
 
 def phase_chain(record: RunRecord,
-                records: Dict[str, RunRecord]) -> List[RunRecord]:
+                records: dict[str, RunRecord]) -> list[RunRecord]:
   """The training segments this policy actually came through, oldest first.
 
   Walk the warm-start edges back and **stop at the last from-scratch run**,
@@ -476,8 +566,8 @@ def phase_chain(record: RunRecord,
   A warm start pointing at a record this store does not have ends the walk: an
   honest short chain beats a chain with a hole in it. Cycles end it too.
   """
-  chain: List[RunRecord] = []
-  current: Optional[RunRecord] = record
+  chain: list[RunRecord] = []
+  current: RunRecord | None = record
   seen: set = set()
   while current is not None and current.id not in seen:
     seen.add(current.id)
@@ -488,8 +578,8 @@ def phase_chain(record: RunRecord,
   return chain
 
 
-def config_history(chain: List[RunRecord],
-                   records: Dict[str, RunRecord]) -> List[Any]:
+def config_history(chain: list[RunRecord],
+                   records: dict[str, RunRecord]) -> list[Any]:
   """The config changes worth reading, folded down to the target.
 
   The full fold walks the *parent* chain to the config root, which for a policy
@@ -506,7 +596,7 @@ def config_history(chain: List[RunRecord],
   return full[ids.index(root):] if root in ids else full
 
 
-def _phases(record: RunRecord, records: Dict[str, RunRecord]) -> str:
+def _phases(record: RunRecord, records: dict[str, RunRecord]) -> str:
   """The warm-start chain, flattened, and how to run each segment."""
   chain = phase_chain(record, records)
 
@@ -516,13 +606,13 @@ def _phases(record: RunRecord, records: Dict[str, RunRecord]) -> str:
               ""]
   else:
     lines += [
-        f"This policy came through {len(chain)} training segments. Each one "
+        (f"This policy came through {len(chain)} training segments. Each one "
         "starts from the weights of the one before it, so reproducing it means "
         "running them in order -- one launch per phase, each warm-started from "
-        "the checkpoint the previous phase left.", "",
-        "Anything earlier than phase 1 is deliberately absent: the policy "
+        "the checkpoint the previous phase left."), "",
+        ("Anything earlier than phase 1 is deliberately absent: the policy "
         "restarted from scratch there, so nothing before it survives in these "
-        "weights. Its settings are already folded into `config.json`.", "",
+        "weights. Its settings are already folded into `config.json`."), "",
     ]
   for index, node in enumerate(chain, start=1):
     start = node.weights.describe() if node.weights else "random init"
@@ -534,56 +624,110 @@ def _phases(record: RunRecord, records: Dict[str, RunRecord]) -> str:
       lines += ["- launch: `./launch.sh <new-record-id>`", ""]
     else:
       previous = chain[index - 2]
-      lines += [f"- launch: `./launch.sh <new-record-id> --resume "
-                f"<checkpoint from phase {index - 1} ({previous.id})>`", ""]
+      lines += [(f"- launch: `./launch.sh <new-record-id> --resume "
+                f"<checkpoint from phase {index - 1} ({previous.id})>`"), ""]
 
   history = config_history(chain, records)
   lines += ["## Config recipe", "",
-            f"Folded from {chain[0].display() if chain else 'this run'} down to "
-            f"{record.display()} -- the runs this policy came through.", ""]
+            (f"Folded from {chain[0].display() if chain else 'this run'} down to "
+            f"{record.display()} -- the runs this policy came through."), ""]
   lines += [f"- **{rid}**: {'; '.join(changes) or 'no change recorded'}"
             for rid, changes in history]
   return "\n".join(lines) + "\n"
 
 
-def _launch(record: RunRecord, session: Path, has_package: bool) -> str:
-  """The command, as close to the original as the record can say."""
-  info: Dict[str, Any] = {}
-  try:
+def _launch(record: RunRecord, session: Path, has_package: bool,
+            iterations: int | None = None) -> tuple[str, list[str]]:
+  """The command that runs this recipe, and what it could not fill in.
+
+  Everything the recipe carries is on the command line: the task packages
+  whose import registers the task, the launch config, the ladder, the seed,
+  the env count and how long the original trained. A recipe whose ladder is
+  "in curriculum.json, load it yourself" is a document; this is a launch.
+  """
+  info: dict[str, Any] = {}
+  with contextlib.suppress(OSError, ValueError):
     info = json.loads((session / "session.json").read_text())
-  except (OSError, ValueError):
-    pass
+  missing: list[str] = []
   task = info.get("task") or record.task or "<task-id>"
   envs = info.get("num_envs")
   device = info.get("device") or "cuda:0"
+  packages = [str(p) for p in (info.get("task_packages") or []) if p]
+  seed = info.get("seed")
+  if seed is None:
+    seed = _seed_from_run_dir(session)
+
   lines = [
       "#!/usr/bin/env bash",
-      "# Generated by `rlmcp recipe build`. Check it before you run it: the",
-      "# record knows the task, the env count and the device, but not the",
-      "# flags somebody typed around them.",
+      "# Generated by `rlmcp recipe build`. Everything the recipe carries is on",
+      "# this command line; check it before you run it, because the record knows",
+      "# the task, the packages, the seed and the ladder, but not the flags",
+      "# somebody typed around them. Run it from a checkout where the task",
+      "# packages import (the recipe's package/ is on PYTHONPATH below).",
       "set -euo pipefail",
       "",
       'RECORD="${1:?pass the new record id: ./launch.sh 021}"',
+      "shift",
+      'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+  ]
+  if has_package:
+    lines.append('export PYTHONPATH="$HERE/package${PYTHONPATH:+:$PYTHONPATH}"')
+  if packages:
+    lines.append("TASK_PACKAGES=(" + " ".join(f'"{p}"' for p in packages) + ")")
+  else:
+    missing.append(
+        "the task packages (this run did not record which modules register "
+        "its task, so launch.sh takes them from $TASK_PACKAGES, "
+        "space-separated, or fails to resolve the task)")
+    lines += [
+        "# This run did not record which modules register its task. Name them:",
+        '#   TASK_PACKAGES="shand.tasks shand.rlmcp_ext" ./launch.sh 021',
+        'read -r -a TASK_PACKAGES <<< "${TASK_PACKAGES:-}"',
+    ]
+  lines += [
       "",
       "rlmcp-train " + task + " \\",
+      '    "${TASK_PACKAGES[@]/#/--task-package=}" \\',
+      '    --config-json "$HERE/config.json" \\',
+      '    --curriculum-json "$HERE/curriculum.json" \\',
   ]
   if envs:
     lines.append(f"    --num-envs {int(envs)} \\")
+  if seed is not None:
+    lines.append(f"    --seed {int(seed)} \\")
+  else:
+    missing.append("the seed (neither the session nor params/env.yaml records one)")
+  if iterations:
+    lines.append(f"    --max-iterations {int(iterations)} \\")
   lines += [
       f"    --device {device} \\",
       '    --record-run "$RECORD" \\',
-      "    --code-root " + ("./package" if has_package else "."),
+      '    --code-root "' + ("$HERE/package" if has_package else ".") + '" \\',
+      '    "$@"',
       "",
-      "# The ladder is curriculum.json; load it with StageSchedule.from_dict",
-      "# and pass it to rlmcp.wrap(curriculum=...) from your own launcher.",
+      "# Extra flags after the record id go straight to rlmcp-train: a",
+      "# --records-root, a --run-name, --no-viser.",
   ]
-  return "\n".join(lines) + "\n"
+  return "\n".join(lines) + "\n", missing
+
+
+def _seed_from_run_dir(session: Path) -> int | None:
+  """The seed from the run directory's saved env config, if it is there."""
+  for name in ("agent.yaml", "env.yaml"):
+    path = session.parent / "params" / name
+    if not path.exists():
+      continue
+    with contextlib.suppress(OSError, ValueError):
+      seed = json.loads(path.read_text()).get("seed")
+      if isinstance(seed, int) and not isinstance(seed, bool):
+        return seed
+  return None
 
 
 def _readme(record: RunRecord, schedule: StageSchedule,
-            interventions: List[Dict[str, Any]], missing: List[str],
-            env: Optional[Dict[str, Any]] = None,
-            weights: Optional[Dict[str, Any]] = None) -> str:
+            interventions: list[dict[str, Any]], missing: list[str],
+            env: dict[str, Any] | None = None,
+            weights: dict[str, Any] | None = None) -> str:
   env = env or {}
   lines = [
       f"# Recipe for {record.display()}", "",
@@ -592,8 +736,8 @@ def _readme(record: RunRecord, schedule: StageSchedule,
       "| file | what it is |",
       "| --- | --- |",
       "| `package/` | the task package at the tree this run launched with |",
-      "| `env/` | the environment as it actually ran: config plus every term's "
-      "implementation, inlined |",
+      ("| `env/` | the environment as it actually ran: config plus every term's "
+      "implementation, inlined |"),
       "| `policy/` | the weights this run ended on |",
       "| `config.json` | the resolved parameters it started from |",
       "| `curriculum.json` | the ladder, loadable by `StageSchedule.from_dict` |",
@@ -601,11 +745,11 @@ def _readme(record: RunRecord, schedule: StageSchedule,
       "| `phases.md` | the warm-start chain, flattened |",
       "| `expect.json` | the numbers a replay is checked against |",
       "",
-      "`package/` and `env/` are not duplicates. The package is the repository "
+      ("`package/` and `env/` are not duplicates. The package is the repository "
       "at the commit this run launched with — the thing to develop in. `env/` "
       "is the environment as it was *running*: final weights, and every term "
       "inlined as source, so it needs nothing installed. A reward term added "
-      "by an agent mid-run exists only there.",
+      "by an agent mid-run exists only there."),
       "",
   ]
   if weights:
@@ -619,9 +763,9 @@ def _readme(record: RunRecord, schedule: StageSchedule,
   counts = env.get("counts") or {}
   if counts:
     lines += [
-        f"The environment is {counts.get('rewards', 0)} reward, "
+        (f"The environment is {counts.get('rewards', 0)} reward, "
         f"{counts.get('observations', 0)} observation and "
-        f"{counts.get('actions', 0)} action term(s) — see `env/README.md`.",
+        f"{counts.get('actions', 0)} action term(s) — see `env/README.md`."),
         "",
     ]
   lines += [
@@ -631,10 +775,10 @@ def _readme(record: RunRecord, schedule: StageSchedule,
       "rlmcp recipe verify . --session <the new run's session>",
       "```",
       "",
-      "`verify` compares the new run against the metrics this one claimed, "
+      ("`verify` compares the new run against the metrics this one claimed, "
       "inside a band, because two RL runs of the same recipe differ by seed "
       "and GPU nondeterminism alone. It answers *statistically equivalent*, "
-      "and nothing stronger — it does not compare weights.",
+      "and nothing stronger — it does not compare weights."),
       "", "## The ladder", "",
   ]
   for stage in schedule.stages:

@@ -945,3 +945,38 @@ def test_resetting_episodes_and_resetting_parameters_are_different_verbs(lab, fa
 
 def test_reset_envs_is_offered_to_agents_alongside_the_other_commands(lab):
   assert "reset_envs" in _run(lab, "help").result["commands"]
+
+
+# A recipe's config.json: applied at launch, not replayed as edits.
+
+
+def test_a_launch_config_is_applied_before_the_first_batch(tmp_path, fake_sim,
+                                                            fake_runner):
+  """Sim keys are set at construction, runner keys once the runner attaches,
+  and both become the values `reset_parameters` returns to."""
+  controller = RlMcp(
+      sim_adapter=fake_sim, session_dir=tmp_path / "session", video_every=0,
+      launch_config={"reward.action_rate_l2.weight": -0.5,
+                     "rl.entropy_coef": 0.02,
+                     "reward.invented.weight": 1.0})
+  try:
+    assert controller.parameters.get_value("reward.action_rate_l2.weight") == -0.5
+    assert controller.parameters.get_spec("rl.entropy_coef") is None  # not yet
+
+    controller.attach_runner(fake_runner)
+    assert controller.parameters.get_value("rl.entropy_coef") == 0.02
+
+    controller.parameters.set_value("reward.action_rate_l2.weight", -0.9)
+    controller.cmd_reset_parameters()
+    assert controller.parameters.get_value("reward.action_rate_l2.weight") == -0.5
+
+    events = [e for e in Session.open(controller.session.dir).events()
+              if e["kind"] == "launch_config"]
+    assert [sorted(e["applied"]) for e in events] == [
+        ["reward.action_rate_l2.weight"], ["rl.entropy_coef"]]
+    assert events[-1]["unknown"] == ["reward.invented.weight"]
+    # Not an intervention: a distilled ladder must not fold launch values in.
+    assert not [e for e in Session.open(controller.session.dir).events()
+                if e["kind"] == "set_parameter"]
+  finally:
+    controller.close()

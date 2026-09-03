@@ -393,6 +393,7 @@ class RlMcp:
       trace_capacity: int = 6000,
       extensions: Sequence[Extension] | None = None,
       records: Any | None = None,
+      launch_config: dict[str, Any] | None = None,
       video_every: Any = None,
       video_seconds: float = 4.0,
       video_env_id: int = 0,
@@ -466,6 +467,12 @@ class RlMcp:
     self._register_handlers()
     self._discover_parameters()
     self._defaults = self.parameters.get_snapshot()
+    # A recipe's config.json: the values the original run started from, set
+    # before the first batch so the record's snapshot and `reset_parameters`
+    # both treat them as this run's launch values. Keys the runner owns
+    # (`rl.*`) are not known yet and are applied when it attaches.
+    self._launch_pending: dict[str, Any] = dict(launch_config or {})
+    self._apply_launch_config()
     self._capture_env_terms()
 
     self._extension_context = ExtensionContext(
@@ -580,7 +587,44 @@ class RlMcp:
           getter=lambda k=spec.key: self.runner.get_hyperparameter(k),
       )
     self._defaults = self.parameters.get_snapshot()
+    self._apply_launch_config()
     self.session.publish_params(self.parameters.export_schema_json())
+
+  def _apply_launch_config(self) -> None:
+    """Set every pending launch-config key the registry knows, and say so.
+
+    One event for the batch rather than one per key: these are not decisions
+    made during the run, and a recipe distilled from this run must not read
+    forty launch values as forty mid-run edits.
+    """
+    if not self._launch_pending:
+      return
+    applied: dict[str, Any] = {}
+    refused: dict[str, str] = {}
+    for key in list(self._launch_pending):
+      if self.parameters.get_spec(key) is None:
+        continue
+      value = self._launch_pending.pop(key)
+      try:
+        ok = self.parameters.set_value(key, value)
+      except Exception as exc:
+        refused[key] = f"{type(exc).__name__}: {exc}"
+        continue
+      if ok:
+        applied[key] = self.parameters.get_value(key)
+        self._defaults[key] = applied[key]
+      else:
+        refused[key] = "the setter returned False"
+    if applied or refused:
+      self.session.append_event("launch_config", {
+          "iteration": self.iteration,
+          "applied": applied,
+          "refused": refused,
+          "unknown": sorted(self._launch_pending),
+      })
+    if refused:
+      print(f"[rlmcp] launch config: {len(refused)} value(s) refused: "
+            + ", ".join(f"{k} ({v})" for k, v in refused.items()), flush=True)
 
   # Training-loop hooks.
 
@@ -1280,10 +1324,8 @@ class RlMcp:
     if not terms:
       return
     terms = {"task": self._task_label, "iteration": self.iteration, **terms}
-    try:
+    with contextlib.suppress(Exception):  # a session that cannot be written
       self.session.publish_env_terms(terms)
-    except Exception:  # pragma: no cover - a session that cannot be written.
-      pass
 
   def _reward_namespace(self) -> dict[str, Any]:
     """What an agent's reward source is compiled against.

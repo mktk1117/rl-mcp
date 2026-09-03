@@ -24,6 +24,7 @@ import sys
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 def _prog_name(subcommand: str) -> str:
@@ -50,6 +51,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument(
       "--curriculum", default="terrain", choices=["terrain", "none"],
       help="'terrain' unlocks terrain groups flat-first; 'none' keeps the task's own config",
+  )
+  parser.add_argument(
+      "--curriculum-json", default="", metavar="PATH",
+      help="A ladder written by `rlmcp recipe build` (curriculum.json), or any "
+           "StageSchedule.to_dict() saved as JSON. Starts it from its first rung. "
+           "Overrides --curriculum.",
+  )
+  parser.add_argument(
+      "--config-json", default="", metavar="PATH",
+      help="Parameter values to set before the first batch, as {key: value} -- "
+           "a recipe's config.json. Keys the task does not have are reported, "
+           "not fatal.",
   )
   parser.add_argument("--stage-min-iterations", type=int, default=150)
   parser.add_argument("--stage-hold-iterations", type=int, default=20)
@@ -135,6 +148,36 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return parser.parse_args(argv)
 
 
+def load_curriculum_json(path: str) -> Any:
+  """The ladder in ``path`` as a fresh :class:`StageSchedule`, or None.
+
+  Fresh on purpose: a file saved from a live schedule carries the rung it was
+  on and the history behind it, and a new run starts on the first rung with
+  none of that.
+  """
+  if not path:
+    return None
+  from rlmcp.core.curriculum import StageSchedule
+
+  raw = json.loads(Path(path).read_text())
+  if isinstance(raw, list):
+    raw = {"stages": raw}
+  if not isinstance(raw, dict) or not raw.get("stages"):
+    raise ValueError(f"--curriculum-json {path}: no 'stages' in it.")
+  return StageSchedule.from_dict({"stages": raw["stages"],
+                                  "auto_promote": raw.get("auto_promote", True)})
+
+
+def load_config_json(path: str) -> dict[str, Any]:
+  """``{key: value}`` from ``path``, or ``{}`` when no path was given."""
+  if not path:
+    return {}
+  raw = json.loads(Path(path).read_text())
+  if not isinstance(raw, dict):
+    raise ValueError(f"--config-json {path}: expected a JSON object of key: value.")
+  return dict(raw)
+
+
 def main(argv: list[str] | None = None) -> int:
   args = _parse_args(argv)
 
@@ -146,6 +189,13 @@ def main(argv: list[str] | None = None) -> int:
     Cadence.parse(args.video_every)
   except CadenceError as exc:
     print(f"[rlmcp-train] --video-every: {exc}")
+    return 2
+
+  try:
+    schedule = load_curriculum_json(args.curriculum_json)
+    launch_config = load_config_json(args.config_json)
+  except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"[rlmcp-train] {exc}")
     return 2
 
   # Must precede the first mujoco import so the GL backend is picked correctly.
@@ -231,11 +281,19 @@ def main(argv: list[str] | None = None) -> int:
       render_mode="rgb_array" if args.eager_render else None,
   )
 
+  if schedule is not None:
+    (log_dir / "params" / "curriculum.json").write_text(
+        json.dumps([s.to_dict() for s in schedule.stages], indent=2))
+
   env = rlmcp.wrap(
       env,
       session_dir=log_dir / "rlmcp",
-      curriculum=None if args.curriculum == "none" else "terrain",
+      curriculum=schedule if schedule is not None
+      else None if args.curriculum == "none" else "terrain",
       task_id=args.task,
+      task_packages=list(args.task_package),
+      seed=agent_cfg.seed,
+      parameters=launch_config,
       service_every_steps=agent_cfg.num_steps_per_env,
       record_run=args.record_run or None,
       records_root=args.records_root or None,

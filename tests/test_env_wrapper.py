@@ -278,3 +278,18 @@ def test_rlmcp_train_defaults_the_view_on_and_no_viser_turns_it_off():
   assert _parse_args(["Some-Task"]).viser is True
   assert _parse_args(["Some-Task", "--no-viser"]).viser is False
   assert _parse_args(["Some-Task", "--viser"]).viser is True
+
+
+def test_wrap_records_what_a_recipe_needs_to_launch_it_again(wrapper_cls, tmp_path):
+  """The modules that register the task and the seed go into session.json;
+  a launch config is applied before anything is snapshotted."""
+  wrapper = wrapper_cls(
+      wrappable_env(), session_dir=tmp_path / "session",
+      task_packages=["shand.tasks", "shand.rlmcp_ext"], seed=7,
+      parameters={"reward.track_linear_velocity.weight": 3.5})
+
+  info = wrapper.rlmcp.session.info()
+  assert info["task_packages"] == ["shand.tasks", "shand.rlmcp_ext"]
+  assert info["seed"] == 7
+  assert wrapper.rlmcp.parameters.get_value(
+      "reward.track_linear_velocity.weight") == 3.5

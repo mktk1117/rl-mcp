@@ -38,11 +38,12 @@ ENTERED = ["0_held", "1_table"]
 # Distillation.
 
 
-def test_an_edit_becomes_the_value_its_rung_starts_with(): 
+def test_an_edit_becomes_the_value_its_rung_starts_with():
   """Not "wait 400 iterations, then panic": the point of distilling is that the
   replay starts the rung with the value the original run needed."""
   schedule = distil([_stage(0, "0_held"),
-                     _edit(400, "reward.goal.weight: 18.0 → 24.0", "too weak")],
+                     _edit(400, "reward.goal.weight: 18.0 → 24.0", "too weak"),
+                     _stage(1200, "1_table")],
                     LADDER, ENTERED)
 
   held = schedule.stages[0]
@@ -83,7 +84,7 @@ def test_only_the_rungs_the_run_actually_climbed_are_in_the_recipe():
   assert [s.name for s in schedule.stages] == ["0_held"]
 
 
-def test_a_run_with_no_curriculum_gets_one_rung_per_change(): 
+def test_a_run_with_no_curriculum_gets_one_rung_per_change():
   """And each rung is held for as long as the original ran before the next."""
   schedule = distil([_edit(400, "reward.goal.weight: 18.0 → 24.0"),
                      _edit(900, "rl.entropy_coef: 0.005 → 0.01")])
@@ -146,7 +147,8 @@ def test_a_recipe_is_a_directory_you_can_launch(bundle):
   # environment and the weights are honestly absent rather than empty files.
   assert answer["package"]
   assert [m.split(" (")[0] for m in answer["missing"]] == [
-      "the materialised environment", "the trained policy"]
+      "the materialised environment", "the trained policy",
+      "the task packages", "the seed"]
 
 
 def test_the_package_is_the_code_that_run_actually_used(bundle):
@@ -243,7 +245,7 @@ def _tree(tmp_path):
   four = add("four", parent=three, warm=three)
   five = add("five", parent=four, warm=four)
   add("six", parent=five, warm=five)            # a sibling branch off 5
-  seven = add("seven", parent=five, warm=five)  # the branch that mattered
+  add("seven", parent=five, warm=five)          # the branch that mattered
   eight = add("eight")                          # an unrelated from-scratch line
   add("nine", parent=eight, warm=eight)
   return store, made
@@ -346,12 +348,13 @@ def run_with_a_session(bundle):
   This is the shape the feature exists for -- a finished run you want to hand
   to somebody as the pair of environment and policy.
   """
-  store, repo, tmp_path = bundle
+  store, _repo, tmp_path = bundle
   session = tmp_path / "logs" / "run002" / "rlmcp"
   session.mkdir(parents=True)
   (session / "session.json").write_text(json.dumps(
       {"kind": "rlmcp-training-session", "task": "Shand", "num_envs": 4096,
-       "device": "cuda:0", "started_at": 0.0}))
+       "device": "cuda:0", "started_at": 0.0,
+       "task_packages": ["shand.tasks", "shand.rlmcp_ext"], "seed": 7}))
   (session / "env_terms.json").write_text(json.dumps({
       "task": "Shand",
       "rewards": [{
@@ -515,7 +518,163 @@ def test_verify_needs_a_recipe_and_a_run_and_says_which_is_wrong(
   store, bundle_path, _ = run_with_a_session
   build(store, "002", bundle_path / "recipe")
 
-  with pytest.raises(ValueError, match="expect.json"):
+  with pytest.raises(ValueError, match=r"expect\.json"):
     verify(bundle_path / "not-a-recipe", _candidate(bundle_path, "x", 1.0))
   with pytest.raises(ValueError, match="No metrics"):
     verify(bundle_path / "recipe", bundle_path / "nowhere")
+
+
+# The three ways a recipe silently described a different run than the one it
+# was built from, each reproduced on a real record first.
+
+
+def _session_with_events(tmp_path, events, ladder, checkpoints=()):
+  """A run whose event log names its rung entries the way the controller does."""
+  run = tmp_path / "logs" / "run"
+  session = run / "rlmcp"
+  session.mkdir(parents=True)
+  (session / "session.json").write_text(json.dumps({"task": "Shand"}))
+  (session / "events.jsonl").write_text(
+      "".join(json.dumps(e) + "\n" for e in events))
+  (run / "params").mkdir()
+  (run / "params" / "curriculum.json").write_text(json.dumps(list(ladder.values())))
+  for name in checkpoints:
+    path = session.parent / name if "/" not in name else session / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"weights")
+  return session
+
+
+THREE_RUNGS = {
+    "0_turn": {"name": "0_turn", "parameters": {"reward.smooth.weight": -0.005}},
+    "1_hold": {"name": "1_hold", "parameters": {"reward.fall.weight": -180.0}},
+    "2_precise": {"name": "2_precise", "parameters": {}},
+}
+
+
+def _stage_event(iteration, frm, to):
+  # Exactly the shape RlMcp._apply_stage writes: the transition as from/to.
+  return {"t": 0.0, "kind": "curriculum_stage", "iteration": iteration,
+          "from": frm, "to": to, "applied": {}, "notes": ""}
+
+
+def _edit_event(iteration, key, old, new):
+  return {"t": 0.0, "kind": "set_parameter", "iteration": iteration, "key": key,
+          "old": old, "new": new, "applied": True, "rationale": "too taxing"}
+
+
+def test_an_edit_folds_into_the_rung_the_event_log_says_was_active(bundle, tmp_path):
+  """Run 010: three edits made on the smoothness rung came out folded into
+  every rung, rung 0 included, because the stage lines could not be read."""
+  store, _, _ = bundle
+  session = _session_with_events(tmp_path, [
+      _stage_event(0, "-", "0_turn"),
+      _stage_event(1000, "0_turn", "1_hold"),
+      _edit_event(1500, "reward.smooth.weight", -0.6, -0.01),
+      _stage_event(2000, "1_hold", "2_precise"),
+  ], THREE_RUNGS)
+  store.update_record("002", lambda r: setattr(r, "session", str(session)))
+
+  payload = build(store, "002", tmp_path / "recipe", policy=False)
+
+  ladder = json.loads((tmp_path / "recipe" / "curriculum.json").read_text())
+  by_name = {s["name"]: s for s in ladder["stages"]}
+  assert by_name["1_hold"]["parameters"]["reward.smooth.weight"] == -0.01
+  assert by_name["0_turn"]["parameters"] == {"reward.smooth.weight": -0.005}
+  assert by_name["2_precise"]["parameters"] == {}
+  assert not [m for m in payload["missing"] if "edit" in m]
+
+
+def test_edits_are_named_not_smeared_when_the_log_has_no_rung_entries(
+    bundle, tmp_path):
+  """A ladder whose entries were never logged must not start every rung at the
+  value of an edit made on one of them."""
+  store, _, _ = bundle
+  session = _session_with_events(tmp_path, [
+      _edit_event(1500, "reward.smooth.weight", -0.6, -0.01),
+  ], THREE_RUNGS)
+  store.update_record("002", lambda r: setattr(r, "session", str(session)))
+
+  payload = build(store, "002", tmp_path / "recipe", policy=False)
+
+  ladder = json.loads((tmp_path / "recipe" / "curriculum.json").read_text())
+  for stage in ladder["stages"]:
+    assert stage["parameters"].get("reward.smooth.weight") != -0.01, stage["name"]
+  assert any("not folded" in m and "reward.smooth.weight" in m
+             for m in payload["missing"])
+
+
+def test_the_policy_is_the_checkpoint_the_run_ended_on_not_a_named_one(
+    bundle, tmp_path):
+  """`<session>/checkpoints/` holds what an agent saved by name mid-run;
+  the run's final weights are in the run directory above it."""
+  store, _, _ = bundle
+  session = _session_with_events(
+      tmp_path, [], THREE_RUNGS,
+      checkpoints=["checkpoints/pre-smoothness-fix.pt", "model_final_6906.pt"])
+  store.update_record("002", lambda r: setattr(r, "session", str(session)))
+
+  payload = build(store, "002", tmp_path / "recipe")
+
+  assert payload["policy"].endswith("model_final_6906.pt")
+  expect = json.loads((tmp_path / "recipe" / "expect.json").read_text())
+  assert expect["policy"] == {"file": "model_final_6906.pt", "iteration": 6906,
+                              "size_mb": expect["policy"]["size_mb"]}
+
+
+def test_verify_matches_a_claimed_name_to_its_namespaced_telemetry_key(
+    run_with_a_session):
+  """A record says `goals_per_min`; the run publishes `rlmcp/goals_per_min`."""
+  store, tmp_path, _ = run_with_a_session
+  build(store, "002", tmp_path / "recipe")
+  session = tmp_path / "again" / "rlmcp"
+  session.mkdir(parents=True)
+  (session / "session.json").write_text(json.dumps({"task": "Shand"}))
+  (session / "metrics.jsonl").write_text(
+      json.dumps({"iteration": 4300, "rlmcp/goals_per_min": 16.0}) + "\n")
+
+  report = verify(tmp_path / "recipe", session)
+
+  assert report["compared"] == 1
+  assert report["checks"][0]["key"] == "rlmcp/goals_per_min"
+  assert report["reproduced"] is True
+
+
+# launch.sh is a launch, not a document.
+
+
+def test_launch_sh_carries_the_packages_the_config_the_ladder_and_the_seed(
+    run_with_a_session):
+  """Run 010's launch.sh had no task package, never applied curriculum.json or
+  config.json, and did not say how long to train. It could not reproduce a run
+  whose ladder was the whole recipe."""
+  store, tmp_path, _ = run_with_a_session
+
+  payload = build(store, "002", tmp_path / "recipe")
+
+  script = (tmp_path / "recipe" / "launch.sh").read_text()
+  assert 'TASK_PACKAGES=("shand.tasks" "shand.rlmcp_ext")' in script
+  assert '"${TASK_PACKAGES[@]/#/--task-package=}"' in script
+  assert '--config-json "$HERE/config.json"' in script
+  assert '--curriculum-json "$HERE/curriculum.json"' in script
+  assert "--seed 7" in script
+  assert "--max-iterations 4300" in script      # where the original stopped
+  assert "--num-envs 4096" in script
+  assert 'PYTHONPATH="$HERE/package' in script   # the restored package imports
+  assert not [m for m in payload["missing"] if "seed" in m or "packages" in m]
+
+
+def test_launch_sh_says_which_packages_it_does_not_know(bundle, tmp_path):
+  """A run made before task packages were recorded still gets a script that
+  can be launched, with the gap named in `missing` and read from $TASK_PACKAGES."""
+  store, _, _ = bundle
+  session = _session_with_events(tmp_path, [], THREE_RUNGS)
+  (session.parent / "params" / "env.yaml").write_text(json.dumps({"seed": 42}))
+  store.update_record("002", lambda r: setattr(r, "session", str(session)))
+
+  payload = build(store, "002", tmp_path / "recipe", policy=False)
+
+  script = (tmp_path / "recipe" / "launch.sh").read_text()
+  assert 'read -r -a TASK_PACKAGES <<< "${TASK_PACKAGES:-}"' in script
+  assert "--seed 42" in script                  # read off params/env.yaml
+  assert any(m.startswith("the task packages") for m in payload["missing"])
