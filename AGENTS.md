@@ -212,7 +212,7 @@ The tag is the version with a `v` in front, and it must agree with
 
 ```bash
 # bump `version` in pyproject.toml on main first
-gh release create v0.3.1 --generate-notes
+gh release create v0.1.1 --generate-notes
 ```
 
 No token is involved: PyPI trusts the workflow's OIDC identity (trusted

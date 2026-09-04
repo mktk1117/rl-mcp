@@ -1,7 +1,7 @@
 # Uploads a release to PyPI, which is what makes `pip install rl-mcp` true.
 #
 # Trigger: a GitHub release being published. The tag is the version with a `v`
-# in front (`v0.3.0`), and it has to agree with pyproject.toml — checked before
+# in front (`v0.1.0`), and it has to agree with pyproject.toml — checked before
 # anything is built, so a release that forgot the bump fails here with a
 # one-line reason instead of at upload with a 400.
 #
