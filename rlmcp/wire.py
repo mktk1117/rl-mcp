@@ -51,20 +51,24 @@ class _Http:
     self.timeout = timeout
 
   def json(self, method: str, path: str, body: Any = None,
-           params: dict[str, Any] | None = None, timeout: float | None = None) -> Any:
-    raw = self.bytes(method, path, body, params, timeout)
-    return json.loads(raw.decode()) if raw else None
+           params: dict[str, Any] | None = None, timeout: float | None = None,
+           raw: bytes | None = None) -> Any:
+    answer = self.bytes(method, path, body, params, timeout, raw=raw)
+    return json.loads(answer.decode()) if answer else None
 
   def bytes(self, method: str, path: str, body: Any = None,
-            params: dict[str, Any] | None = None, timeout: float | None = None) -> bytes:
+            params: dict[str, Any] | None = None, timeout: float | None = None,
+            raw: bytes | None = None) -> bytes:
     url = self.base + path
     if params:
       clean = {k: v for k, v in params.items() if v is not None}
       if clean:
         url += "?" + urllib.parse.urlencode(clean)
-    data = json.dumps(body).encode() if body is not None else None
+    data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
     headers = {"accept": "application/json"}
-    if data is not None:
+    if raw is not None:
+      headers["content-type"] = "application/octet-stream"
+    elif data is not None:
       headers["content-type"] = "application/json"
     if self.token:
       headers["authorization"] = f"Bearer {self.token}"
@@ -222,6 +226,29 @@ class WireHost:
   def job(self, job_id: str, tail: int = 40) -> dict[str, Any]:
     return self._http.json("GET", "/v1/jobs/" + urllib.parse.quote(job_id, safe=""),
                            params={"tail": tail}) or {}
+
+  # -- trees: the code a job runs from ---------------------------------------
+
+  def has_tree(self, tree: str) -> str:
+    """The host's path for a tree it already holds, or ""."""
+    try:
+      return str(self._http.json("GET", "/v1/trees/" + urllib.parse.quote(tree, safe=""))
+                 .get("path") or "")
+    except WireError as exc:
+      if " 404 " in str(exc):
+        return ""
+      raise
+
+  def push_tree(self, tree: str, archive: bytes) -> str:
+    """Send ``git archive`` bytes of ``tree``; returns the host's path for it.
+
+    Idempotent by tree id: a host that has it answers with the path and
+    unpacks nothing. A job whose ``cwd`` is that path runs exactly the code
+    the launcher stamped, on a machine with no repository at all.
+    """
+    answer = self._http.json("PUT", "/v1/trees/" + urllib.parse.quote(tree, safe=""),
+                             body=None, timeout=self._http.timeout * 10, raw=archive)
+    return str(answer.get("path") or "")
 
   def cancel_job(self, job_id: str) -> dict[str, Any]:
     path = "/v1/jobs/" + urllib.parse.quote(job_id, safe="") + "/cancel"

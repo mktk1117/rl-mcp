@@ -188,6 +188,53 @@ def gpus() -> list[dict[str, Any]]:
   return rows
 
 
+class Trees:
+  """Code a launcher sent, by git tree id: what a job on this host runs from.
+
+  A launcher stamps a tree at home (``refs/rlmcp/runs/<record>``) and sends
+  ``git archive`` of it here; it is unpacked once under a directory named by
+  the tree id and never touched again, so two runs of the same tree share
+  one copy and a re-send is a no-op. Content-addressed by the sender's tree
+  id: the host trusts the token holder to name it honestly, which is the
+  same trust it extends to ``argv``.
+  """
+
+  MAX_BYTES = 512 * 1024 * 1024
+
+  def __init__(self, root: Path):
+    self.root = root
+
+  def path(self, tree: str) -> Path:
+    if not tree or not all(c in "0123456789abcdef" for c in tree) or len(tree) < 7:
+      raise HostError(400, "a tree id is a hex git object name")
+    return self.root / tree
+
+  def has(self, tree: str) -> Path | None:
+    path = self.path(tree)
+    return path if (path / ".rlmcp-tree").exists() else None
+
+  def put(self, tree: str, archive: bytes) -> Path:
+    path = self.path(tree)
+    if (path / ".rlmcp-tree").exists():
+      return path
+    if len(archive) > self.MAX_BYTES:
+      raise HostError(413, f"a tree archive over {self.MAX_BYTES >> 20} MB is not code")
+    staging = path.with_name(path.name + f".part-{uuid.uuid4().hex[:6]}")
+    staging.mkdir(parents=True, exist_ok=True)
+    done = subprocess.run(["tar", "-x", "-C", str(staging)], input=archive,
+                          capture_output=True, check=False)
+    if done.returncode != 0:
+      shutil.rmtree(staging, ignore_errors=True)
+      raise HostError(400, f"not a tar archive: {done.stderr.decode(errors='replace').strip()}")
+    (staging / ".rlmcp-tree").write_text(tree + "\n")
+    try:
+      staging.rename(path)
+    except OSError:
+      # Somebody else finished the same tree first; theirs is as good.
+      shutil.rmtree(staging, ignore_errors=True)
+    return path
+
+
 class Host:
   """Everything the daemon knows, behind the HTTP layer so a test can call it."""
 
@@ -197,6 +244,7 @@ class Host:
     self.id = host_id(self.root)
     self.started_at = time.time()
     self.jobs = Jobs(log_root or (self.root / ".rlmcp-hostd" / "jobs"))
+    self.trees = Trees(self.root / ".rlmcp-hostd" / "trees")
 
   def describe(self) -> dict[str, Any]:
     try:
@@ -257,6 +305,10 @@ def _handler(host: Host):
       self.end_headers()
       self.wfile.write(data)
 
+    def _raw(self) -> bytes:
+      length = int(self.headers.get("content-length") or 0)
+      return self.rfile.read(length) if length else b""
+
     def _body(self) -> dict[str, Any]:
       length = int(self.headers.get("content-length") or 0)
       if not length:
@@ -290,6 +342,9 @@ def _handler(host: Host):
     def do_POST(self):
       self._route("POST")
 
+    def do_PUT(self):
+      self._route("PUT")
+
     # -- routes --
 
     def _dispatch(self, method: str, parts: list[str], q: dict[str, str]) -> None:
@@ -317,6 +372,14 @@ def _handler(host: Host):
         return self._send(200, host.jobs.get(parts[1]).describe(tail=tail))
       if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "cancel" and method == "POST":
         return self._send(200, host.jobs.cancel(parts[1]).describe(tail=LOG_TAIL))
+      if len(parts) == 2 and parts[0] == "trees":
+        if method == "GET":
+          found = host.trees.has(parts[1])
+          return self._send(200 if found else 404,
+                            {"tree": parts[1], "path": str(found) if found else None})
+        if method == "PUT":
+          path = host.trees.put(parts[1], self._raw())
+          return self._send(200, {"tree": parts[1], "path": str(path)})
       raise HostError(404, "no such route")
 
     def _session(self, method: str, session: Session, rest: list[str], q: dict[str, str]) -> None:
