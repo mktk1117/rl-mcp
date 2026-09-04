@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rl-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "An MCP server for RL training: watch, diagnose and steer a running job from an agent or a shell"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,13 @@ rlmcp = "rlmcp.cli:main"
 # better than a subcommand. Prefixed, since mjlab installs a bare `train`.
 rlmcp-train = "rlmcp.train:main"
 rlmcp-server = "rlmcp.server.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/mktk1117/rl-mcp"
+Repository = "https://github.com/mktk1117/rl-mcp"
+Documentation = "https://github.com/mktk1117/rl-mcp/tree/main/docs"
+Issues = "https://github.com/mktk1117/rl-mcp/issues"
+Changelog = "https://github.com/mktk1117/rl-mcp/releases"
 
 [project.optional-dependencies]
 server = [

@@ -60,7 +60,7 @@ the exception, and stays CLI-only because it opens a window.
 The CLI knows who is reading. A terminal gets aligned tables, and pictures open
 by themselves. A pipe gets JSON, and each command's JSON is a parsing contract
 that does not move — the shapes are written down and pinned by tests, in
-[docs/tools.md](docs/tools.md#what-a-pipe-gets).
+[docs/tools.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/tools.md#what-a-pipe-gets).
 
 ## The whole integration
 
@@ -80,7 +80,7 @@ env.attach_runner(runner)          # PPO knobs, checkpoints, iteration boundarie
 runner.learn(num_learning_iterations=agent_cfg.max_iterations)
 ```
 
-That is it. Details and traps: [docs/your-task.md](docs/your-task.md).
+That is it. Details and traps: [docs/your-task.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/your-task.md).
 
 ### The same one call on IsaacLab
 
@@ -107,7 +107,7 @@ rlmcp — 73 tunable knobs came out of walking the environment's own manager
 configs, the same walk it uses on mjlab. The example script is
 [examples/train_isaaclab.py](examples/train_isaaclab.py), and the things that
 differ — cameras, the robot's name, which Isaac Sim goes with which driver — are
-in [docs/isaaclab.md](docs/isaaclab.md).
+in [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab.md).
 
 ## What you get
 
@@ -160,7 +160,7 @@ That conclusion is not in any single run. It is in the shape of three siblings,
 which is the argument for keeping runs as a graph.
 
 The same page has a **tree** view for the ancestry itself and a **parameters**
-view for what changed across runs. More in [docs/records.md](docs/records.md).
+view for what changed across runs. More in [docs/records.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/records.md).
 
 ## Install
 
@@ -219,17 +219,17 @@ afterwards.
 
 | page | for |
 | --- | --- |
-| [docs/tools.md](docs/tools.md) | **Every tool, one entry each.** Shell command, MCP call, what comes back, and the traps. Start here for either audience. |
-| [docs/mcp-server.md](docs/mcp-server.md) | Agents: setup, session pinning, liveness, deferred jobs, a worked steering session. |
-| [docs/tuning.md](docs/tuning.md) | The tuning loop: verify the task first, watch the right numbers, read symptoms into levers. The distilled findings of two campaigns. |
-| [docs/your-task.md](docs/your-task.md) | Putting rlmcp on your own task, in five steps. |
-| [docs/curriculum.md](docs/curriculum.md) | Writing the stage ladder. |
-| [docs/extensions.md](docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
-| [docs/isaaclab.md](docs/isaaclab.md) | Driving an IsaacLab run: the one line, cameras, what differs from mjlab. |
-| [docs/records.md](docs/records.md) | Hypotheses, verdicts, feedback, code snapshots, the record graph. |
-| [docs/design.md](docs/design.md) | How it fits together, how parameters are found, other simulators. |
-| [docs/style.md](docs/style.md) | The style guide: two spaces, what ruff checks, and why each rule is on or off. |
-| [AGENTS.md](AGENTS.md) | Contributing to this repository. |
+| [docs/tools.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/tools.md) | **Every tool, one entry each.** Shell command, MCP call, what comes back, and the traps. Start here for either audience. |
+| [docs/mcp-server.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/mcp-server.md) | Agents: setup, session pinning, liveness, deferred jobs, a worked steering session. |
+| [docs/tuning.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/tuning.md) | The tuning loop: verify the task first, watch the right numbers, read symptoms into levers. The distilled findings of two campaigns. |
+| [docs/your-task.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/your-task.md) | Putting rlmcp on your own task, in five steps. |
+| [docs/curriculum.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/curriculum.md) | Writing the stage ladder. |
+| [docs/extensions.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
+| [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab.md) | Driving an IsaacLab run: the one line, cameras, what differs from mjlab. |
+| [docs/records.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/records.md) | Hypotheses, verdicts, feedback, code snapshots, the record graph. |
+| [docs/design.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/design.md) | How it fits together, how parameters are found, other simulators. |
+| [docs/style.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/style.md) | The style guide: two spaces, what ruff checks, and why each rule is on or off. |
+| [AGENTS.md](https://github.com/mktk1117/rl-mcp/blob/main/AGENTS.md) | Contributing to this repository. |
 
 ## How it works, briefly
 
@@ -264,7 +264,7 @@ The same split is why a second backend was cheap. Parameter discovery, trace
 sampling, metrics and the wrapper are written against the shape mjlab and
 IsaacLab share; each adapter is only what is genuinely its own — how a robot is
 found in the scene and how a frame is rendered. More in
-[docs/design.md](docs/design.md).
+[docs/design.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/design.md).
 
 ## Tests
 
