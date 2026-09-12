@@ -35,6 +35,17 @@ run from there.
 **If you are driving yourself**, jump to [Install](#install) and
 [Try it](#try-it).
 
+**If you would rather have a GUI**, there is one:
+[rl-mcp-studio](https://github.com/mktk1117/rl-mcp-studio) puts the run tree,
+live plots, clips and the agent conversation in a browser tab, with the same
+rlmcp tools underneath.
+
+[![rlmcp studio: a run's story, its plots, and the agent beside it](https://raw.githubusercontent.com/mktk1117/rl-mcp-studio/main/docs/media/studio.png)](https://github.com/mktk1117/rl-mcp-studio)
+
+```bash
+uv tool install rl-mcp-studio && rlmcp-studio --check
+```
+
 ---
 
 ## What it looks like
