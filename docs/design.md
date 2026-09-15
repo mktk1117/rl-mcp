@@ -200,6 +200,29 @@ which is the number to expect for a third.
 Anything your simulator has and others do not belongs in an
 [Extension](extensions.md), not in the adapter contract.
 
+### The single-file family
+
+A third family is not manager-based at all: an `env.py` whose config is one
+dataclass at the top of the file and whose `step()` is written out below it.
+It is driven the same way because the file *declares* what the managers would
+otherwise have told us -- `Static[...]` for a value read once at construction,
+`term(...)` for a reward term -- and keeps its state in the buffers the
+legged-gym-style sampler already reads. [single-file.md](single-file.md) is
+the page for it.
+
+```
+rlmcp/declare.py                 the two markers; stdlib only, detected by shape
+rlmcp/adapters/single_file/      providers built from the config tree, the
+                                 adapter, the wrapper with attach_algorithm/service
+rlmcp/backends/                  RobotSpec + SimBackend, and mjwarp / mjbatch /
+                                 genesis behind one robot-level contract
+```
+
+The backends are what let one `env.py` run on three simulators. That contract
+sits at the level of a robot -- root pose, joint state, contact force per
+site, position targets -- because that is the level the simulators share;
+below it they agree on nothing.
+
 ## Tests
 
 ```bash

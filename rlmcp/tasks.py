@@ -165,6 +165,24 @@ def _genesis_describe(task: str) -> dict[str, Any]:
   return {"experiment": ""}
 
 
+def _single_file_ids() -> list[str]:
+  """A single-file task is a script, not a registry entry -- so nothing to
+  list, but only once the family can run here at all: it needs torch and at
+  least one physics backend (mjwarp, mjbatch or genesis)."""
+  import torch  # noqa: F401
+
+  from rlmcp.backends import available
+
+  if not any(reason == "" for reason in available().values()):
+    raise ImportError("no physics backend: install mujoco_warp, mjbatch or genesis")
+  return []
+
+
+def _single_file_describe(task: str) -> dict[str, Any]:
+  """Unreachable in practice -- nothing can name a task this backend lists."""
+  return {"experiment": ""}
+
+
 BACKENDS: tuple[dict[str, Any], ...] = (
     {"backend": "mjlab", "ids": _mjlab_ids, "describe": _mjlab_describe, "note": ""},
     {"backend": "isaaclab", "ids": _isaaclab_ids, "describe": _isaaclab_describe,
@@ -176,6 +194,11 @@ BACKENDS: tuple[dict[str, Any], ...] = (
              "there is nothing to list: a Genesis task is a class your training "
              "script constructs. This row is here so a Genesis user is told that, "
              "rather than seeing only the two backends they do not have."},
+    {"backend": "single_file", "ids": _single_file_ids, "describe": _single_file_describe,
+     "note": "A single-file task is an env.py you run directly (see "
+             "docs/single-file.md); rlmcp attaches when the script wraps it, so "
+             "there is no registry to list. This row says whether the family can "
+             "run here: torch plus one of mjwarp, mjbatch or genesis."},
 )
 
 

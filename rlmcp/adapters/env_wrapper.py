@@ -300,13 +300,22 @@ class RlMcpEnvWrapper:
   def step(self, action: Any) -> Any:
     out = self.env.step(action)
     self._steps += 1
+    self.collect_step_logs(out)
     self.rlmcp.on_step()
-    extras = out[-1] if isinstance(out, tuple) and out else None
-    if isinstance(extras, dict):
-      self._accumulate_log(extras.get("log"))
     if not self._runner_hooked and self._steps % self.service_every_steps == 0:
       self._service()
     return out
+
+  def collect_step_logs(self, out: Any) -> None:
+    """Pull what this step reported into the per-iteration telemetry.
+
+    Manager-based environments hand back ``extras["log"]``; a family whose
+    ``step()`` reports differently overrides this. Runs before ``on_step`` so
+    anything parked on the environment here is visible to the trace.
+    """
+    extras = out[-1] if isinstance(out, tuple) and out else None
+    if isinstance(extras, dict):
+      self._accumulate_log(extras.get("log"))
 
   def render(self, *args: Any, **kwargs: Any) -> Any:
     return self.env.render(*args, **kwargs)
@@ -353,8 +362,13 @@ class RlMcpEnvWrapper:
 
   # Servicing.
 
-  def _service(self, iteration: int | None = None) -> None:
-    self.rlmcp.service(iteration=iteration, metrics=self._flush_log())
+  def _service(
+      self, iteration: int | None = None, extra_metrics: dict[str, float] | None = None
+  ) -> None:
+    metrics = self._flush_log()
+    if extra_metrics:
+      metrics.update(extra_metrics)
+    self.rlmcp.service(iteration=iteration, metrics=metrics)
     if self.rlmcp.should_stop():
       raise TrainingStopped(
           self.rlmcp.stop_reason or "Training stop requested through rlmcp."

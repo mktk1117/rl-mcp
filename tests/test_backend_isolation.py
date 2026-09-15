@@ -23,8 +23,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SIMULATORS = ("mjlab", "genesis", "isaaclab", "isaacsim", "viser", "mjviser")
-"""Everything rlmcp can drive or draw with, and nothing it requires."""
+SIMULATORS = ("mjlab", "genesis", "isaaclab", "isaacsim", "viser", "mjviser",
+              "mujoco_warp", "warp", "mjbatch")
+"""Everything rlmcp can drive or draw with, and nothing it requires. The last
+three are the physics backends of the single-file family, which is only
+"here" when one of them is."""
 
 BLOCKER = f"""
 import sys
