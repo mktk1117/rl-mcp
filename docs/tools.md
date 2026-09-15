@@ -98,6 +98,7 @@ stdout. Text mode is untouched; watching a viewer build is the point of it.
 | add a reward the task lacks | [`add-reward`](#add-reward) | `add_reward` |
 | keep a term you added | [`rewards export`](#rewards) | (CLI only) |
 | the env a checkpoint trained under | [`env export`](#env) | (CLI only) |
+| play a policy with nothing installed | [`bundle export`](#bundle), [`bundle play`](#bundle) | (CLI only) |
 | restart episodes | [`reset-envs`](#reset-envs) | `reset_environments` |
 | task-specific verbs | [`commands`](#commands), [`run`](#run) | `list_commands`, `run_command` |
 | the stage ladder | [`curriculum`](#curriculum) | `curriculum_status`, `curriculum_advance`, `curriculum_goto`, `curriculum_auto` |
@@ -897,6 +898,53 @@ before pairing it with a checkpoint.
 
 > Runs started before this existed have no `env_terms.json`, and `env export`
 > says so rather than writing an empty config.
+
+## `bundle`
+
+A policy that plays without the training stack: `policy.onnx`, the compiled
+MuJoCo model, and a spec of what the policy reads and emits. Enough to play
+it in plain MuJoCo — or in a browser — with nothing from mjlab, torch or the
+task package installed.
+
+```bash
+rlmcp bundle export logs/rsl_rl/g1_ladder/2026-08-27_17-39-38   # the run's last checkpoint
+rlmcp bundle play bundle-299/ --seconds 5                         # plain MuJoCo, reports the rollout
+rlmcp bundle play bundle-299/ --command base_velocity=0.5,0,0     # hold a command
+```
+
+```
+bundle-299/
+  policy.onnx     the actor, observation normalisation folded in
+  model.mjb       the compiled MuJoCo model, meshes included
+  model.xml       the same scene as MJCF, for reading (no assets)
+  spec.json       what the policy reads and emits, and how often
+  manifest.json   what this is, what it was checked against, the result
+  README.md       the same, for a person
+```
+
+**Checked, not claimed.** The export builds the task, loads the checkpoint,
+and runs the environment for some hundreds of steps with the real policy
+while `rlmcp/bundle_play.py` — plain MuJoCo and numpy, the reference every
+other player follows — recomputes every observation from the same state. The
+largest difference goes in `manifest.json`; a bundle whose observations do
+not match to `--tolerance` (default 1e-4), or whose environment reads a term
+the player cannot compute, is **refused with the term named**. What is
+exported plays the way it trained, or is not exported.
+
+The terms the player knows: `builtin_sensor`, `projected_gravity`,
+`joint_pos_rel`, `joint_vel_rel`, `last_action`, `base_lin_vel`,
+`base_ang_vel`, `generated_commands` — with each term's clip, scale and
+history applied as the training stack applies them. Actions: joint position
+targets (`raw * scale + offset` onto the actuators the spec names). Noise is
+a training aid and is never applied; observation delay is refused.
+
+A bundle is not a [recipe](records.md#making-a-run-runnable-again-rlmcp-recipe-build).
+A recipe makes a run *reproducible*: the package at its commit, the ladder,
+the config, launchable. A bundle makes a run's *result* usable anywhere, and
+carries no code at all.
+
+`bundle export` needs the `mjlab` extra plus `onnx`; `bundle play` needs only
+`mujoco`, `numpy` and `onnxruntime` — `pip install 'rl-mcp[bundle]'`.
 
 ## `commands`
 

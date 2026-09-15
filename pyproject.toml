@@ -66,6 +66,14 @@ mjlab = [
 viser = [
     "viser>=1.0.0",
 ]
+# Playing a policy bundle (`rlmcp bundle play`) needs only mujoco, numpy and
+# onnxruntime; exporting one (`rlmcp bundle export`) needs the mjlab extra as
+# well, plus onnx for torch's exporter.
+bundle = [
+    "mujoco>=3.0.0",
+    "onnxruntime>=1.17",
+    "onnx>=1.15",
+]
 
 # Third-party capabilities register themselves by publishing an entry point in
 # this group; see rlmcp/extensions/__init__.py.

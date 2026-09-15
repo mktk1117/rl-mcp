@@ -131,6 +131,9 @@ do it again* — and the answer is spread across four places: the package the ru
 used, the config it started from, the ladder it climbed, and the ad-hoc edits
 somebody made while it trained.
 
+For the *result* of a run rather than the run itself — the policy, playable
+anywhere with nothing installed — see [`rlmcp bundle export`](tools.md#bundle).
+
 ```bash
 rlmcp recipe build 011              # writes recipe-011/ beside the records
 ```

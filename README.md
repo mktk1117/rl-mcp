@@ -122,6 +122,7 @@ in [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab
 | **Your task's own words** | Extensions add verbs, metrics and env selectors. They reach the CLI, MCP and curriculum stages at once, without editing rlmcp. |
 | **A record that survives** | Every change is logged with its reason, and every run stamps the code it launched with. Runs are kept as a graph with hypotheses and verdicts, so three failures in a row become one conclusion. |
 | **Look at a finished run** | `rlmcp play` restores the conditions a checkpoint trained under before rendering it. Otherwise a good policy looks broken. |
+| **Take the policy anywhere** | `rlmcp bundle export` writes the actor as ONNX, the compiled MuJoCo model and a spec of what the policy reads — checked against the training environment — so it plays in plain MuJoCo or a browser with nothing from the training stack installed. |
 
 ## A worked example: in-hand cube reorientation
 

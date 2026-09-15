@@ -38,6 +38,8 @@ _REQUIRED_ARGS: dict[str, list[str]] = {
     "analyze": ["/nonexistent/trace.npz"],
     "plot-trace": [],
     "record": ["list"],
+    # A directory that does not exist: the refusal is the answer without mjlab.
+    "bundle": ["play", "/nonexistent/bundle"],
 }
 
 # Launchers: `main` hands the rest of the line to another program before

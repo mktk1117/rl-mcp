@@ -919,6 +919,47 @@ def _parse_metrics(items: list[str] | None) -> list[list[str]]:
   return out
 
 
+def _bundle_command(args: argparse.Namespace) -> int:
+  """``rlmcp bundle`` -- a checkpoint in, a playable directory out; or that
+  directory played. Neither needs a session or a trainer."""
+  from rlmcp import bundle, bundle_play
+
+  if args.action == "play":
+    commands: dict[str, list[float]] = {}
+    for raw in args.commands:
+      name, _, values = raw.partition("=")
+      try:
+        commands[name.strip()] = [float(v) for v in values.split(",") if v.strip()]
+      except ValueError:
+        _emit({"ok": False, "error": f"--command {raw!r}: values must be numbers"})
+        return 1
+    try:
+      report = bundle_play.rollout(args.bundle_dir, seconds=args.seconds, commands=commands)
+    except bundle_play.BundleError as exc:
+      _emit({"ok": False, "error": str(exc)})
+      return 1
+    _emit({"ok": True, "result": report})
+    return 0
+
+  from rlmcp.play import PlayError, checkpoint_iteration, find_checkpoint
+
+  try:
+    checkpoint = find_checkpoint(args.checkpoint)
+    out = args.out or str(checkpoint.parent / f"bundle-{checkpoint_iteration(checkpoint)}")
+    payload = bundle.export_bundle(
+        checkpoint, out, task=args.task, task_packages=args.task_package,
+        device=args.device, steps=args.steps,
+        tolerance=args.tolerance if args.tolerance is not None else bundle.DEFAULT_TOLERANCE,
+        seconds=args.seconds)
+  except (PlayError, bundle_play.BundleError, OSError, ValueError) as exc:
+    _emit({"ok": False, "error": str(exc)})
+    return 1
+  _emit({"ok": payload["ok"], **payload})
+  if _MODE == "text":
+    print(cli_output.note(bundle.describe(payload)), file=sys.stderr)
+  return 0 if payload["ok"] else 1
+
+
 def _play_command(args: argparse.Namespace) -> int:
   """``rlmcp play`` -- a checkpoint, not a session.
 
@@ -1058,6 +1099,39 @@ def build_parser() -> argparse.ArgumentParser:
 
   env_sub.add_parser(
       "show", help="Summarise the captured terms without writing anything")
+
+  bundlep = sub.add_parser(
+      "bundle",
+      help="A policy that plays without the training stack: export it, play it",
+      description="A bundle is policy.onnx, the compiled MuJoCo model and a "
+                  "spec of what the policy reads and emits -- enough to play "
+                  "the policy in plain MuJoCo, or in a browser, with nothing "
+                  "from mjlab, torch or the task package installed. The export "
+                  "checks the bundle against the training environment and "
+                  "refuses one that would not play the way it trained.")
+  bundle_sub = bundlep.add_subparsers(dest="action", required=True)
+  q = bundle_sub.add_parser("export", help="Write a bundle for a checkpoint and check it")
+  q.add_argument("checkpoint",
+                 help="Checkpoint .pt, or a run directory to take the latest one from")
+  q.add_argument("--out", default="", help="Directory to write (default: bundle-<iteration>/ "
+                                           "beside the checkpoint)")
+  q.add_argument("--task", default="", help="Defaults to the task the session recorded")
+  q.add_argument("--task-package", action="append", default=[], metavar="MODULE",
+                 help="Module whose import registers the task (repeatable)")
+  q.add_argument("--device", default="cuda:0")
+  q.add_argument("--steps", type=int, default=300,
+                 help="Environment steps to compare observations over (default 300)")
+  q.add_argument("--tolerance", type=float, default=None,
+                 help="Largest observation difference allowed (default 1e-4)")
+  q.add_argument("--seconds", type=float, default=5.0,
+                 help="Length of the plain-MuJoCo rollout in the check (default 5)")
+  q = bundle_sub.add_parser("play", help="Play a bundle in plain MuJoCo and report")
+  q.add_argument("bundle_dir", help="A directory written by `bundle export`")
+  q.add_argument("--seconds", type=float, default=5.0)
+  # `dest` because the subparser owns `args.command` (the subcommand name).
+  q.add_argument("--command", dest="commands", action="append", default=[],
+                 metavar="NAME=V1,V2,…",
+                 help="A command value to hold, e.g. base_velocity=0.5,0,0 (repeatable)")
 
   p = sub.add_parser(
       "reset-envs",
@@ -1645,6 +1719,9 @@ def _dispatch(args: argparse.Namespace) -> int:
       _emit({"ok": False, "error": str(exc)})
       return 1
     return 0
+
+  if cmd == "bundle":
+    return _bundle_command(args)
 
   if cmd == "record":
     return _record_command(args)

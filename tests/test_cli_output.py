@@ -277,6 +277,7 @@ SHAPES = {
     "extensions": BARE,    # --available flips it; pinned below
     "record": BARE,        # via `record list`; the record family has its own test
     "recipe": ENVELOPE,    # the store answers; "ok" beside the recipe's own keys
+    "bundle": ENVELOPE,    # a bundle played or exported; a missing one is the refusal half
     "help": ENVELOPE,
     "get": ENVELOPE,
     "set": ENVELOPE,
@@ -336,8 +337,9 @@ _SHAPE_ARGS = {
     # A record that does not exist: the failure half of the envelope, which is
     # the half a store command can show without a live trainer.
     "recipe": ["build", "404"],
+    "bundle": ["play", "/nonexistent/bundle"],
 }
-_REFUSALS = {"play", "analyze", "check", "recipe"}
+_REFUSALS = {"play", "analyze", "check", "recipe", "bundle"}
 
 # `train` and `serve` hand the line to another program; there is no payload.
 _NO_OUTPUT = {"train", "serve", "hostd"}  # launchers and a daemon: no envelope to declare
