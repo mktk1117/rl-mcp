@@ -28,9 +28,13 @@ from torch.distributions import Normal
 
 @dataclass
 class ModelConfig:
-  hidden_dims: tuple[int, ...] = (256, 256, 256)
+  """mjlab's Go1 runner: three hidden layers, ELU, unit initial std, and
+  running observation normalisation in front of both networks."""
+
+  hidden_dims: tuple[int, ...] = (512, 256, 128)
   activation: str = "elu"
   init_noise_std: float = 1.0
+  obs_normalization: bool = True
 
 
 @dataclass
@@ -68,19 +72,54 @@ def mlp(input_dim: int, output_dim: int, hidden: tuple[int, ...], activation: st
   return nn.Sequential(*layers)
 
 
+class EmpiricalNormalization(nn.Module):
+  """Running mean and std of the observations, rsl_rl's: learned while the
+  policy trains, frozen in eval, and part of the checkpoint."""
+
+  def __init__(self, shape: int, eps: float = 1e-2):
+    super().__init__()
+    self.eps = eps
+    self.register_buffer("_mean", torch.zeros(1, shape))
+    self.register_buffer("_var", torch.ones(1, shape))
+    self.register_buffer("_std", torch.ones(1, shape))
+    self.register_buffer("count", torch.tensor(0, dtype=torch.long))
+
+  def forward(self, x: Tensor) -> Tensor:
+    return (x - self._mean) / (self._std + self.eps)
+
+  @torch.no_grad()
+  def update(self, x: Tensor) -> None:
+    if not self.training:
+      return
+    count_x = x.shape[0]
+    self.count += count_x
+    rate = count_x / self.count
+    var_x = torch.var(x, dim=0, unbiased=False, keepdim=True)
+    mean_x = torch.mean(x, dim=0, keepdim=True)
+    delta = mean_x - self._mean
+    self._mean += rate * delta
+    self._var += rate * (var_x - self._var + delta * (mean_x - self._mean))
+    self._std = torch.sqrt(self._var)
+
+
 class Actor(nn.Module):
   """Gaussian policy: an MLP mean and a learned, state-independent std."""
 
   def __init__(self, obs_dim: int, action_dim: int, cfg: ModelConfig | None = None):
     super().__init__()
     cfg = cfg or ModelConfig()
+    self.normalizer = EmpiricalNormalization(obs_dim) if cfg.obs_normalization else nn.Identity()
     self.net = mlp(obs_dim, action_dim, cfg.hidden_dims, cfg.activation)
     self.std = nn.Parameter(cfg.init_noise_std * torch.ones(action_dim))
     self.distribution: Normal | None = None
     Normal.set_default_validate_args(False)
 
+  def update_normalization(self, obs: Tensor) -> None:
+    if isinstance(self.normalizer, EmpiricalNormalization):
+      self.normalizer.update(obs)
+
   def forward(self, obs: Tensor, stochastic: bool = False) -> Tensor:
-    mean = self.net(obs)
+    mean = self.net(self.normalizer(obs))
     self.distribution = Normal(mean, self.std.expand_as(mean))
     return self.distribution.sample() if stochastic else mean
 
@@ -105,13 +144,21 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
+  """Value function over the critic's own observations, which may be a
+  privileged superset of the actor's."""
+
   def __init__(self, obs_dim: int, cfg: ModelConfig | None = None):
     super().__init__()
     cfg = cfg or ModelConfig()
+    self.normalizer = EmpiricalNormalization(obs_dim) if cfg.obs_normalization else nn.Identity()
     self.net = mlp(obs_dim, 1, cfg.hidden_dims, cfg.activation)
 
+  def update_normalization(self, obs: Tensor) -> None:
+    if isinstance(self.normalizer, EmpiricalNormalization):
+      self.normalizer.update(obs)
+
   def forward(self, obs: Tensor) -> Tensor:
-    return self.net(obs)
+    return self.net(self.normalizer(obs))
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +169,7 @@ class Critic(nn.Module):
 @dataclass
 class Batch:
   observations: Tensor
+  critic_observations: Tensor
   actions: Tensor
   values: Tensor
   advantages: Tensor
@@ -135,12 +183,13 @@ class RolloutStorage:
   """``[T, N, ...]`` buffers for one rollout, and the mini-batch generator."""
 
   def __init__(self, num_envs: int, num_steps: int, obs_dim: int, action_dim: int,
-               device: str | torch.device = "cpu"):
+               device: str | torch.device = "cpu", critic_obs_dim: int | None = None):
     self.device = torch.device(device)
     self.num_envs, self.num_steps = num_envs, num_steps
     t, n = num_steps, num_envs
     z = lambda *shape, **kw: torch.zeros(*shape, device=self.device, **kw)  # noqa: E731
     self.observations = z(t, n, obs_dim)
+    self.critic_observations = z(t, n, critic_obs_dim or obs_dim)
     self.actions = z(t, n, action_dim)
     self.rewards = z(t, n, 1)
     self.dones = z(t, n, 1, dtype=torch.uint8)
@@ -152,12 +201,13 @@ class RolloutStorage:
     self.advantages = z(t, n, 1)
     self.step = 0
 
-  def add(self, obs: Tensor, actions: Tensor, rewards: Tensor, dones: Tensor, values: Tensor,
-          log_prob: Tensor, mu: Tensor, sigma: Tensor) -> None:
+  def add(self, obs: Tensor, critic_obs: Tensor, actions: Tensor, rewards: Tensor,
+          dones: Tensor, values: Tensor, log_prob: Tensor, mu: Tensor, sigma: Tensor) -> None:
     if self.step >= self.num_steps:
       raise OverflowError("Rollout buffer is full; call clear() first.")
     i = self.step
     self.observations[i].copy_(obs)
+    self.critic_observations[i].copy_(critic_obs)
     self.actions[i].copy_(actions)
     self.rewards[i].copy_(rewards.view(-1, 1))
     self.dones[i].copy_(dones.view(-1, 1))
@@ -175,8 +225,8 @@ class RolloutStorage:
     mini = batch_size // num_mini_batches
     flat = {
         name: getattr(self, name).flatten(0, 1)
-        for name in ("observations", "actions", "values", "returns", "log_prob",
-                     "advantages", "mu", "sigma")
+        for name in ("observations", "critic_observations", "actions", "values", "returns",
+                     "log_prob", "advantages", "mu", "sigma")
     }
     for _ in range(num_epochs):
       order = torch.randperm(num_mini_batches * mini, device=self.device)
@@ -184,6 +234,7 @@ class RolloutStorage:
         idx = order[k * mini:(k + 1) * mini]
         yield Batch(
             observations=flat["observations"][idx],
+            critic_observations=flat["critic_observations"][idx],
             actions=flat["actions"][idx],
             values=flat["values"][idx],
             advantages=flat["advantages"][idx],
@@ -224,13 +275,20 @@ class PPO:
 
   # Rollout.
 
-  def act(self, obs: Tensor) -> Tensor:
-    """Sample actions for ``obs`` and remember what the update needs."""
+  def act(self, obs: Tensor, critic_obs: Tensor | None = None) -> Tensor:
+    """Sample actions for ``obs`` and remember what the update needs.
+
+    The normalisers learn here, from the rollout, the way rsl_rl's do.
+    """
+    critic_obs = obs if critic_obs is None else critic_obs
+    self.actor.update_normalization(obs)
+    self.critic.update_normalization(critic_obs)
     actions = self.actor(obs, stochastic=True).detach()
     self._pending = {
         "obs": obs,
+        "critic_obs": critic_obs,
         "actions": actions,
-        "values": self.critic(obs).detach(),
+        "values": self.critic(critic_obs).detach(),
         "log_prob": self.actor.log_prob(actions).detach(),
         "mu": self.actor.output_mean.detach(),
         "sigma": self.actor.output_std.detach(),
@@ -244,13 +302,13 @@ class PPO:
     rewards = rewards.clone()
     if time_outs is not None:
       rewards += self.gamma * torch.squeeze(p["values"] * time_outs.unsqueeze(1), 1)
-    self.storage.add(p["obs"], p["actions"], rewards, dones, p["values"], p["log_prob"],
-                     p["mu"], p["sigma"])
+    self.storage.add(p["obs"], p["critic_obs"], p["actions"], rewards, dones, p["values"],
+                     p["log_prob"], p["mu"], p["sigma"])
     self._pending = {}
 
-  def compute_returns(self, last_obs: Tensor) -> None:
+  def compute_returns(self, last_critic_obs: Tensor) -> None:
     st = self.storage
-    last_values = self.critic(last_obs).detach()
+    last_values = self.critic(last_critic_obs).detach()
     advantage = torch.zeros_like(last_values)
     for step in reversed(range(st.num_steps)):
       next_values = last_values if step == st.num_steps - 1 else st.values[step + 1]
@@ -269,7 +327,7 @@ class PPO:
     for batch in self.storage.mini_batches(self.num_mini_batches, self.num_learning_epochs):
       self.actor(batch.observations, stochastic=True)
       log_prob = self.actor.log_prob(batch.actions)
-      values = self.critic(batch.observations)
+      values = self.critic(batch.critic_observations)
       mu, sigma, entropy = self.actor.output_mean, self.actor.output_std, self.actor.entropy
 
       if self.desired_kl is not None and self.schedule == "adaptive":

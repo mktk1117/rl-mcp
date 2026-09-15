@@ -65,6 +65,7 @@ def spec(hopper_xml) -> RobotSpec:
       damping=1.0,
       effort_limit=30.0,
       contact_sites=("foot", "base"),
+      foot_geoms=("foot_geom",),
   )
 
 
@@ -94,6 +95,13 @@ def test_compile_adds_pd_actuators_touch_sensors_and_a_floor(spec):
   assert model.nsensor == 2
   assert layout.contact_bodies == ["shin", "base"]
   assert model.site("base_contact").size[0] == pytest.approx(0.1)
+  # The foot geom got priority, friction and the hardened solref.
+  foot = model.geom("foot_geom")
+  assert int(foot.priority[0]) == 1
+  assert list(foot.friction) == pytest.approx([1.0, 0.005, 0.0001])
+  assert list(foot.solref) == pytest.approx([0.01, 1.0])
+  assert list(layout.foot_geom_ids) == [foot.id]
+  assert len(layout.contact_site_ids) == 2
   # The file had no floor, so one was added, and the layout says so.
   assert layout.ground_added
   assert model.geom("rlmcp_ground").type == mujoco.mjtGeom.mjGEOM_PLANE
@@ -214,6 +222,19 @@ def test_a_partial_reset_touches_only_its_envs(backend):
   after = backend.root_pos[:, 2]
   assert after[0].item() == pytest.approx(0.88, abs=1e-4)
   assert torch.allclose(after[1:], settled[1:], atol=1e-6)
+
+
+def test_sites_and_pushes_are_available(backend):
+  ids, pos, quat, dof = _standing(backend)
+  backend.reset(ids, pos, quat, dof)
+  feet = backend.contact_site_pos
+  assert feet.shape == (3, 2, 3)
+  # The foot site hangs 0.55 m under a base at 0.58: just above the floor.
+  assert torch.allclose(feet[:, 0, 2], torch.full((3,), 0.03, device=backend.device), atol=0.02)
+  backend.push(ids[:1], torch.tensor([[1.0, 0.0, 0.0]], device=backend.device),
+               torch.zeros(1, 3, device=backend.device))
+  assert backend.root_lin_vel[0, 0].item() == pytest.approx(1.0, abs=1e-4)
+  assert backend.root_lin_vel[1, 0].item() == pytest.approx(0.0, abs=1e-4)
 
 
 def test_friction_and_frames_are_available(backend):

@@ -48,21 +48,23 @@ backend). mjlab itself is not needed: point `MJLAB_GO1_XML` at the file.
 
 ## Run notes
 
-Recorded on an RTX 3090 (shared with another job), 32 CPU threads,
-genesis-world 1.3.3, mujoco 3.13.0, mjbatch 0.1.1, mujoco_warp 3.13.0.
+The task is mjlab's `Mjlab-Velocity-Flat-Unitree-Go1`, term for term (see
+[docs/single-file.md](../../docs/single-file.md) for the one-to-one list and
+what differs). Recorded on an RTX 3090 shared with another job, 32 CPU
+threads, genesis-world 1.3.3, mujoco 3.13.0, mjbatch 0.1.1, mujoco_warp 3.13.0.
 
-| backend | envs | iterations | tracking reward | episode length | wall time |
-| --- | --- | --- | --- | --- | --- |
-| mjbatch (CPU) | 2048 | 400 | 0.94 | 996 / 1000 | 482 s |
-| mjwarp | 4096 | 300 | 0.96 | 962 / 1000 | 934 s |
-| genesis | 1024 | 300 | 0.90 | 933 / 1000 | 553 s |
+| backend | envs | iterations | linear / angular tracking | posture | episode length | wall time |
+| --- | --- | --- | --- | --- | --- | --- |
+| mjbatch (CPU) | 2048 | 1500 | 0.86 / 0.61 | 0.84 | 994 / 1000 | 45 min |
+| mjwarp | 4096 | 1500 | 0.87 / 0.71 | 0.87 | 1000 / 1000 | 49 min |
+| genesis | 2048 | 400 | 0.30 / 0.80 | 0.89 | 937 / 1000 | 16 min |
 
-Same file, same PPO, same defaults; a gait by iteration 100 on each. mjbatch
-and mjwarp are the same physics and agree to seven digits on the standing
-robot, so a run on one reproduces on the other. Genesis is a different engine
-and its numbers are its own.
+The two MuJoCo backends trot by iteration 250. Genesis stands and turns
+under mjlab's symmetric commands and walks (0.85 by iteration 200) once the
+commands are forward-biased; the ablations behind that sentence are in the
+docs page, along with the `--set` line to start a Genesis run with.
 
-Before `action_clip` existed the example clamped actions to `[-1, 1]` and
-every backend settled into standing (tracking 0.22, flat through 1500
-iterations). A quarter radian per joint is not a step. See
-[docs/single-file.md](../../docs/single-file.md) for how it was found.
+Two earlier lessons: actions must not be clipped to `[-1, 1]` before the
+scale (a quarter radian per joint is not a step, and every backend stood
+still for 1500 iterations), and mujoco_warp's per-step line-search warning
+has to be silenced or the log grows by gigabytes an hour.

@@ -94,6 +94,21 @@ class RobotSpec:
   base_body: str = ""
   """The floating base. Empty means the body carrying the model's free joint."""
 
+  foot_geoms: tuple[str, ...] = ()
+  """Collision geoms that are feet. They get ``foot_friction``, ``foot_condim``
+  and contact priority so their friction wins against the floor's, and
+  :meth:`SimBackend.set_friction` writes only them. Empty means every geom."""
+
+  foot_friction: tuple[float, float, float] = (1.0, 0.005, 0.0001)
+  """Sliding, torsional and rolling friction of the foot geoms."""
+
+  foot_condim: int = 3
+  """Contact dimensionality of the foot geoms (3: sliding friction only)."""
+
+  geom_solref: tuple[float, float] | None = (0.01, 1.0)
+  """Contact ``solref`` for every collision geom of the robot; None keeps
+  MuJoCo's default. mjlab hardens its robots to (0.01, 1)."""
+
 
 @dataclass
 class SimOptions:
@@ -107,6 +122,10 @@ class SimOptions:
   ls_iterations: int = 6
   cone: str = "pyramidal"
   """MuJoCo: ``pyramidal`` or ``elliptic``."""
+  impratio: float = 1.0
+  """MuJoCo: frictional-to-normal constraint impedance ratio."""
+  ccd_iterations: int | None = None
+  """MuJoCo: convex collision iterations; None keeps the model's own."""
   nconmax: int | None = None
   """Warp: contacts per world; None lets mujoco_warp guess."""
   njmax: int | None = None
@@ -147,6 +166,10 @@ class ModelLayout:
   """``sensordata`` column per contact site."""
   contact_bodies: list[str]
   """The body each contact site sits on -- what Genesis reads contact from."""
+  contact_site_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+  """Site id per contact name in the compiled model."""
+  foot_geom_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+  """Geom ids :meth:`SimBackend.set_friction` writes; empty means all geoms."""
   ground_added: bool = False
   """Whether :func:`compile_model` added a floor the MJCF did not have."""
 
@@ -256,6 +279,7 @@ def compile_model(spec: RobotSpec, options: SimOptions | None = None) -> tuple[A
       if int(plain.sensor_type[s]) == int(mujoco.mjtSensor.mjSENS_TOUCH)
   }
   contact_bodies: list[str] = []
+  site_of: dict[str, str] = {}
   for name in spec.contact_sites:
     site = name
     if name not in site_names:
@@ -284,12 +308,30 @@ def compile_model(spec: RobotSpec, options: SimOptions | None = None) -> tuple[A
           objtype=mujoco.mjtObj.mjOBJ_SITE, objname=site,
       )
       sensor_of[name] = sensor
+    site_of[name] = site
     site_id = mujoco.mj_name2id(plain, mujoco.mjtObj.mjOBJ_SITE, site)
     if site_id >= 0:
       body_id = int(plain.site_bodyid[site_id])
     else:
       body_id = mujoco.mj_name2id(plain, mujoco.mjtObj.mjOBJ_BODY, name)
     contact_bodies.append(plain.body(body_id).name)
+
+  # Contact tuning on the robot's own geoms.
+  geom_names = {g.name for g in mjspec.geoms}
+  for name in spec.foot_geoms:
+    if name not in geom_names:
+      raise KeyError(
+          f"RobotSpec foot geom '{name}' is not in {spec.xml}. Geoms: {sorted(geom_names)}"
+      )
+  for g in mjspec.geoms:
+    if g.contype == 0 and g.conaffinity == 0:
+      continue
+    if spec.geom_solref is not None:
+      g.solref[0], g.solref[1] = float(spec.geom_solref[0]), float(spec.geom_solref[1])
+    if g.name in spec.foot_geoms:
+      g.priority = 1
+      g.condim = int(spec.foot_condim)
+      g.friction[0], g.friction[1], g.friction[2] = (float(v) for v in spec.foot_friction)
 
   ground_added = bool(options.ground_plane and not _has_ground(plain))
   if ground_added:
@@ -327,6 +369,9 @@ def compile_model(spec: RobotSpec, options: SimOptions | None = None) -> tuple[A
       ),
       contact_bodies=contact_bodies,
       ground_added=ground_added,
+      contact_site_ids=np.array(
+          [model.site(site_of[n]).id for n in spec.contact_sites], dtype=np.int64),
+      foot_geom_ids=np.array([model.geom(n).id for n in spec.foot_geoms], dtype=np.int64),
   )
   return model, layout
 
@@ -359,6 +404,9 @@ def apply_options(model: Any, options: SimOptions) -> None:
   model.opt.cone = cones[options.cone]
   model.opt.iterations = int(options.iterations)
   model.opt.ls_iterations = int(options.ls_iterations)
+  model.opt.impratio = float(options.impratio)
+  if options.ccd_iterations is not None:
+    model.opt.ccd_iterations = int(options.ccd_iterations)
 
 
 class SimBackend(ABC):
@@ -461,6 +509,13 @@ class SimBackend(ABC):
   def contact_forces(self) -> Tensor:
     """Normal contact force at each contact site ``(N, n_sites)``, newtons."""
 
+  @property
+  @abstractmethod
+  def contact_site_pos(self) -> Tensor:
+    """World position of each contact site ``(N, n_sites, 3)``. Foot height
+    above a flat floor is its z; a finite difference over a control step is
+    the foot velocity the slip and clearance terms read."""
+
   # Control.
 
   @abstractmethod
@@ -488,10 +543,17 @@ class SimBackend(ABC):
     ``(len(env_ids), 3)`` and so on.
     """
 
+  @abstractmethod
+  def push(self, env_ids: Tensor, lin_vel: Tensor, ang_vel: Tensor) -> None:
+    """Add ``lin_vel`` and ``ang_vel`` (world frame, per env) to the base
+    velocity of ``env_ids``: the instantaneous, mass-free kick locomotion
+    tasks use as a disturbance."""
+
   # Optional.
 
   def set_friction(self, env_ids: Tensor, coefficient: Tensor) -> None:
-    """Sliding friction of every geom in ``env_ids``, one value per env."""
+    """Sliding friction in ``env_ids``, one value per env: of the foot geoms
+    when the spec names them, else of every geom."""
     raise NotImplementedError(f"{self.name} does not randomise friction.")
 
   def render(self, env_id: int = 0, width: int = 640, height: int = 480) -> np.ndarray:

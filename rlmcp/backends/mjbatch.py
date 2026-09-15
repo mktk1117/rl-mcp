@@ -55,6 +55,7 @@ class MjBatchBackend(SimBackend):
     self._ctrl = self._batch.bind("ctrl")
     self._sensordata = self._batch.bind("sensordata")
     self._actuator_force = self._batch.bind("actuator_force")
+    self._site_xpos = self._batch.bind("site_xpos")
     self._limits = torch.as_tensor(self._layout.limits, dtype=torch.float32, device=self.device)
     self._renderer: Any = None
     self._render_data: Any = None
@@ -83,7 +84,8 @@ class MjBatchBackend(SimBackend):
   # State.
 
   def _t(self, array: np.ndarray) -> Tensor:
-    return torch.as_tensor(np.ascontiguousarray(array, dtype=np.float32), device=self.device)
+    host = torch.as_tensor(np.ascontiguousarray(array, dtype=np.float32), device="cpu")
+    return host if self.device.type == "cpu" else host.to(self.device)
 
   @property
   def root_pos(self) -> Tensor:
@@ -121,10 +123,27 @@ class MjBatchBackend(SimBackend):
   def contact_forces(self) -> Tensor:
     return self._t(self._sensordata[:, self._layout.contact_sensor_adr])
 
+  @property
+  def contact_site_pos(self) -> Tensor:
+    return self._t(self._site_xpos[:, self._layout.contact_site_ids, :])
+
   # Control.
 
   def set_dof_targets(self, targets: Tensor) -> None:
     self._ctrl[:, self._layout.actuator_ids] = targets.detach().cpu().numpy()
+
+  def push(self, env_ids: Tensor, lin_vel: Tensor, ang_vel: Tensor) -> None:
+    ids = self._ids(env_ids)
+    if ids.size == 0:
+      return
+    v = self._layout.base_qvel
+    self._qvel[ids, v:v + 3] += lin_vel.detach().cpu().numpy()
+    # Explicitly on the CPU: another backend in the process may have made
+    # CUDA the default device, and these views are host memory.
+    quat = torch.as_tensor(self._qpos[ids, self._layout.base_qpos + 3:self._layout.base_qpos + 7],
+                           dtype=torch.float32, device="cpu")
+    body = frames.quat_rotate_inverse(quat, ang_vel.detach().to("cpu", torch.float32))
+    self._qvel[ids, v + 3:v + 6] += body.numpy()
 
   def step(self) -> None:
     self._batch.step(nstep=self.decimation)
@@ -163,7 +182,9 @@ class MjBatchBackend(SimBackend):
   def set_friction(self, env_ids: Tensor, coefficient: Tensor) -> None:
     ids = self._ids(env_ids)
     friction = self._batch.expand("geom_friction")
-    friction[ids, :, 0] = coefficient.detach().cpu().numpy().reshape(-1, 1)
+    geoms = self._layout.foot_geom_ids if self._layout.foot_geom_ids.size \
+        else np.arange(friction.shape[1])
+    friction[ids[:, None], geoms[None, :], 0] = coefficient.detach().cpu().numpy().reshape(-1, 1)
     self._batch.set_const(ids)
 
   def render(self, env_id: int = 0, width: int = 640, height: int = 480) -> np.ndarray:

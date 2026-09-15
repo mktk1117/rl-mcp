@@ -23,6 +23,7 @@ and ``MUJOCO_GL=glfw`` (or ``egl``) for frames from the MuJoCo backends.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -52,7 +53,14 @@ def main() -> None:
                       help="progress-clip cadence for rlmcp: a flat interval like 200, "
                            "'double' (0, 50, 100, 200, ... -- the default), or 'off'")
   parser.add_argument("--no-viser", action="store_true", help="do not serve the live view")
+  parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                      help="a parameter to apply at launch, by its rlmcp key: "
+                           "--set reward.foot_slip.weight=0 --set 'command.lin_vel_x=[0.3, 1]'")
   args = parser.parse_args()
+  overrides = {}
+  for item in args.set:
+    key, _, raw = item.partition("=")
+    overrides[key.strip()] = json.loads(raw)
 
   torch.manual_seed(args.seed)
   device = torch.device(args.device)
@@ -63,13 +71,14 @@ def main() -> None:
   env = Go1FlatEnv(cfg)
   env = rlmcp_single_file.wrap(
       env, session_dir=log_dir / "rlmcp", task_id=f"go1-flat-{args.backend}",
-      seed=args.seed, viser=False if args.no_viser else None,
+      seed=args.seed, viser=False if args.no_viser else None, parameters=overrides,
       **({} if args.video_every is None else {"video_every": args.video_every}),
   )
 
   actor = Actor(env.obs_dim, env.action_dim, ModelConfig()).to(device)
-  critic = Critic(env.obs_dim, ModelConfig()).to(device)
-  storage = RolloutStorage(env.num_envs, args.steps_per_env, env.obs_dim, env.action_dim, device)
+  critic = Critic(env.critic_obs_dim, ModelConfig()).to(device)
+  storage = RolloutStorage(env.num_envs, args.steps_per_env, env.obs_dim, env.action_dim,
+                           device, critic_obs_dim=env.critic_obs_dim)
   ppo = PPO(actor, critic, storage, PPOConfig())
   env.attach_algorithm(ppo, log_dir=str(log_dir))
 
@@ -86,13 +95,13 @@ def main() -> None:
       t0 = time.time()
       with torch.inference_mode():
         for _ in range(args.steps_per_env):
-          actions = ppo.act(obs)
+          actions = ppo.act(obs, env.critic_obs_buf)
           obs, rewards, dones, info = env.step(actions)
           ppo.process_env_step(rewards, dones, info.get("time_outs"))
           total_steps += env.num_envs
           episode_rewards += info["episode_rewards"].tolist()
           episode_lengths += info["episode_lengths"].tolist()
-        ppo.compute_returns(obs)
+        ppo.compute_returns(env.critic_obs_buf)
       collect = time.time() - t0
 
       t0 = time.time()

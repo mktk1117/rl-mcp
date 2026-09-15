@@ -25,6 +25,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from rlmcp.backends import frames
 from rlmcp.backends.base import (
     RobotSpec,
     SimBackend,
@@ -109,6 +110,15 @@ class GenesisBackend(SimBackend):
     )
     self._contact_links = [
         int(self._robot.get_link(b).idx_local) for b in self._layout.contact_bodies]
+    # Contact sites are body-fixed points; Genesis reports links, so each site
+    # is its link's pose plus the offset the MJCF gave it.
+    self._site_offsets = torch.as_tensor(
+        self._model.site_pos[self._layout.contact_site_ids], dtype=torch.float32,
+        device=self._gs.device)
+    foot_bodies = {self._model.body(self._model.geom_bodyid[g]).name
+                   for g in self._layout.foot_geom_ids}
+    self._foot_links = [int(self._robot.get_link(b).idx_local) for b in sorted(foot_bodies)] \
+        or list(range(self._robot.n_links))
     self._limits = torch.as_tensor(self._layout.limits, dtype=torch.float32, device=self.device)
     self._default_friction = float(self._model.geom_friction[:, 0].mean()) or 1.0
     self._snapshot()
@@ -136,6 +146,10 @@ class GenesisBackend(SimBackend):
     self._s_dof_torque = self._t(robot.get_dofs_control_force(self._motor_dofs))
     forces = self._t(robot.get_links_net_contact_force())
     self._s_contact = torch.linalg.norm(forces[:, self._contact_links, :], dim=-1)
+    link_pos = torch.as_tensor(robot.get_links_pos(self._contact_links))
+    link_quat = torch.as_tensor(robot.get_links_quat(self._contact_links))
+    offset = self._site_offsets.unsqueeze(0).expand(link_pos.shape[0], -1, -1)
+    self._s_site_pos = self._t(link_pos + frames.quat_rotate(link_quat, offset))
 
   # What the robot is.
 
@@ -189,7 +203,21 @@ class GenesisBackend(SimBackend):
   def contact_forces(self) -> Tensor:
     return self._s_contact
 
+  @property
+  def contact_site_pos(self) -> Tensor:
+    return self._s_site_pos
+
   # Control.
+
+  def push(self, env_ids: Tensor, lin_vel: Tensor, ang_vel: Tensor) -> None:
+    ids = self._ids(env_ids)
+    if ids.size == 0:
+      return
+    gs_ids = torch.as_tensor(ids, device=self._gs.device, dtype=torch.int32)
+    current = torch.as_tensor(self._robot.get_dofs_velocity(self._base_dofs, envs_idx=gs_ids))
+    delta = torch.cat([self._g(lin_vel), self._g(ang_vel)], dim=-1)
+    self._robot.set_dofs_velocity(current + delta, self._base_dofs, envs_idx=gs_ids)
+    self._snapshot()
 
   def set_dof_targets(self, targets: Tensor) -> None:
     self._robot.control_dofs_position(self._g(targets), self._motor_dofs)
@@ -234,8 +262,8 @@ class GenesisBackend(SimBackend):
   def set_friction(self, env_ids: Tensor, coefficient: Tensor) -> None:
     ids = torch.as_tensor(self._ids(env_ids), device=self._gs.device, dtype=torch.int32)
     ratio = (self._g(coefficient) / self._default_friction).reshape(-1, 1)
-    ratio = ratio.expand(-1, self._robot.n_links).contiguous()
-    self._robot.set_friction_ratio(ratio, list(range(self._robot.n_links)), envs_idx=ids)
+    ratio = ratio.expand(-1, len(self._foot_links)).contiguous()
+    self._robot.set_friction_ratio(ratio, self._foot_links, envs_idx=ids)
 
   def render(self, env_id: int = 0, width: int = 640, height: int = 480) -> np.ndarray:
     frame = self._camera.render(rgb=True)[0]

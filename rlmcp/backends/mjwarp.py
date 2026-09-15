@@ -67,6 +67,10 @@ class MjWarpBackend(SimBackend):
       self._wp_model = mjw.put_model(
           self._model, batch_sizes={"geom_friction": self.num_envs},
       )
+      # A solver that hits its line-search budget prints a warning per step,
+      # which at 50 Hz is a log that grows by gigabytes an hour. mjlab's
+      # settings hit it routinely and mjlab silences it the same way.
+      self._wp_model.opt.warn_overflow = 0
       extra = dict(self.options.extra)
       self._wp_data = mjw.put_data(
           self._model, self._mj_data, nworld=self.num_envs,
@@ -87,6 +91,7 @@ class MjWarpBackend(SimBackend):
     self._ctrl = wp.to_torch(self._wp_data.ctrl)
     self._sensordata = wp.to_torch(self._wp_data.sensordata)
     self._actuator_force = wp.to_torch(self._wp_data.actuator_force)
+    self._site_xpos = wp.to_torch(self._wp_data.site_xpos)
     self._geom_friction = wp.to_torch(self._wp_model.geom_friction)
     self._reset_mask_t = wp.to_torch(self._reset_mask)
 
@@ -95,6 +100,10 @@ class MjWarpBackend(SimBackend):
     self._act_ids = torch.as_tensor(self._layout.actuator_ids, device=self.device, dtype=torch.long)
     self._contact_adr = torch.as_tensor(
         self._layout.contact_sensor_adr, device=self.device, dtype=torch.long)
+    self._site_ids = torch.as_tensor(
+        self._layout.contact_site_ids, device=self.device, dtype=torch.long)
+    self._foot_geoms = torch.as_tensor(
+        self._layout.foot_geom_ids, device=self.device, dtype=torch.long)
     self._limits = torch.as_tensor(self._layout.limits, dtype=torch.float32, device=self.device)
 
     self._graphs: dict[str, Any] = {}
@@ -162,6 +171,7 @@ class MjWarpBackend(SimBackend):
       self._s_dof_vel = qvel[:, self._qvel_adr].clone()
       self._s_dof_torque = self._actuator_force[:, self._act_ids].clone()
       self._s_contact = self._sensordata[:, self._contact_adr].clone()
+      self._s_site_pos = self._site_xpos[:, self._site_ids, :].clone()
     self._back_to_torch()
 
   @property
@@ -216,7 +226,23 @@ class MjWarpBackend(SimBackend):
   def contact_forces(self) -> Tensor:
     return self._s_contact
 
+  @property
+  def contact_site_pos(self) -> Tensor:
+    return self._s_site_pos
+
   # Control.
+
+  def push(self, env_ids: Tensor, lin_vel: Tensor, ang_vel: Tensor) -> None:
+    ids = torch.as_tensor(self._ids(env_ids), device=self.device, dtype=torch.long)
+    if ids.numel() == 0:
+      return
+    v = self._layout.base_qvel
+    dev = self.device
+    body = frames.quat_rotate_inverse(self._s_root_quat[ids], ang_vel.to(dev, torch.float32))
+    with self._on_warp_stream():
+      self._qvel[ids, v:v + 3] += lin_vel.to(dev, torch.float32)
+      self._qvel[ids, v + 3:v + 6] += body
+    self._snapshot()
 
   def set_dof_targets(self, targets: Tensor) -> None:
     with self._on_warp_stream():
@@ -270,8 +296,12 @@ class MjWarpBackend(SimBackend):
 
   def set_friction(self, env_ids: Tensor, coefficient: Tensor) -> None:
     ids = torch.as_tensor(self._ids(env_ids), device=self.device, dtype=torch.long)
+    value = coefficient.to(self.device, torch.float32).reshape(-1, 1)
     with self._on_warp_stream():
-      self._geom_friction[ids, :, 0] = coefficient.to(self.device, torch.float32).reshape(-1, 1)
+      if self._foot_geoms.numel():
+        self._geom_friction[ids[:, None], self._foot_geoms[None, :], 0] = value
+      else:
+        self._geom_friction[ids, :, 0] = value
     self._back_to_torch()
 
   def render(self, env_id: int = 0, width: int = 640, height: int = 480) -> np.ndarray:
