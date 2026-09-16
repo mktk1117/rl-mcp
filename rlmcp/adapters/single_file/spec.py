@@ -1,11 +1,13 @@
-"""What a single-file environment is, and how rlmcp tells one apart.
+"""How rlmcp tells a single-file environment apart, when it does not inherit.
 
-There is no base class to inherit from. An environment is single-file-shaped
-when it keeps its configuration in one dataclass on ``env.cfg`` (declared
+:class:`~rlmcp.adapters.single_file.base.SingleFileEnv` is the documented
+contract. An object that cannot inherit it is still accepted when it has the
+same shape: it keeps its configuration in one dataclass on ``env.cfg`` (declared
 with the markers in :mod:`rlmcp.declare`), its state in the conventional
 buffers (``dof_pos``, ``base_lin_vel``, ``commands`` and so on -- the same
-names legged_gym uses, which is why the sampler is shared), and its physics
-behind ``env.sim``, whatever simulator is underneath.
+names legged_gym uses, which is why the sampler is shared; the base-frame ones
+are optional), and its physics behind ``env.sim``, whatever simulator is
+underneath.
 
 :class:`SingleFileSpec` names those attributes so an environment that spells
 them differently can say so. :func:`detect` checks the shape at wrap time and
@@ -83,10 +85,12 @@ def detect(env: Any, spec: SingleFileSpec | None = None) -> SingleFileSpec:
     raise NotASingleFileEnv(
         f"{type(env).__name__} does not look like a single-file environment: "
         + "; ".join(problems)
-        + ". rlmcp reads the config dataclass on env.cfg (declared with "
-        "rlmcp.declare's Static and term markers) and the conventional state "
-        "buffers. If this environment keeps them under other names, say so "
-        "with wrap(spec=SingleFileSpec(...)). Attributes it does have: "
+        + ". Inherit rlmcp.adapters.single_file.SingleFileEnv, or give the "
+        "object the same shape: the config dataclass on env.cfg (declared with "
+        "rlmcp.declare's Static and term markers), num_envs, reset(env_ids) and "
+        "the conventional state buffers. If the config, reward table or reset "
+        "live under other names, say so with wrap(spec=SingleFileSpec(...)). "
+        "Attributes it does have: "
         f"{', '.join(have) or '(none)'}."
     )
   return spec

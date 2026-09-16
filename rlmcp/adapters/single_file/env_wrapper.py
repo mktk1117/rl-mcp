@@ -5,7 +5,7 @@ comes from :mod:`rlmcp.adapters.env_wrapper`, unchanged. What this family
 adds is how a hand-written training loop tells rlmcp where its iteration
 boundary is, since there is no runner to hook::
 
-    env = Go1FlatEnv(cfg)
+    env = MyEnv(cfg)                             # a SingleFileEnv
     env = rlmcp.adapters.single_file.wrap(env, session_dir=log_dir / "rlmcp")
     env.attach_algorithm(ppo)                    # knobs + checkpoints
 

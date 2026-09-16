@@ -19,7 +19,7 @@ from rlmcp.core.parameters.spec import ParameterCategory, ParameterSpec
 # Only bounds true by the parameter's own definition: a value outside them is
 # meaningless, not merely unusual. Omit "min"/"max" rather than guessing at a
 # sensible range -- that depends on the task. Guidance belongs in "desc".
-ALG_PARAMS: dict[str, dict[str, Any]] = {
+_ALG_PARAMS: dict[str, dict[str, Any]] = {
     "learning_rate": {
         "min": 0.0,  # Negative is gradient ascent; 0.0 legitimately freezes.
         "desc": "PPO optimiser learning rate (switches schedule to 'fixed' when set)",
@@ -57,8 +57,6 @@ ALG_PARAMS: dict[str, dict[str, Any]] = {
     },
 }
 
-_ALG_PARAMS = ALG_PARAMS  # The name tests and older code imported.
-
 
 class RslRlRunnerAdapter(RunnerAdapter):
   """Live control over an rsl_rl runner's algorithm and checkpoints."""
@@ -78,7 +76,7 @@ class RslRlRunnerAdapter(RunnerAdapter):
     if alg is None:
       return []
     specs: list[ParameterSpec] = []
-    for name, meta in ALG_PARAMS.items():
+    for name, meta in _ALG_PARAMS.items():
       if not hasattr(alg, name):
         continue
       value = getattr(alg, name)
@@ -107,10 +105,10 @@ class RslRlRunnerAdapter(RunnerAdapter):
   def set_hyperparameter(self, key: str, value: Any) -> bool:
     name = key.split(".", 1)[-1]
     alg = self.alg
-    if name not in ALG_PARAMS or not hasattr(alg, name):
+    if name not in _ALG_PARAMS or not hasattr(alg, name):
       # Raise rather than return False: an unknown key is a failure with an
       # explanation, and a falsy return would read as "not applied" with none.
-      known = sorted(k for k in ALG_PARAMS if hasattr(alg, k))
+      known = sorted(k for k in _ALG_PARAMS if hasattr(alg, k))
       raise KeyError(
           f"No tunable hyperparameter '{name}' on this runner. "
           f"Available: {known}"

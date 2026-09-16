@@ -93,9 +93,6 @@ class Term:
     inner.extend(f"{k}={v!r}" for k, v in self.params.items())
     return f"Term({', '.join(inner)})"
 
-  def copy(self) -> Term:
-    return Term(self.weight, self.func, **self.params)
-
 
 def term(weight: float, func: Callable[..., Any] | None = None, **params: Any) -> Any:
   """A dataclass field holding a fresh :class:`Term` per config instance.

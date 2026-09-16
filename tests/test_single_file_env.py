@@ -22,12 +22,13 @@ from rlmcp import declare
 from rlmcp.adapters.base import NotSupported
 from rlmcp.adapters.reward_terms import RewardInstallError
 from rlmcp.adapters.single_file import (
-    AlgorithmAdapter,
-    NotASingleFileEnv,
-    SingleFileSimAdapter,
-    SingleFileSpec,
-    TrainingStopped,
-    wrap,
+  AlgorithmAdapter,
+  NotASingleFileEnv,
+  SingleFileEnv,
+  SingleFileSimAdapter,
+  SingleFileSpec,
+  TrainingStopped,
+  wrap,
 )
 from rlmcp.adapters.single_file.spec import detect
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
@@ -87,7 +88,7 @@ class FakeBackend:
     return np.zeros((6, 8, 3), dtype=np.uint8)
 
 
-class FakeSingleFileEnv:
+class FakeSingleFileEnv(SingleFileEnv):
   """An env.py-shaped environment: config on cfg, state in buffers, sim behind."""
 
   def __init__(self, cfg: EnvConfig | None = None, with_sim: bool = True):
@@ -120,7 +121,7 @@ class FakeSingleFileEnv:
     self.commands[ids, 2] = torch.empty(len(ids)).uniform_(*c.ang_vel_yaw)
     return torch.zeros(self.num_envs, 8)
 
-  def _reward_terms(self) -> dict[str, torch.Tensor]:
+  def compute_reward_terms(self) -> dict[str, torch.Tensor]:
     """What an env.py computes inline, keyed by term name."""
     ones = torch.ones(self.num_envs)
     return {
@@ -132,36 +133,65 @@ class FakeSingleFileEnv:
   def step(self, actions):
     self.steps += 1
     self.actions[:] = actions * self.cfg.action_scale
-    computed = self._reward_terms()
-    total = torch.zeros(self.num_envs)
-    terms: dict[str, torch.Tensor] = {}
-    for name, t in declare.terms(self.cfg.reward).items():
-      value = computed[name] if name in computed else t.func(self, **t.params)
-      terms[name] = value
-      total += t.weight * value * self.control_dt
-    info = {
-        "reward_terms": {k: float(v.mean()) for k, v in terms.items()},
-        "episode_rewards": torch.tensor([1.0, 2.0]),
-        "episode_lengths": torch.tensor([10.0, 20.0]),
-        "time_outs": torch.zeros(self.num_envs, dtype=torch.bool),
-    }
+    total, terms = self.compute_reward(scale=self.control_dt)
+    info = self.step_info(
+        terms, episode_rewards=torch.tensor([1.0, 2.0]),
+        episode_lengths=torch.tensor([10.0, 20.0]),
+        time_outs=torch.zeros(self.num_envs, dtype=torch.bool))
     return torch.zeros(self.num_envs, 8), total, torch.zeros(self.num_envs, dtype=torch.bool), info
 
 
-class FakePPO:
-  """agentic-rllab's PPO, as much of it as the adapter touches."""
+class ShapeOnlyEnv:
+  """The same shape without the base class: what a file that cannot inherit
+  looks like to the wrapper."""
 
   def __init__(self):
+    inner = FakeSingleFileEnv()
+    self.__dict__.update(inner.__dict__)
+    self._inner = inner
+
+  def reset(self, env_ids=None):
+    return self._inner.reset(env_ids)
+
+  def step(self, actions):
+    return self._inner.step(actions)
+
+
+@dataclass
+class FakePPOConfig:
+  learning_rate: float = 1e-3
+  entropy_coef: float = 0.01
+  clip_param: float = 0.2
+  gamma: float = 0.99
+  num_learning_epochs: int = 5
+  hidden: Static[int] = 64
+  schedule: str = "adaptive"
+
+
+class FakePPO:
+  """A hand-rolled PPO, as much of it as the adapter touches: a declared cfg,
+  mirrored attributes, the change hook, metrics, save and load."""
+
+  def __init__(self):
+    self.cfg = FakePPOConfig()
     self.weights = torch.nn.Parameter(torch.zeros(3))
     self.optimizer = torch.optim.Adam([self.weights], lr=1e-3)
     self.learning_rate = 1e-3
     self.entropy_coef = 0.01
-    self.clip_param = 0.2
-    self.gamma = 0.99
-    self.num_learning_epochs = 5
     self.schedule = "adaptive"
+    self.hook_calls: list = []
     self.actor = torch.nn.Linear(2, 2)
     self.actor.output_std = torch.tensor([0.5, 0.7])
+
+  def on_hyperparameter_change(self, name, value):
+    self.hook_calls.append((name, value))
+    if name == "learning_rate":
+      for group in self.optimizer.param_groups:
+        group["lr"] = value
+      self.schedule = "fixed"
+
+  def metrics(self):
+    return {"Policy/mean_std": float(self.actor.output_std.mean())}
 
   def save(self) -> dict:
     return {"weights": self.weights.detach().clone(), "entropy_coef": self.entropy_coef}
@@ -222,6 +252,28 @@ def test_terms_includes_what_was_added_at_runtime():
 
 def test_a_conventional_env_needs_no_spec(env):
   assert detect(env) == SingleFileSpec()
+
+
+def test_an_env_that_cannot_inherit_is_accepted_by_shape():
+  duck = ShapeOnlyEnv()
+  assert not isinstance(duck, SingleFileEnv)
+  assert detect(duck) == SingleFileSpec()
+  sim = SingleFileSimAdapter(duck)
+  assert "reward.upright.weight" in {s.key for s in sim.discover_parameters()}
+
+
+def test_the_base_class_scores_a_term_it_did_not_compute(env):
+  env.cfg.reward.bonus = Term(0.5, func=lambda e, k=2.0: torch.full((e.num_envs,), k), k=3.0)
+  total, scored = env.compute_reward()
+  assert torch.equal(scored["bonus"], torch.full((4,), 3.0))
+  assert float(total[0]) == pytest.approx(4.0 * 0.5 + 1.0 + (-0.1) * 2.0 + 0.5 * 3.0)
+
+
+def test_the_base_class_names_a_term_nobody_scores(env):
+  env.cfg.reward.orphan = Term(1.0)
+  with pytest.raises(KeyError) as excinfo:
+    env.compute_reward()
+  assert "orphan" in str(excinfo.value)
 
 
 def test_an_env_of_the_wrong_shape_is_refused_by_name():
@@ -443,14 +495,36 @@ def test_hyperparameters_reach_the_algorithm(tmp_path, env):
   ppo = FakePPO()
   wrapped = wrap(env, session_dir=tmp_path / "s", viser=False)
   wrapped.attach_algorithm(ppo)
-  found = {s.key for s in wrapped.rlmcp.runner.discover_hyperparameters()}
-  assert {"rl.learning_rate", "rl.entropy_coef", "rl.clip_param", "rl.gamma"} <= found
-  assert "rl.num_learning_epochs" not in found, "not in the shared table"
-  wrapped.rlmcp.runner.set_hyperparameter("rl.learning_rate", 5e-4)
-  assert ppo.optimizer.param_groups[0]["lr"] == 5e-4
+  specs = {s.key: s for s in wrapped.rlmcp.runner.discover_hyperparameters()}
+  assert {"rl.learning_rate", "rl.entropy_coef", "rl.clip_param", "rl.gamma",
+          "rl.num_learning_epochs", "rl.hidden"} == set(specs), "every numeric leaf of cfg"
+  assert specs["rl.hidden"].liveness is Liveness.AT_STARTUP
+  assert specs["rl.num_learning_epochs"].data_type == "int"
+  runner = wrapped.rlmcp.runner
+  runner.set_hyperparameter("rl.learning_rate", 5e-4)
+  assert ppo.optimizer.param_groups[0]["lr"] == 5e-4, "the hook did its job"
   assert ppo.schedule == "fixed", "adaptive would overwrite the edit next update"
-  wrapped.rlmcp.runner.set_hyperparameter("rl.entropy_coef", 0.02)
-  assert ppo.entropy_coef == 0.02
+  assert ppo.cfg.learning_rate == 5e-4 and ppo.learning_rate == 5e-4
+  runner.set_hyperparameter("rl.entropy_coef", 0.02)
+  assert ppo.entropy_coef == 0.02 and ppo.cfg.entropy_coef == 0.02
+  assert ppo.hook_calls == [("learning_rate", 5e-4), ("entropy_coef", 0.02)]
+  runner.set_hyperparameter("rl.num_learning_epochs", 7)
+  assert ppo.cfg.num_learning_epochs == 7 and isinstance(ppo.cfg.num_learning_epochs, int)
+  with pytest.raises(ValueError) as excinfo:
+    runner.set_hyperparameter("rl.hidden", 128)
+  assert "at_startup" in str(excinfo.value) and ppo.cfg.hidden == 64
+  with pytest.raises(KeyError) as excinfo:
+    runner.set_hyperparameter("rl.schedule", "fixed")
+  assert "Available" in str(excinfo.value)
+  assert runner.runner_metrics()["Policy/mean_std"] == pytest.approx(0.6)
+
+
+def test_an_algorithm_without_a_cfg_declares_nothing():
+  adapter = AlgorithmAdapter(object())
+  assert adapter.discover_hyperparameters() == []
+  with pytest.raises(KeyError) as excinfo:
+    adapter.set_hyperparameter("rl.learning_rate", 1e-3)
+  assert "cfg" in str(excinfo.value)
 
 
 def test_checkpoints_round_trip_through_save_and_load(tmp_path):
@@ -466,7 +540,6 @@ def test_checkpoints_round_trip_through_save_and_load(tmp_path):
   assert infos == {"parameters": {"a": 1}}
   assert torch.equal(ppo.weights.detach(), torch.zeros(3))
   assert ppo.entropy_coef == 0.01
-  assert adapter.runner_metrics()["Policy/mean_std"] == pytest.approx(0.6)
 
 
 def test_an_algorithm_without_save_is_refused_not_faked():

@@ -167,14 +167,10 @@ def _genesis_describe(task: str) -> dict[str, Any]:
 
 def _single_file_ids() -> list[str]:
   """A single-file task is a script, not a registry entry -- so nothing to
-  list, but only once the family can run here at all: it needs torch and at
-  least one physics backend (mjwarp, mjbatch or genesis)."""
+  list, but only once the family can run here at all, which takes torch. The
+  physics is the script's own business."""
   import torch  # noqa: F401
 
-  from rlmcp.backends import available
-
-  if not any(reason == "" for reason in available().values()):
-    raise ImportError("no physics backend: install mujoco_warp, mjbatch or genesis")
   return []
 
 
@@ -198,7 +194,7 @@ BACKENDS: tuple[dict[str, Any], ...] = (
      "note": "A single-file task is an env.py you run directly (see "
              "docs/single-file.md); rlmcp attaches when the script wraps it, so "
              "there is no registry to list. This row says whether the family can "
-             "run here: torch plus one of mjwarp, mjbatch or genesis."},
+             "run here, which takes torch; the physics is the script's own."},
 )
 
 
