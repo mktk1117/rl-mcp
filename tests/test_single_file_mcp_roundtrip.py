@@ -44,7 +44,7 @@ pytest.importorskip("mcp", reason="the MCP server needs the optional 'mcp' packa
 
 from test_single_file_env import FakePPO, FakeSingleFileEnv  # noqa: E402
 
-from rlmcp import declare  # noqa: E402
+from rlmcp import blocks, declare  # noqa: E402
 from rlmcp.adapters.access import paths  # noqa: E402
 from rlmcp.adapters.single_file import AlgorithmAdapter, wrap  # noqa: E402
 from rlmcp.server.mcp_server import create_mcp_server  # noqa: E402
@@ -115,17 +115,22 @@ CONFIGS = {"fake": _fake, "go1_example": _go1}
 # Expected keys, from the config tree alone.
 
 
-def expected_keys(cfg: Any, reward_group: str = "reward") -> dict[str, bool]:
+def expected_keys(cfg: Any, reward_group: str = "reward", env: Any = None) -> dict[str, bool]:
   """``{key: static}`` for every numeric leaf the tree declares.
 
   This is the adapter's contract restated from the outside: a top-level scalar
   is ``env.<name>``, a field of a nested dataclass is ``<group>.<...>.<name>``,
-  a term is ``reward.<name>.weight`` plus ``reward.<name>.params.<p>``.
-  Strings and dicts are not leaves and are not expected: a dict-valued field
-  (the example's per-joint gain tables) is not served at all, so the listed
-  set and this one are the same set, which the first test also checks.
+  a term is ``reward.<name>.weight`` plus ``reward.<name>.params.<p>``, and a
+  stage field of an observation group on the environment is
+  ``<attr>.<term>.<stage>.<field>``. Strings and dicts are not leaves and are
+  not expected: a dict-valued field (the example's per-joint gain tables) is
+  not served at all, so the listed set and this one are the same set, which
+  the first test also checks.
   """
   out: dict[str, bool] = {}
+  for attr, block in blocks.blocks(env).items() if env is not None else ():
+    for path, _, field_name, static in blocks.block_leaves(block):
+      out[".".join((attr, *path, field_name))] = static
   for path, value, static in declare.walk(cfg):
     if not paths.is_leaf(value):
       continue
@@ -139,10 +144,15 @@ def expected_keys(cfg: Any, reward_group: str = "reward") -> dict[str, bool]:
   return out
 
 
-def resolve(cfg: Any, algorithm: Any, key: str) -> Any:
+def resolve(cfg: Any, algorithm: Any, key: str, env: Any = None) -> Any:
   """The value ``key`` names, read straight off the objects, no registry."""
   parts = paths.split_path(key)
   head, rest = parts[0], parts[1:]
+  block = blocks.blocks(env).get(head) if env is not None else None
+  if block is not None:
+    pipe = block.terms[rest[0]].pipe if isinstance(block, blocks.Obs) else block
+    stage = pipe.named_stages()[rest[-2]]
+    return getattr(stage, rest[-1])
   if head == "rl":
     if hasattr(algorithm, rest[0]):
       return getattr(algorithm, rest[0])
@@ -266,7 +276,7 @@ def test_every_declared_leaf_is_listed_by_the_server(served):
   listed = served.call("list_parameters")
   assert listed["ok"], listed
   keys = listed["parameters"]
-  expected = expected_keys(served.cfg)
+  expected = expected_keys(served.cfg, env=served.env)
   missing = sorted(set(expected) - set(keys))
   assert not missing, f"declared but not served: {missing}"
   unexpected = sorted(set(keys) - set(expected) - {k for k in keys if k.startswith("rl.")})
@@ -288,7 +298,7 @@ def test_every_listed_parameter_reads_back_through_the_server(served):
     got = served.get(key)
     assert got["ok"], (key, got)
     assert same(got["value"], spec["current"]), (key, got["value"], spec["current"])
-    assert same(got["value"], resolve(served.cfg, served.algorithm, key)), key
+    assert same(got["value"], resolve(served.cfg, served.algorithm, key, served.env)), key
 
 
 def test_every_live_parameter_can_be_set_and_lands_in_the_config(served):
@@ -302,7 +312,7 @@ def test_every_live_parameter_can_be_set_and_lands_in_the_config(served):
     assert same(out["new_value"], value), (key, out)
     assert same(served.get(key)["value"], value), key
     # The config object itself, not the registry's idea of it.
-    assert same(resolve(served.cfg, served.algorithm, key), value), key
+    assert same(resolve(served.cfg, served.algorithm, key, served.env), value), key
 
 
 def test_every_static_parameter_is_refused_with_the_reason(served):
@@ -310,12 +320,12 @@ def test_every_static_parameter_is_refused_with_the_reason(served):
   static = {k: s for k, s in keys.items() if s["liveness"] == "at_startup"}
   assert static, "both configs declare Static fields"
   for key, spec in static.items():
-    before = resolve(served.cfg, served.algorithm, key)
+    before = resolve(served.cfg, served.algorithm, key, served.env)
     out = served.call("set_parameter", key=key, value=nudged(spec), rationale="must refuse")
     assert not out.get("ok") or not out.get("applied"), (key, out)
     reason = out.get("error", "") or ""
     assert "at_startup" in reason, (key, out)
-    assert same(resolve(served.cfg, served.algorithm, key), before), key
+    assert same(resolve(served.cfg, served.algorithm, key, served.env), before), key
 
 
 def test_reset_parameters_puts_every_live_value_back(served):
@@ -329,7 +339,7 @@ def test_reset_parameters_puts_every_live_value_back(served):
   drifted = [k for k in live if not same(after[k]["current"], keys[k]["default"])]
   assert not drifted, f"not restored: {drifted}"
   for key in live:
-    assert same(resolve(served.cfg, served.algorithm, key), keys[key]["default"]), key
+    assert same(resolve(served.cfg, served.algorithm, key, served.env), keys[key]["default"]), key
 
 
 def test_the_example_ppo_reloads_after_an_inference_mode_rollout(tmp_path):
@@ -367,7 +377,6 @@ def test_the_go1_example_declares_the_surface_the_docs_promise():
       "reward.foot_slip.params.command_threshold",
       "command.lin_vel_x",
       "command.rel_heading_envs",
-      "noise.level",
       "termination.fell_over_deg",
       "randomization.push_interval_s",
       "action.scale_calf",

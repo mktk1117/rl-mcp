@@ -204,18 +204,22 @@ Anything your simulator has and others do not belongs in an
 
 A third family is not manager-based at all: an `env.py` whose config is one
 dataclass at the top of the file and whose `step()` is written out below it.
-It is driven the same way because the file *declares* what the managers would
-otherwise have told us -- `Static[...]` for a value read once at construction,
-`term(...)` for a reward term, a `cfg` dataclass on the algorithm for its
-knobs -- and inherits `SingleFileEnv`, which names the buffers the shared
-sampler reads and owns the reward loop. [single-file.md](single-file.md) is
-the page for it.
+It is driven the same way because the file is built from blocks that
+*declare* what the managers would otherwise have told us -- `Static[...]`
+for a value read once at construction, `term(...)` for a reward term named
+after a method, a `Vars` container for every variable `step()` writes, `Obs`
+groups whose pipe stages (`Noise`, `Delay`, ...) are dataclasses and so
+parameters, a `cfg` dataclass on the algorithm for its knobs -- and inherits
+`SingleFileEnv`, which owns the reward loop. [single-file.md](single-file.md)
+is the page for it.
 
 ```
-rlmcp/declare.py                 the two markers; stdlib only, detected by shape
+rlmcp/declare.py                 the two config markers; stdlib only, detected by shape
+rlmcp/blocks.py                  Vars/var, Obs and the pipe stages, Pipe; torch only
 rlmcp/adapters/single_file/      SingleFileEnv, providers built from the config
-                                 tree, the adapter, the wrapper with
-                                 attach_algorithm/service, the algorithm adapter
+                                 tree and the blocks, the state sampler, the
+                                 adapter, the wrapper with attach_algorithm/service,
+                                 the algorithm adapter
 ```
 
 `rlmcp/backends/` is the physics an `env.py` can run on: `RobotSpec` plus

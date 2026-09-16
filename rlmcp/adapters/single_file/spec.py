@@ -3,11 +3,11 @@
 :class:`~rlmcp.adapters.single_file.base.SingleFileEnv` is the documented
 contract. An object that cannot inherit it is still accepted when it has the
 same shape: it keeps its configuration in one dataclass on ``env.cfg`` (declared
-with the markers in :mod:`rlmcp.declare`), its state in the conventional
-buffers (``dof_pos``, ``base_lin_vel``, ``commands`` and so on -- the same
-names legged_gym uses, which is why the sampler is shared; the base-frame ones
-are optional), and its physics behind ``env.sim``, whatever simulator is
-underneath.
+with the markers in :mod:`rlmcp.declare`), its variables in a
+:class:`~rlmcp.blocks.Vars` container on ``env.state`` (or, the older shape,
+as plain attributes under the legged_gym names -- ``dof_pos``,
+``base_lin_vel``, ``commands``), and its physics behind ``env.sim``, whatever
+simulator is underneath.
 
 :class:`SingleFileSpec` names those attributes so an environment that spells
 them differently can say so. :func:`detect` checks the shape at wrap time and
@@ -33,6 +33,11 @@ class SingleFileSpec:
   cfg: str = "cfg"
   """The config dataclass. Every tunable parameter is a field of it, or of a
   nested dataclass under it."""
+
+  state: str = "state"
+  """The :class:`~rlmcp.blocks.Vars` container holding the variables
+  ``step()`` writes. Optional: an environment that keeps them as plain
+  attributes under the legged_gym names is read through those instead."""
 
   reward_group: str = "reward"
   """The field of ``cfg`` holding the reward table: a dataclass whose fields
@@ -88,7 +93,7 @@ def detect(env: Any, spec: SingleFileSpec | None = None) -> SingleFileSpec:
         + ". Inherit rlmcp.adapters.single_file.SingleFileEnv, or give the "
         "object the same shape: the config dataclass on env.cfg (declared with "
         "rlmcp.declare's Static and term markers), num_envs, reset(env_ids) and "
-        "the conventional state buffers. If the config, reward table or reset "
+        "the variables in a rlmcp.blocks.Vars on env.state. If the config, reward table or reset "
         "live under other names, say so with wrap(spec=SingleFileSpec(...)). "
         "Attributes it does have: "
         f"{', '.join(have) or '(none)'}."

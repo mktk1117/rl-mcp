@@ -1,13 +1,11 @@
 """SimAdapter for a single-file environment.
 
-Thin, like the Genesis one, and for the same reason: trace sampling and
-summary metrics come from :mod:`rlmcp.adapters.legged_gym_style`, because a
-single-file environment keeps its state in the buffers that family already
-reads (``dof_pos``, ``base_lin_vel``, ``commands``, ...). Parameters come from
-the declared config tree (:mod:`rlmcp.adapters.single_file.access`). What is
-genuinely this family's own is small: how episodes are restarted, how a frame
-is asked for, and how a reward term is appended to a table that is a
-dataclass rather than a dict.
+Thin. Trace sampling and summary metrics read the environment's variables
+(:mod:`rlmcp.adapters.single_file.state`); parameters come from the declared
+config tree and the observation blocks
+(:mod:`rlmcp.adapters.single_file.access`). What is genuinely this adapter's
+own is small: how episodes are restarted, how a frame is asked for, and how
+a reward term is appended to a table that is a dataclass rather than a dict.
 
 The physics backend is not this adapter's business. ``env.sim`` may be MuJoCo
 Warp, mjbatch or Genesis; the environment reads it into the same buffers
@@ -24,11 +22,10 @@ import numpy as np
 
 from rlmcp import declare
 from rlmcp.adapters.base import NotSupported, SimAdapter
-from rlmcp.adapters.legged_gym_style import metrics as flat_metrics
-from rlmcp.adapters.legged_gym_style.sampling import StateSampler
 from rlmcp.adapters.reward_terms import RewardInstallError, trial_call
 from rlmcp.adapters.single_file.access import ParameterAccess
 from rlmcp.adapters.single_file.spec import SingleFileSpec, detect
+from rlmcp.adapters.single_file.state import StateSampler, summary_metrics
 from rlmcp.core.parameters.spec import ParameterSpec
 
 
@@ -39,7 +36,7 @@ class SingleFileSimAdapter(SimAdapter):
     self.env = env
     self.spec = detect(env, spec)
     self.parameters = ParameterAccess(env, self.spec)
-    self.sampler = StateSampler(env, command_names=self.parameters.command_channels())
+    self.sampler = StateSampler(env, self.spec, command_names=self.parameters.command_channels())
     self._last_set_notes: dict[str, Any] = {}
 
   @property
@@ -165,7 +162,7 @@ class SingleFileSimAdapter(SimAdapter):
     return labels
 
   def summary_metrics(self) -> dict[str, float]:
-    return flat_metrics.summary_metrics(self.env, self.sampler)
+    return summary_metrics(self.env, self.sampler)
 
   def reset_envs(self, env_ids: Sequence[int] | None = None) -> dict[str, Any]:
     """Start fresh episodes through the environment's own ``reset(env_ids)``.

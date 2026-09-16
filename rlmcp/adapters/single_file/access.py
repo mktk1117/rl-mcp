@@ -7,11 +7,15 @@ is only where the values are found: fields of one dataclass tree on
 ``env.cfg`` rather than manager term configs.
 
 The tree decides the domains. Each nested dataclass directly under ``cfg`` is
-a domain named after its field (``command.lin_vel_x``, ``termination.max_tilt``,
-``noise.dof_pos``); the reward group is served as terms
-(``reward.<name>.weight``, ``reward.<name>.params.<p>``); and the scalars left
-at the top level are ``env.<name>``. Nothing here is hand-listed by parameter
-name, so a knob added to the config is tunable the moment it is declared.
+a domain named after its field (``command.lin_vel_x``, ``termination.max_tilt``);
+the reward group is served as terms (``reward.<name>.weight``,
+``reward.<name>.params.<p>``); the scalars left at the top level are
+``env.<name>``; and every :class:`~rlmcp.blocks.Obs` or
+:class:`~rlmcp.blocks.Pipe` assigned to an attribute of the environment is a
+domain of its own, its stage fields served as
+``<attr>.<term>.<stage>.<field>`` (``actor_obs.joint_vel.noise.half_width``).
+Nothing here is hand-listed by parameter name, so a knob added to the config
+or a stage added to a pipe is tunable the moment it is declared.
 
 Liveness comes from the declaration. A field marked ``Static`` -- or anything
 under a nested dataclass marked ``Static`` -- is ``at_startup``, and a write to
@@ -26,7 +30,7 @@ import dataclasses
 from collections.abc import Sequence
 from typing import Any
 
-from rlmcp import declare
+from rlmcp import blocks, declare
 from rlmcp.adapters.access import paths
 from rlmcp.adapters.access.base import AccessProvider, Synthetic, Term
 from rlmcp.adapters.access.registry import ParameterAccess as _ParameterAccess
@@ -284,6 +288,91 @@ class RewardAccess(AccessProvider):
     return f"Parameter '{'.'.join(parts)}' of reward term '{term.key}'"
 
 
+class BlockAccess(AccessProvider):
+  """One :class:`~rlmcp.blocks.Obs` or :class:`~rlmcp.blocks.Pipe` on the
+  environment, served under its attribute name.
+
+  A stage is a dataclass, so its numeric fields are the parameters:
+  ``actor_obs.joint_pos.noise.half_width``, ``actor_obs.joint_vel.delay.steps``,
+  or ``action_pipe.clip.high`` for a bare pipe. ``Static[...]`` on a stage
+  field is honoured; a stage that declares ``bounds()`` has its writes
+  checked against them before anything is changed.
+  """
+
+  domain = ""
+  category = ParameterCategory.OBSERVATION
+
+  def __init__(self, env: Any, name: str):
+    super().__init__(env)
+    self.domain = name
+
+  @property
+  def block(self) -> Any:
+    value = getattr(self.env, self.domain, None)
+    return value if isinstance(value, (blocks.Obs, blocks.Pipe)) else None
+
+  def available(self) -> bool:
+    return self.block is not None
+
+  def terms(self) -> list[Term]:
+    return []
+
+  def synthetic(self) -> list[Synthetic]:
+    block = self.block
+    if block is None:
+      return []
+    out: list[Synthetic] = []
+    for path, stage, field_name, static in blocks.block_leaves(block):
+      key = ".".join((self.domain, *path, field_name))
+      low, high = (None, None)
+      bounds = getattr(stage, "bounds", None)
+      if callable(bounds):
+        low, high = bounds().get(field_name, (None, None))
+      out.append(
+          Synthetic(
+              key=key,
+              getter=lambda st=stage, f=field_name: getattr(st, f),
+              setter=self._setter(key, stage, field_name, low, high),
+              default=getattr(stage, field_name),
+              description=(
+                  f"'{field_name}' of the {type(stage).__name__} stage"
+                  + (f" on term '{path[0]}'" if len(path) > 1 else "")
+                  + f" of {self.domain}"
+              ),
+              data_type=paths.leaf_kind(getattr(stage, field_name)),
+              min_value=None if low is None else float(low),
+              max_value=None if high is None else float(high),
+              liveness=_liveness(static),
+          )
+      )
+    return out
+
+  @staticmethod
+  def _setter(key: str, stage: Any, field_name: str, low: Any, high: Any):
+    def put(value: Any) -> bool:
+      current = getattr(stage, field_name)
+      coerced = paths.coerce_like(current, value)
+      if (low is not None and coerced < low) or (high is not None and coerced > high):
+        span = f"at least {low}" if high is None else f"within [{low}, {high}]"
+        raise ValueError(
+            f"'{key}' must be {span}; got {coerced}. That is what a "
+            f"{type(stage).__name__} stage accepts."
+        )
+      setattr(stage, field_name, coerced)
+      return True
+    return put
+
+  def miss_hint(self, key: str) -> str:
+    block = self.block
+    if isinstance(block, blocks.Obs):
+      return (
+          f"'{self.domain}' is an observation group; its keys are "
+          "<term>.<stage>.<field> for the terms "
+          f"{sorted(block.terms)} and the stages in their pipes."
+      )
+    return f"'{self.domain}' is a pipe; its keys are <stage>.<field>."
+
+
 class EnvAccess(AccessProvider):
   """The scalars left at the top level of ``cfg``, as ``env.<name>``."""
 
@@ -324,7 +413,8 @@ class ParameterAccess(_ParameterAccess):
   """The tunable surface of one single-file environment.
 
   Providers are built from the config tree rather than listed: one for the
-  reward table, one per nested dataclass, one for the top-level scalars.
+  reward table, one per nested dataclass, one for the top-level scalars, and
+  one per observation group or pipe found on the environment.
   """
 
   def __init__(self, env: Any, spec: SingleFileSpec | None = None):
@@ -341,6 +431,14 @@ class ParameterAccess(_ParameterAccess):
             lambda e, s=self.spec, n=f.name, st=(f.name in statics): GroupAccess(e, s, n, st)
         )
     providers.append(lambda e, s=self.spec: EnvAccess(e, s))
+    groups = {f.name for f in dataclasses.fields(cfg)} | {"env"}
+    for name in blocks.blocks(env):
+      if name in groups:
+        raise ValueError(
+            f"The environment's block attribute '{name}' has the same name as a "
+            "section of its config; rename one so both can be served."
+        )
+      providers.append(lambda e, n=name: BlockAccess(e, n))
     super().__init__(env, providers)
 
   def provider(self, domain: str) -> AccessProvider | None:
@@ -354,9 +452,10 @@ class ParameterAccess(_ParameterAccess):
 
 
 __all__ = [
-    "CATEGORY_BY_GROUP",
-    "EnvAccess",
-    "GroupAccess",
-    "ParameterAccess",
-    "RewardAccess",
+  "CATEGORY_BY_GROUP",
+  "BlockAccess",
+  "EnvAccess",
+  "GroupAccess",
+  "ParameterAccess",
+  "RewardAccess",
 ]

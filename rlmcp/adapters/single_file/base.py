@@ -1,32 +1,44 @@
 """The base class of a single-file environment: the contract, written down once.
 
-A single-file environment is one ``env.py``: the config is a dataclass at the
-top of the file, declared with :mod:`rlmcp.declare`, and ``reset()``,
-``step()`` and the reward terms are written out below it. rlmcp needs to
-know four things about such a file, and this class is where they are said:
+A single-file environment is one ``env.py``, built from the blocks in
+:mod:`rlmcp.blocks`: the config is a dataclass at the top of the file,
+declared with :mod:`rlmcp.declare`; the variables ``step()`` writes are a
+:class:`~rlmcp.blocks.Vars` container; the observations are
+:class:`~rlmcp.blocks.Obs` groups; and each reward term is a method named in
+the config's reward table. rlmcp needs to know four things about such a
+file, and this class is where they are said:
 
 * **the config** -- ``self.cfg``, the declared dataclass. Every numeric leaf
   of it is a parameter an agent can list and set; ``Static[...]`` marks the
   ones read once at construction; ``term(...)`` declares a reward term.
-* **the state** -- tensors on the environment with a leading ``num_envs``
-  axis, under the names the trace reads. ``dof_pos``, ``dof_vel`` and
-  ``actions`` are required. ``base_pos``, ``base_quat``, ``base_lin_vel``,
-  ``base_ang_vel``, ``projected_gravity`` and ``commands`` are for a floating
-  base and a commanded task; a fixed-base arm or hand simply does not define
-  them, and the channels they feed are dropped rather than faked.
+* **the variables** -- ``self.state``, a :class:`~rlmcp.blocks.Vars` with one
+  tensor per name and a leading ``num_envs`` axis. Every variable is
+  sampled into a trace; the ones under conventional names (``joint_pos``,
+  ``joint_vel``, ``actions``, ``base_lin_vel``, ``base_ang_vel``,
+  ``base_pos``, ``projected_gravity``, ``foot_contact``, ``commands``,
+  ``reward``, ``episode_length``) also feed the diagnostics. A fixed-base
+  arm simply does not declare the base ones, and the channels they feed
+  are dropped rather than faked.
 * **the boundaries** -- ``reset(env_ids)`` restarts episodes and ``step()``
   returns ``(obs, reward, done, info)``, with ``info`` carrying the keys
   :meth:`step_info` builds.
-* **the reward table** -- :meth:`compute_reward_terms` scores the terms the
-  file computes inline; :meth:`compute_reward` weights them by the table on
-  ``cfg.reward`` and scores any term that was appended at runtime through its
-  own function. That loop lives here so ``rlmcp add-reward`` works on every
-  subclass without each file carrying the loop.
+* **the reward table** -- ``cfg.reward`` holds a ``term(weight, **params)``
+  per term, and each names a method of the environment with the same
+  signature. :meth:`compute_reward` sums ``weight * method(**params)`` over
+  the table; a term appended at runtime through ``rlmcp add-reward``
+  brings its own function and is scored the same way, so the file never
+  has to know a term was added.
 
 The physics is not part of the contract. ``self.sim`` is whatever the file
 built -- a MuJoCo Warp batch, a Genesis scene, anything -- and rlmcp asks it
 for two optional things only: ``render(env_id)`` for frames, and ``mj_model``
 for the live view when it has one.
+
+The observation groups and pipes are found by looking: any
+:class:`~rlmcp.blocks.Obs` or :class:`~rlmcp.blocks.Pipe` assigned to an
+attribute of the environment is served under that attribute's name
+(``actor_obs.joint_vel.noise.half_width``), and :meth:`reset_blocks` clears
+their history on an episode reset.
 
 Inheriting is the documented path. The wrapper also accepts any object of
 the same shape (:mod:`rlmcp.adapters.single_file.spec` checks it at wrap
@@ -41,7 +53,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from rlmcp import declare
+from rlmcp import blocks, declare
 
 
 class SingleFileEnv(ABC):
@@ -49,6 +61,8 @@ class SingleFileEnv(ABC):
 
   cfg: Any
   """The declared config dataclass."""
+  state: Any = None
+  """The :class:`~rlmcp.blocks.Vars` holding every variable ``step()`` writes."""
   num_envs: int
   device: torch.device
   control_dt: float
@@ -73,38 +87,50 @@ class SingleFileEnv(ABC):
     """One control step. Returns ``(obs, reward, done, info)``; build ``info``
     with :meth:`step_info` so the wrapper finds what it logs."""
 
-  # The reward table.
+  # The blocks.
 
-  @abstractmethod
-  def compute_reward_terms(self) -> dict[str, Tensor]:
-    """Every term the file computes inline, ``{name: (num_envs,) tensor}``,
-    keyed by the field name in the reward table. Unweighted."""
+  def blocks(self) -> dict[str, blocks.Block]:
+    """The :class:`~rlmcp.blocks.Obs` and :class:`~rlmcp.blocks.Pipe`
+    attributes of this environment, by attribute name."""
+    return blocks.blocks(self)
+
+  def reset_blocks(self, env_ids: Tensor | None = None) -> None:
+    """Tell every pipe stage with history (a :class:`~rlmcp.blocks.Delay`)
+    that ``env_ids`` start over. Call it from ``reset()``."""
+    for block in self.blocks().values():
+      block.reset(env_ids)
+
+  # The reward table.
 
   def reward_table(self) -> dict[str, declare.Term]:
     """The terms on ``cfg.<reward_group>``, including any added at runtime."""
     return declare.terms(getattr(self.cfg, self.reward_group, None))
 
-  def compute_reward(self, scale: float = 1.0) -> tuple[Tensor, dict[str, Tensor]]:
-    """``sum(weight * value) * scale`` over the table, plus the per-term values.
+  def reward_function(self, name: str, term: declare.Term) -> Any:
+    """The callable behind a term: its own ``func(env, **params)`` when it
+    carries one, else the method of this environment named ``name``,
+    called as ``method(**params)``."""
+    if term.func is not None:
+      return lambda **params: term.func(self, **params)
+    method = getattr(self, name, None)
+    if not callable(method):
+      raise KeyError(
+          f"Reward term '{name}' is in the table but this environment has no "
+          f"method '{name}' to score it, and the term carries no function."
+      )
+    return method
 
-    A term the table has and :meth:`compute_reward_terms` did not score is
-    one that was appended at runtime; it carries its function and is scored
-    by ``func(env, **params)``. ``scale`` is for a task that multiplies every
-    term by the control timestep, as mjlab's reward manager does.
+  def compute_reward(self, scale: float = 1.0) -> tuple[Tensor, dict[str, Tensor]]:
+    """``sum(weight * term(**params)) * scale`` over the table, plus the
+    per-term values.
+
+    ``scale`` is for a task that multiplies every term by the control
+    timestep, as mjlab's reward manager does.
     """
-    computed = self.compute_reward_terms()
     total = torch.zeros(self.num_envs, device=self.device)
     scored: dict[str, Tensor] = {}
     for name, term in self.reward_table().items():
-      if name in computed:
-        value = computed[name]
-      elif term.func is not None:
-        value = term.func(self, **term.params)
-      else:
-        raise KeyError(
-            f"Reward term '{name}' is in the table but compute_reward_terms() "
-            "did not score it and it carries no function."
-        )
+      value = self.reward_function(name, term)(**term.params)
       scored[name] = value
       total += term.weight * value * scale
     return total, scored

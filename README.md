@@ -113,12 +113,14 @@ in [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab
 
 Not every task is manager-based. A single-file environment keeps its config
 in one dataclass at the top of `env.py` and writes `step()` out below it — the
-shape an agent can read top to bottom. Declare the config with two markers,
-inherit one base class, and rlmcp drives it the same way, on whatever physics
-the file uses.
+shape an agent can read top to bottom. It is built from four blocks
+(`rlmcp.blocks`): the declared config, the variables `step()` writes, the
+observation pipes, and one method per reward term. rlmcp serves every
+parameter in the first and third, traces every variable in the second, and
+weights the fourth, on whatever physics the file uses.
 
 ```python
-from rlmcp.declare import Static, Term, term
+from rlmcp.blocks import Noise, Obs, Static, Term, Vars, term, var
 from rlmcp.adapters.single_file import SingleFileEnv
 import rlmcp.adapters.single_file as rlmcp_single_file
 
@@ -133,8 +135,22 @@ class EnvConfig:
   action_scale: float = 0.25                       # env.action_scale, live
   reward: Rewards = field(default_factory=Rewards)
 
-class MyEnv(SingleFileEnv):                        # reset, step, compute_reward_terms
-  ...
+class State(Vars):                                 # every variable step() writes: traced
+  base_lin_vel: Tensor = var(3)
+  joint_pos: Tensor = var("joint")
+  commands: Tensor = var(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
+
+class MyEnv(SingleFileEnv):
+  def __init__(self, cfg):
+    self.state = State(cfg.num_envs, "cuda", joint=joint_names)
+    self.actor_obs = Obs(                          # actor_obs.joint_pos.noise.half_width
+        base_lin_vel=("base_lin_vel", Noise(0.5)),
+        joint_pos=("joint_pos", Noise(0.01)),
+        commands="commands")
+  def tracking_lin_vel(self, sigma): ...           # one method per reward term
+  def action_rate(self): ...
+  def reset(self, env_ids=None): ...
+  def step(self, actions): ...
 
 env = rlmcp_single_file.wrap(MyEnv(EnvConfig()), session_dir=log_dir / "rlmcp")
 env.attach_algorithm(ppo)                          # rl.* knobs from ppo.cfg, checkpoints

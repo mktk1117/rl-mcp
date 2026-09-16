@@ -1,10 +1,13 @@
 # Go1 flat locomotion, in one file, on three backends
 
-`go1_flat/env.py` is the whole task: the config dataclasses at the top, then
-`reset()`, `step()`, the observations, the rewards and the terminations, in
-the order they happen. It inherits `rlmcp.adapters.single_file.SingleFileEnv`,
-which is the contract rlmcp reads it through (see
-[docs/single-file.md](../../docs/single-file.md)). `ppo.py` is the algorithm,
+`go1_flat/env.py` is the whole task: the config dataclasses at the top, the
+`State` of every variable `step()` writes, then `reset()`, `step()`, the
+observation groups, one method per reward term and the terminations, in the
+order they happen. It is built from `rlmcp.blocks` and inherits
+`rlmcp.adapters.single_file.SingleFileEnv`, which is the contract rlmcp reads
+it through (see [docs/single-file.md](../../docs/single-file.md)): every
+config leaf and every observation-pipe stage is a parameter
+(`actor_obs.joint_vel.noise.half_width`), every variable is traced. `ppo.py` is the algorithm,
 copied here so a task that wants a different one edits its copy. `train.py`
 is the loop, written out.
 

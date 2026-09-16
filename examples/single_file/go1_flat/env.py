@@ -13,19 +13,30 @@ same disturbances and startup randomisation, the same termination. Where
 this file differs it says so in a comment. A number here means what it means
 there, so an agent that learned the mjlab task's levers can drive this one.
 
-Three things make it steerable from another shell with ``rlmcp``:
+It is built from four blocks (:mod:`rlmcp.blocks`), which is what makes it
+steerable from another shell with ``rlmcp`` without listing anything twice:
 
-* the config is declared with :mod:`rlmcp.declare` -- ``Static[...]`` marks a
-  value read once at construction, ``term(...)`` declares a reward term -- so
-  rlmcp knows what it may change live and what would need a restart;
-* the environment is a :class:`~rlmcp.adapters.single_file.SingleFileEnv`,
-  which names the buffers rlmcp reads and owns the reward loop, so a term an
-  agent adds at runtime is scored without this file knowing about it;
-* the simulator is behind :mod:`rlmcp.backends`, one robot-level contract
-  with three simulators behind it, so ``cfg.backend`` swaps MuJoCo Warp,
-  mjbatch or Genesis without touching anything else here.
+* the **config** is declared with :mod:`rlmcp.declare` -- ``Static[...]``
+  marks a value read once at construction, ``term(...)`` declares a reward
+  term -- so rlmcp knows what it may change live and what needs a restart;
+* the **variables** ``step()`` writes are one :class:`State`, a
+  :class:`~rlmcp.blocks.Vars`: every tensor with a name, a shape and labels,
+  so ``rlmcp trace`` records all of them and the diagnostics find the
+  conventional ones;
+* the **observations** are two :class:`~rlmcp.blocks.Obs` groups, each term
+  a variable (or a function of the state) followed by its pipe -- the noise
+  the actor sees is a stage in that pipe, served as
+  ``actor_obs.joint_pos.noise.half_width``, and a ``Delay(k)`` would go in the
+  same place;
+* each **reward term** is a method with the name the table gives it and
+  the table's params as its arguments; the base class sums
+  ``weight * method(**params)``, and a term an agent adds at runtime is
+  scored by the same loop.
 
-Run it with ``train.py`` next to this file.
+The simulator is behind :mod:`rlmcp.backends`, one robot-level contract with
+three simulators behind it, so ``cfg.backend`` swaps MuJoCo Warp, mjbatch or
+Genesis without touching anything else here. Run it with ``train.py`` next
+to this file.
 """
 
 from __future__ import annotations
@@ -46,7 +57,7 @@ from rlmcp.backends.frames import (
   quat_rotate_inverse,
   wrap_to_pi,
 )
-from rlmcp.declare import Static, Term, term
+from rlmcp.blocks import Noise, Obs, Offset, Static, Term, Vars, term, var
 
 
 def find_go1_xml() -> str:
@@ -130,8 +141,9 @@ class Action:
 @dataclass
 class Rewards:
   """mjlab's flat Go1 reward table: one term per line, weight then params.
-  Widths are ``std`` in exp(-x/std^2); every term is multiplied by the
-  control timestep, as mjlab's reward manager does."""
+  Each name is a method of :class:`Go1FlatEnv` below, and the params are its
+  arguments. Widths are ``std`` in exp(-x/std^2); every term is multiplied
+  by the control timestep, as mjlab's reward manager does."""
 
   track_linear_velocity: Term = term(2.0, std=0.5)
   track_angular_velocity: Term = term(2.0, std=0.7071)
@@ -169,20 +181,6 @@ class Commands:
   """Fraction of envs commanded straight ahead only, at least ``forward_min_speed``."""
   forward_min_speed: float = 0.3
   heading_stiffness: float = 0.5
-
-
-@dataclass
-class Noise:
-  """Half-width of the uniform noise added to each actor observation, in its
-  own units. ``level`` multiplies all of them; 0 is clean. The critic never
-  sees noise."""
-
-  level: float = 1.0
-  base_lin_vel: float = 0.5
-  base_ang_vel: float = 0.2
-  projected_gravity: float = 0.05
-  joint_pos: float = 0.01
-  joint_vel: float = 1.5
 
 
 @dataclass
@@ -226,9 +224,53 @@ class EnvConfig:
   action: Action = field(default_factory=Action)
   reward: Rewards = field(default_factory=Rewards)
   command: Commands = field(default_factory=Commands)
-  noise: Noise = field(default_factory=Noise)
   termination: Termination = field(default_factory=Termination)
   randomization: Randomization = field(default_factory=Randomization)
+
+
+# ---------------------------------------------------------------------------
+# Variables. Everything step() writes, one tensor per name, one row per env.
+# ---------------------------------------------------------------------------
+
+
+class State(Vars):
+  """The names the rest of the file reads. rlmcp traces every one of them;
+  the conventional ones (``joint_pos``, ``base_lin_vel``, ``commands``,
+  ``foot_contact``, ``reward``, ...) also feed its diagnostics."""
+
+  # Base and joints, from the simulator each step.
+  base_pos: Tensor = var(3)
+  base_quat: Tensor = var(4)
+  base_lin_vel: Tensor = var(3, doc="base frame")
+  base_ang_vel: Tensor = var(3, doc="base frame")
+  projected_gravity: Tensor = var(3)
+  joint_pos: Tensor = var("joint")
+  joint_vel: Tensor = var("joint")
+  joint_torque: Tensor = var("joint")
+  actions: Tensor = var("joint")
+  last_actions: Tensor = var("joint")
+  # Feet: the flat-ground stand-ins for mjlab's contact and height sensors.
+  foot_pos: Tensor = var("foot", 3)
+  foot_vel: Tensor = var("foot", 3, doc="finite difference of foot_pos")
+  foot_force: Tensor = var("foot")
+  foot_contact: Tensor = var("foot", dtype=torch.bool)
+  last_foot_contact: Tensor = var("foot", dtype=torch.bool)
+  first_contact: Tensor = var("foot", dtype=torch.bool)
+  foot_air_time: Tensor = var("foot")
+  foot_peak_height: Tensor = var("foot", doc="highest point of the current swing")
+  # Commands: what the policy sees, plus the generator's state.
+  commands: Tensor = var(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
+  command_speed: Tensor = var(doc="|planar command| + |yaw command|")
+  command_timer: Tensor = var()
+  heading_target: Tensor = var()
+  is_heading_env: Tensor = var(dtype=torch.bool)
+  is_standing_env: Tensor = var(dtype=torch.bool)
+  is_forward_env: Tensor = var(dtype=torch.bool)
+  # Disturbances and bookkeeping.
+  push_timer: Tensor = var()
+  reward: Tensor = var()
+  episode_length: Tensor = var(dtype=torch.long)
+  episode_reward: Tensor = var()
 
 
 # ---------------------------------------------------------------------------
@@ -271,8 +313,6 @@ class Go1FlatEnv(SingleFileEnv):
     self.joint_names = self.sim.joint_names
     self.num_actions = self.num_dof = len(self.joint_names)
     self.num_feet = len(cfg.robot.feet)
-    self.num_obs = 3 + 3 + 3 + 2 * self.num_dof + self.num_actions + 3
-    self.num_critic_obs = self.num_obs + 3 * self.num_feet
 
     dev = self.device
     self.default_dof_pos = self.sim.default_dof_pos.to(dev)
@@ -284,41 +324,43 @@ class Go1FlatEnv(SingleFileEnv):
     self.is_calf = torch.tensor(
         [n.endswith("_calf_joint") for n in self.joint_names], device=dev)
 
-    n, j, f = self.num_envs, self.num_dof, self.num_feet
-    zeros = lambda *shape, **kw: torch.zeros(*shape, device=dev, **kw)  # noqa: E731
-    # Base and joints, in the conventional names the rlmcp trace reads.
-    self.base_pos, self.base_quat = zeros(n, 3), zeros(n, 4)
-    self.base_lin_vel, self.base_ang_vel = zeros(n, 3), zeros(n, 3)
-    self.projected_gravity = zeros(n, 3)
-    self.dof_pos, self.dof_vel, self.torques = zeros(n, j), zeros(n, j), zeros(n, j)
-    self.actions, self.last_actions = zeros(n, j), zeros(n, j)
-    self.rew_buf = zeros(n)
-    self.episode_length_buf = zeros(n, dtype=torch.long)
-    self.episode_reward = zeros(n)
-    # Feet.
-    self.foot_pos, self.foot_vel = zeros(n, f, 3), zeros(n, f, 3)
-    self.foot_force = zeros(n, f)
-    self.foot_contact = zeros(n, f, dtype=torch.bool)
-    self.last_foot_contact = zeros(n, f, dtype=torch.bool)
-    self.first_contact = zeros(n, f, dtype=torch.bool)
-    self.foot_air_time = zeros(n, f)
-    self.foot_peak_height = zeros(n, f)
-    # Commands: the buffer the policy sees plus the generator's state.
-    self.commands = zeros(n, 3)
-    self.command_timer = zeros(n)
-    self.heading_target = zeros(n)
-    self.is_heading_env = zeros(n, dtype=torch.bool)
-    self.is_standing_env = zeros(n, dtype=torch.bool)
-    self.is_forward_env = zeros(n, dtype=torch.bool)
-    # Disturbances.
-    self.push_timer = zeros(n)
-    # Startup randomisation: once, and it stays.
+    # The variables, and the startup randomisation: drawn once, and it stays.
+    n, j = self.num_envs, self.num_dof
+    self.state = State(n, dev, joint=self.joint_names, foot=cfg.robot.feet)
     startup = cfg.randomization.startup
-    all_ids = torch.arange(n, device=dev)
-    self.sim.set_friction(all_ids, _uniform(n, startup.foot_friction, dev))
+    self.sim.set_friction(torch.arange(n, device=dev), _uniform(n, startup.foot_friction, dev))
     self.encoder_bias = torch.empty(n, j, device=dev).uniform_(*startup.encoder_bias)
-    self.obs_buf = zeros(n, self.num_obs)
-    self.critic_obs_buf = zeros(n, self.num_critic_obs)
+
+    # The observations. The actor's are noisy (mjlab's uniform half-widths,
+    # in each signal's own units); the critic's are clean and privileged.
+    self.actor_obs = Obs(
+        base_lin_vel=("base_lin_vel", Noise(0.5)),
+        base_ang_vel=("base_ang_vel", Noise(0.2)),
+        projected_gravity=("projected_gravity", Noise(0.05)),
+        joint_pos=(self.joint_pos_rel, Offset(self.encoder_bias), Noise(0.01)),
+        joint_vel=("joint_vel", Noise(1.5)),
+        actions="actions",
+        commands="commands",
+    )
+    self.critic_obs = Obs(
+        base_lin_vel="base_lin_vel",
+        base_ang_vel="base_ang_vel",
+        projected_gravity="projected_gravity",
+        joint_pos=self.joint_pos_rel,
+        joint_vel="joint_vel",
+        actions="actions",
+        commands="commands",
+        foot_air_time="foot_air_time",
+        foot_contact="foot_contact",
+        foot_force=lambda s: torch.log1p(s.foot_force),
+    )
+    self.num_obs = self.actor_obs(self.state).shape[-1]
+    self.num_critic_obs = self.critic_obs(self.state).shape[-1]
+    self.critic_obs_buf = torch.zeros(n, self.num_critic_obs, device=dev)
+
+  def joint_pos_rel(self, s: State) -> Tensor:
+    """Joint positions relative to the default pose."""
+    return s.joint_pos - self.default_dof_pos
 
   @property
   def action_scale(self) -> Tensor:
@@ -331,7 +373,7 @@ class Go1FlatEnv(SingleFileEnv):
 
   def reset(self, env_ids: Tensor | None = None) -> Tensor:
     """Start fresh episodes for ``env_ids`` (all of them when None)."""
-    cfg = self.cfg
+    cfg, s = self.cfg, self.state
     dev = self.device
     if env_ids is None:
       env_ids = torch.arange(self.num_envs, device=dev)
@@ -351,18 +393,12 @@ class Go1FlatEnv(SingleFileEnv):
     self.sim.reset(env_ids, self.default_dof_pos.expand(n, -1),
                    root_pos=root_pos, root_quat=root_quat)
 
-    self.actions[env_ids] = 0.0
-    self.last_actions[env_ids] = 0.0
-    self.foot_air_time[env_ids] = 0.0
-    self.foot_peak_height[env_ids] = 0.0
-    self.foot_contact[env_ids] = False
-    self.last_foot_contact[env_ids] = False
-    self.first_contact[env_ids] = False
-    self.episode_length_buf[env_ids] = 0
-    self.episode_reward[env_ids] = 0.0
-    self.push_timer[env_ids] = _uniform(n, r.push_interval_s, dev)
+    # Every variable starts at zero, every pipe forgets the old episode.
+    s.reset(env_ids)
+    self.reset_blocks(env_ids)
+    s.push_timer[env_ids] = _uniform(n, r.push_interval_s, dev)
     self._read_state()
-    self.foot_vel[env_ids] = 0.0
+    s.foot_vel[env_ids] = 0.0
     self._resample_commands(env_ids)
     return self._compute_observations()
 
@@ -371,54 +407,50 @@ class Go1FlatEnv(SingleFileEnv):
   def _resample_commands(self, env_ids: Tensor) -> None:
     """mjlab's UniformVelocityCommand: a twist per env, a target heading for
     some, zero for some, straight ahead for some."""
-    c = self.cfg.command
+    c, s = self.cfg.command, self.state
     n, dev = len(env_ids), self.device
-    self.commands[env_ids, 0] = _uniform(n, c.lin_vel_x, dev)
-    self.commands[env_ids, 1] = _uniform(n, c.lin_vel_y, dev)
-    self.commands[env_ids, 2] = _uniform(n, c.ang_vel_z, dev)
-    self.heading_target[env_ids] = _uniform(n, c.heading, dev)
-    self.is_heading_env[env_ids] = _uniform(n, (0.0, 1.0), dev) <= c.rel_heading_envs
-    self.is_standing_env[env_ids] = _uniform(n, (0.0, 1.0), dev) <= c.rel_standing_envs
-    self.is_forward_env[env_ids] = _uniform(n, (0.0, 1.0), dev) <= c.rel_forward_envs
-    fwd = env_ids[self.is_forward_env[env_ids]]
-    self.commands[fwd, 0] = self.commands[fwd, 0].abs().clamp(min=c.forward_min_speed)
-    self.commands[fwd, 1:] = 0.0
-    self.command_timer[env_ids] = _uniform(n, c.resampling_time_s, dev)
+    s.commands[env_ids, 0] = _uniform(n, c.lin_vel_x, dev)
+    s.commands[env_ids, 1] = _uniform(n, c.lin_vel_y, dev)
+    s.commands[env_ids, 2] = _uniform(n, c.ang_vel_z, dev)
+    s.heading_target[env_ids] = _uniform(n, c.heading, dev)
+    s.is_heading_env[env_ids] = _uniform(n, (0.0, 1.0), dev) <= c.rel_heading_envs
+    s.is_standing_env[env_ids] = _uniform(n, (0.0, 1.0), dev) <= c.rel_standing_envs
+    s.is_forward_env[env_ids] = _uniform(n, (0.0, 1.0), dev) <= c.rel_forward_envs
+    fwd = env_ids[s.is_forward_env[env_ids]]
+    s.commands[fwd, 0] = s.commands[fwd, 0].abs().clamp(min=c.forward_min_speed)
+    s.commands[fwd, 1:] = 0.0
+    s.command_timer[env_ids] = _uniform(n, c.resampling_time_s, dev)
     self._update_commands()
 
   def _update_commands(self) -> None:
     """Every step: heading envs steer toward their target yaw; standing envs
     are held at zero."""
-    c = self.cfg.command
-    q = self.base_quat
+    c, s = self.cfg.command, self.state
+    q = s.base_quat
     heading = torch.atan2(
         2.0 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2]),
         1.0 - 2.0 * (q[:, 2] ** 2 + q[:, 3] ** 2))
-    error = wrap_to_pi(self.heading_target - heading)
+    error = wrap_to_pi(s.heading_target - heading)
     steer = torch.clip(c.heading_stiffness * error, c.ang_vel_z[0], c.ang_vel_z[1])
-    self.commands[:, 2] = torch.where(self.is_heading_env, steer, self.commands[:, 2])
-    self.commands[self.is_standing_env] = 0.0
-
-  @property
-  def command_speed(self) -> Tensor:
-    """|planar command| + |yaw command|: what "moving" means to the terms."""
-    return torch.norm(self.commands[:, :2], dim=1) + self.commands[:, 2].abs()
+    s.commands[:, 2] = torch.where(s.is_heading_env, steer, s.commands[:, 2])
+    s.commands[s.is_standing_env] = 0.0
+    s.command_speed[:] = torch.norm(s.commands[:, :2], dim=1) + s.commands[:, 2].abs()
 
   # -- Step -----------------------------------------------------------------
 
   def step(self, actions: Tensor) -> tuple[Tensor, Tensor, Tensor, dict]:
     """One control step: act, simulate, observe, score, terminate, reset."""
-    cfg = self.cfg
+    cfg, s = self.cfg, self.state
     dev = self.device
 
     # 1. Actions become joint position targets around the default pose.
-    self.last_actions[:] = self.actions
-    self.actions[:] = actions.to(dev)
-    self.sim.set_dof_targets(self.default_dof_pos + self.actions * self.action_scale)
+    s.last_actions[:] = s.actions
+    s.actions[:] = actions.to(dev)
+    self.sim.set_dof_targets(self.default_dof_pos + s.actions * self.action_scale)
 
     # 2. Disturbances are due for some envs: a kick to the base velocity.
-    self.push_timer -= self.control_dt
-    push_ids = (self.push_timer <= 0.0).nonzero(as_tuple=False).squeeze(-1)
+    s.push_timer -= self.control_dt
+    push_ids = (s.push_timer <= 0.0).nonzero(as_tuple=False).squeeze(-1)
     if len(push_ids) > 0:
       self._push(push_ids)
 
@@ -427,8 +459,8 @@ class Go1FlatEnv(SingleFileEnv):
     self._read_state()
 
     # 4. The command generator ticks.
-    self.command_timer -= self.control_dt
-    due = (self.command_timer <= 0.0).nonzero(as_tuple=False).squeeze(-1)
+    s.command_timer -= self.control_dt
+    due = (s.command_timer <= 0.0).nonzero(as_tuple=False).squeeze(-1)
     if len(due) > 0:
       self._resample_commands(due)
     self._update_commands()
@@ -436,25 +468,25 @@ class Go1FlatEnv(SingleFileEnv):
     # 5. Observe, score, terminate.
     obs = self._compute_observations()
     # Every term is multiplied by the control timestep, as mjlab's manager does.
-    self.rew_buf, reward_terms = self.compute_reward(scale=self.control_dt)
-    time_out = self.episode_length_buf >= self.max_episode_steps - 1
-    tilt = torch.acos(torch.clamp(-self.projected_gravity[:, 2], -1.0, 1.0))
+    s.reward[:], reward_terms = self.compute_reward(scale=self.control_dt)
+    time_out = s.episode_length >= self.max_episode_steps - 1
+    tilt = torch.acos(torch.clamp(-s.projected_gravity[:, 2], -1.0, 1.0))
     fell = tilt > math.radians(cfg.termination.fell_over_deg)
     dones = time_out | fell
 
     # 6. Bookkeeping, and the resets for whoever finished.
-    self.episode_length_buf += 1
-    self.episode_reward += self.rew_buf
+    s.episode_length += 1
+    s.episode_reward += s.reward
     done_ids = dones.nonzero(as_tuple=False).squeeze(-1)
     info = self.step_info(
         reward_terms,
-        episode_rewards=self.episode_reward[done_ids].clone(),
-        episode_lengths=self.episode_length_buf[done_ids].float().clone(),
+        episode_rewards=s.episode_reward[done_ids].clone(),
+        episode_lengths=s.episode_length[done_ids].float().clone(),
         time_outs=time_out,
     )
     if len(done_ids) > 0:
       obs = self.reset(done_ids)
-    return obs, self.rew_buf, dones, info
+    return obs, s.reward, dones, info
 
   def _push(self, env_ids: Tensor) -> None:
     r = self.cfg.randomization
@@ -464,135 +496,128 @@ class Go1FlatEnv(SingleFileEnv):
     ang = torch.stack([_uniform(n, r.push_ang_vel_xy, dev), _uniform(n, r.push_ang_vel_xy, dev),
                        _uniform(n, r.push_ang_vel_z, dev)], dim=1)
     self.sim.push(env_ids, lin, ang)
-    self.push_timer[env_ids] = _uniform(n, r.push_interval_s, dev)
+    self.state.push_timer[env_ids] = _uniform(n, r.push_interval_s, dev)
 
   # -- State ----------------------------------------------------------------
 
   def _read_state(self) -> None:
-    """Pull the backend's state into the buffers everything else reads."""
-    sim, dev = self.sim, self.device
-    self.base_pos[:] = sim.root_pos.to(dev)
-    self.base_quat[:] = sim.root_quat.to(dev)
-    self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, sim.root_lin_vel.to(dev))
-    self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, sim.root_ang_vel.to(dev))
-    self.projected_gravity[:] = projected_gravity(self.base_quat)
-    self.dof_pos[:] = sim.dof_pos.to(dev)
-    self.dof_vel[:] = sim.dof_vel.to(dev)
-    self.torques[:] = sim.dof_torque.to(dev)
-    # Feet: force, contact edges, air time, height and a finite-difference
-    # velocity -- the flat-ground stand-ins for mjlab's contact and height
-    # sensors.
+    """Pull the backend's state into the variables everything else reads."""
+    sim, s, dev = self.sim, self.state, self.device
+    s.base_pos[:] = sim.root_pos.to(dev)
+    s.base_quat[:] = sim.root_quat.to(dev)
+    s.base_lin_vel[:] = quat_rotate_inverse(s.base_quat, sim.root_lin_vel.to(dev))
+    s.base_ang_vel[:] = quat_rotate_inverse(s.base_quat, sim.root_ang_vel.to(dev))
+    s.projected_gravity[:] = projected_gravity(s.base_quat)
+    s.joint_pos[:] = sim.dof_pos.to(dev)
+    s.joint_vel[:] = sim.dof_vel.to(dev)
+    s.joint_torque[:] = sim.dof_torque.to(dev)
+    # Feet: force, contact edges, air time, a finite-difference velocity, and
+    # the peak height of the swing -- kept until the step after touchdown
+    # so the swing-height term can read it, then cleared.
     pos = sim.contact_site_pos.to(dev)
-    self.foot_vel[:] = (pos - self.foot_pos) / self.control_dt
-    self.foot_pos[:] = pos
-    self.foot_force[:] = sim.contact_forces.to(dev)
-    self.last_foot_contact[:] = self.foot_contact
-    self.foot_contact[:] = self.foot_force > 1.0
-    self.first_contact[:] = self.foot_contact & ~self.last_foot_contact
-    self.foot_air_time += self.control_dt
-    self.foot_air_time[self.foot_contact] = 0.0
-    self.foot_peak_height[:] = torch.where(
-        ~self.foot_contact, torch.maximum(self.foot_peak_height, pos[:, :, 2]),
-        self.foot_peak_height)
+    s.foot_vel[:] = (pos - s.foot_pos) / self.control_dt
+    s.foot_pos[:] = pos
+    s.foot_force[:] = sim.contact_forces.to(dev)
+    s.last_foot_contact[:] = s.foot_contact
+    s.foot_contact[:] = s.foot_force > 1.0
+    s.first_contact[:] = s.foot_contact & ~s.last_foot_contact
+    s.foot_air_time += self.control_dt
+    s.foot_air_time[s.foot_contact] = 0.0
+    s.foot_peak_height[s.last_foot_contact] = 0.0
+    s.foot_peak_height[:] = torch.where(
+        ~s.foot_contact, torch.maximum(s.foot_peak_height, pos[:, :, 2]), s.foot_peak_height)
 
   # -- Observations ---------------------------------------------------------
 
   def _compute_observations(self) -> Tensor:
-    """The actor's 48 numbers, noisy; the critic's 60, clean and privileged."""
-    noise = self.cfg.noise
+    """The actor's 48 numbers through their pipes; the critic's 60, clean."""
+    self.critic_obs_buf = self.critic_obs(self.state)
+    return self.actor_obs(self.state)
 
-    def noisy(value: Tensor, half_width: float) -> Tensor:
-      if noise.level <= 0.0 or half_width <= 0.0:
-        return value
-      return value + (torch.rand_like(value) * 2.0 - 1.0) * (half_width * noise.level)
+  # -- Rewards. One method per term in the table; params are the arguments. --
 
-    joint_pos_rel = self.dof_pos - self.default_dof_pos
-    self.obs_buf = torch.cat([
-        noisy(self.base_lin_vel, noise.base_lin_vel),
-        noisy(self.base_ang_vel, noise.base_ang_vel),
-        noisy(self.projected_gravity, noise.projected_gravity),
-        noisy(joint_pos_rel + self.encoder_bias, noise.joint_pos),
-        noisy(self.dof_vel, noise.joint_vel),
-        self.actions,
-        self.commands,
-    ], dim=-1)
-    self.critic_obs_buf = torch.cat([
-        self.base_lin_vel,
-        self.base_ang_vel,
-        self.projected_gravity,
-        joint_pos_rel,
-        self.dof_vel,
-        self.actions,
-        self.commands,
-        self.foot_air_time,
-        self.foot_contact.float(),
-        torch.log1p(self.foot_force),
-    ], dim=-1)
-    return self.obs_buf
+  def _moving(self, threshold: float) -> Tensor:
+    """1 where a command above ``threshold`` is active, else 0."""
+    return (self.state.command_speed > threshold).float()
 
-  # -- Rewards --------------------------------------------------------------
+  def _joint_stds(self, hip_thigh: float, calf: float) -> Tensor:
+    return torch.where(self.is_calf, torch.full_like(self.default_dof_pos, calf),
+                       torch.full_like(self.default_dof_pos, hip_thigh))
 
-  def compute_reward_terms(self) -> dict[str, Tensor]:
-    """Every term this file computes, unweighted; the table at the top weights
-    them in :meth:`SingleFileEnv.compute_reward`, which also scores any term
-    rlmcp appended at runtime."""
-    r = self.cfg.reward
-    cmd, speed = self.commands, self.command_speed
-    lin_err = torch.sum(torch.square(cmd[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-    lin_err = lin_err + torch.square(self.base_lin_vel[:, 2])
-    ang_err = torch.square(cmd[:, 2] - self.base_ang_vel[:, 2])
-    ang_err = ang_err + torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
-    tilt_sq = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+  def track_linear_velocity(self, std: float) -> Tensor:
+    s = self.state
+    err = torch.sum(torch.square(s.commands[:, :2] - s.base_lin_vel[:, :2]), dim=1)
+    err = err + torch.square(s.base_lin_vel[:, 2])
+    return torch.exp(-err / std ** 2)
 
-    # Posture: how far from the default pose, with a tolerance that widens
-    # with the commanded speed.
-    p = r.pose
+  def track_angular_velocity(self, std: float) -> Tensor:
+    s = self.state
+    err = torch.square(s.commands[:, 2] - s.base_ang_vel[:, 2])
+    err = err + torch.sum(torch.square(s.base_ang_vel[:, :2]), dim=1)
+    return torch.exp(-err / std ** 2)
 
-    def stds(hip_thigh: float, calf: float) -> Tensor:
-      return torch.where(self.is_calf, torch.full_like(self.default_dof_pos, calf),
-                         torch.full_like(self.default_dof_pos, hip_thigh))
+  def upright(self, std: float) -> Tensor:
+    tilt_sq = torch.sum(torch.square(self.state.projected_gravity[:, :2]), dim=1)
+    return torch.exp(-tilt_sq / std ** 2)
 
-    standing = (speed < p.walking_threshold).unsqueeze(1)
-    running = (speed >= p.running_threshold).unsqueeze(1)
-    std = torch.where(standing, stds(p.std_standing_hip_thigh, p.std_standing_calf),
-                      torch.where(running, stds(p.std_running_hip_thigh, p.std_running_calf),
-                                  stds(p.std_walking_hip_thigh, p.std_walking_calf)))
-    pose_err = torch.square(self.dof_pos - self.default_dof_pos) / std ** 2
+  def pose(self, std_standing_hip_thigh: float, std_standing_calf: float,
+           std_walking_hip_thigh: float, std_walking_calf: float,
+           std_running_hip_thigh: float, std_running_calf: float,
+           walking_threshold: float, running_threshold: float) -> Tensor:
+    """How far from the default pose, with a tolerance that widens with the
+    commanded speed."""
+    s = self.state
+    standing = (s.command_speed < walking_threshold).unsqueeze(1)
+    running = (s.command_speed >= running_threshold).unsqueeze(1)
+    std = torch.where(
+        standing, self._joint_stds(std_standing_hip_thigh, std_standing_calf),
+        torch.where(running, self._joint_stds(std_running_hip_thigh, std_running_calf),
+                    self._joint_stds(std_walking_hip_thigh, std_walking_calf)))
+    err = torch.square(s.joint_pos - self.default_dof_pos) / std ** 2
+    return torch.exp(-torch.mean(err, dim=1))
 
+  def dof_pos_limits(self) -> Tensor:
+    s = self.state
     out_of_limits = (
-        -(self.dof_pos - self.soft_limits[:, 0]).clip(max=0.0)
-        + (self.dof_pos - self.soft_limits[:, 1]).clip(min=0.0))
+        -(s.joint_pos - self.soft_limits[:, 0]).clip(max=0.0)
+        + (s.joint_pos - self.soft_limits[:, 1]).clip(min=0.0))
+    return torch.sum(out_of_limits, dim=1)
 
-    # Feet, while a command is active.
-    def moving(threshold: float) -> Tensor:
-      return (speed > threshold).float()
+  def action_rate_l2(self) -> Tensor:
+    s = self.state
+    return torch.sum(torch.square(s.actions - s.last_actions), dim=1)
 
-    foot_h = self.foot_pos[:, :, 2]
-    foot_v = torch.norm(self.foot_vel[:, :, :2], dim=-1)
-    in_range = (self.foot_air_time > r.air_time.threshold_min) & \
-        (self.foot_air_time < r.air_time.threshold_max)
-    swing_err = torch.square(self.foot_peak_height / r.foot_swing_height.target_height - 1.0)
-    swing_cost = torch.sum(swing_err * self.first_contact.float(), dim=1)
-    self.foot_peak_height[self.first_contact] = 0.0
+  def air_time(self, threshold_min: float, threshold_max: float,
+               command_threshold: float) -> Tensor:
+    s = self.state
+    in_range = (s.foot_air_time > threshold_min) & (s.foot_air_time < threshold_max)
+    return torch.sum(in_range.float(), dim=1) * self._moving(command_threshold)
 
-    return {
-        "track_linear_velocity": torch.exp(-lin_err / r.track_linear_velocity.std ** 2),
-        "track_angular_velocity": torch.exp(-ang_err / r.track_angular_velocity.std ** 2),
-        "upright": torch.exp(-tilt_sq / r.upright.std ** 2),
-        "pose": torch.exp(-torch.mean(pose_err, dim=1)),
-        "dof_pos_limits": torch.sum(out_of_limits, dim=1),
-        "action_rate_l2": torch.sum(torch.square(self.actions - self.last_actions), dim=1),
-        "air_time": torch.sum(in_range.float(), dim=1) * moving(r.air_time.command_threshold),
-        "foot_clearance": torch.sum(
-            torch.abs(foot_h - r.foot_clearance.target_height) * foot_v, dim=1)
-        * moving(r.foot_clearance.command_threshold),
-        "foot_swing_height": swing_cost * moving(r.foot_swing_height.command_threshold),
-        "foot_slip": torch.sum(torch.square(foot_v) * self.foot_contact.float(), dim=1)
-        * moving(r.foot_slip.command_threshold),
-        "soft_landing": torch.sum(self.foot_force * self.first_contact.float(), dim=1)
-        * moving(r.soft_landing.command_threshold),
-        "body_ang_vel": torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1),
-    }
+  def foot_clearance(self, target_height: float, command_threshold: float) -> Tensor:
+    s = self.state
+    foot_h = s.foot_pos[:, :, 2]
+    foot_v = torch.norm(s.foot_vel[:, :, :2], dim=-1)
+    cost = torch.sum(torch.abs(foot_h - target_height) * foot_v, dim=1)
+    return cost * self._moving(command_threshold)
+
+  def foot_swing_height(self, target_height: float, command_threshold: float) -> Tensor:
+    s = self.state
+    err = torch.square(s.foot_peak_height / target_height - 1.0)
+    return torch.sum(err * s.first_contact.float(), dim=1) * self._moving(command_threshold)
+
+  def foot_slip(self, command_threshold: float) -> Tensor:
+    s = self.state
+    foot_v = torch.norm(s.foot_vel[:, :, :2], dim=-1)
+    cost = torch.sum(torch.square(foot_v) * s.foot_contact.float(), dim=1)
+    return cost * self._moving(command_threshold)
+
+  def soft_landing(self, command_threshold: float) -> Tensor:
+    s = self.state
+    cost = torch.sum(s.foot_force * s.first_contact.float(), dim=1)
+    return cost * self._moving(command_threshold)
+
+  def body_ang_vel(self) -> Tensor:
+    return torch.sum(torch.square(self.state.base_ang_vel[:, :2]), dim=1)
 
   # -- Sizes ----------------------------------------------------------------
 

@@ -654,7 +654,7 @@ def create_mcp_server(
   ) -> dict[str, Any]:
     """List tunable parameters with live values, bounds and descriptions.
 
-    Categories: reward, termination, domain_randomization, curriculum, action, rl.
+    Categories: reward, termination, domain_randomization, curriculum, action, observation, rl.
     For a dead run the last params.json snapshot answers instead.
     """
     return _list_parameters_impl(handle, category, contains)

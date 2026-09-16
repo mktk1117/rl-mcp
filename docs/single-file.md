@@ -32,35 +32,103 @@ robot and the terrain and observation machinery it brings is what you need.
 Both routes get the same rlmcp surface once wrapped; nothing in the tools
 knows which family is underneath.
 
-## The contract: `SingleFileEnv`
+## The blocks: `rlmcp.blocks`
 
-Inherit `rlmcp.adapters.single_file.SingleFileEnv`. It holds no physics and
-no task; it names what rlmcp reads and owns the one loop every file would
-otherwise copy.
+An `env.py` is built from four kinds of thing, and rlmcp reaches all four
+without the file listing them by hand:
+
+| block | what it is | how rlmcp uses it |
+| --- | --- | --- |
+| **config** | a dataclass tree on `env.cfg`, declared with `Static[...]` and `term(...)` | every numeric leaf is a parameter: listed, set live, refused with the reason when static |
+| **variables** | a `Vars` subclass on `env.state`: every tensor `step()` writes, with a name, a shape and labels | every one is sampled into a trace; the conventional names feed the diagnostics |
+| **observations** | `Obs` groups: each term a source and a pipe of stages (`Noise`, `Delay`, `Scale`, `Clip`, `Offset`) | a stage's fields are parameters: `actor_obs.joint_vel.noise.half_width`, `actor_obs.joint_vel.delay.steps` |
+| **reward terms** | a `term(weight, **params)` per row of `cfg.reward`, each naming a method of the environment | `weight` and `params.<p>` are parameters; a term added at runtime is scored by the same loop |
 
 ```python
-from rlmcp.adapters.single_file import SingleFileEnv
+from rlmcp.blocks import Delay, Noise, Obs, Offset, Static, Term, Vars, term, var
+
+class State(Vars):                                   # the variables
+  base_lin_vel: Tensor = var(3)
+  joint_pos: Tensor = var("joint")
+  foot_contact: Tensor = var("foot", dtype=torch.bool)
+  commands: Tensor = var(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
+  reward: Tensor = var()
+  episode_length: Tensor = var(dtype=torch.long)
+
+@dataclass
+class Rewards:                                       # the reward table
+  track_linear_velocity: Term = term(2.0, std=0.5)
+  action_rate_l2: Term = term(-0.1)
 
 class MyEnv(SingleFileEnv):
   def __init__(self, cfg):
-    self.cfg = cfg                       # the declared dataclass
-    self.num_envs = cfg.num_envs
-    self.device = torch.device(cfg.device)
-    self.control_dt = cfg.dt * cfg.decimation
-    self.max_episode_steps = ...
-    self.sim = ...                       # optional; render(env_id) gives frames
-    self.dof_pos = self.dof_vel = self.actions = ...   # (num_envs, n) tensors
-
-  def reset(self, env_ids=None): ...     # None restarts everything; returns obs
-  def step(self, actions):               # -> (obs, reward, done, info)
+    self.cfg = cfg
+    self.state = State(cfg.num_envs, cfg.device, joint=joint_names, foot=("FR", "FL"))
+    self.actor_obs = Obs(                            # the observations
+        base_lin_vel=("base_lin_vel", Noise(0.5)),
+        joint_pos=(lambda s: s.joint_pos - default_pos, Offset(encoder_bias), Noise(0.01)),
+        joint_vel=("joint_vel", Delay(2), Noise(1.5)),
+        commands="commands",
+    )
     ...
-    reward, terms = self.compute_reward(scale=self.control_dt)
-    info = self.step_info(terms, episode_rewards, episode_lengths, time_outs)
-    return obs, reward, done, info
 
-  def compute_reward_terms(self):        # {name: (num_envs,) tensor}, unweighted
-    return {"upright": ..., "action_rate": ...}
+  def reset(self, env_ids=None):
+    self.state.reset(env_ids)                        # every variable to zero
+    self.reset_blocks(env_ids)                       # every delay forgets the old episode
+    ...
+    return self.actor_obs(self.state)
+
+  def step(self, actions):
+    s = self.state
+    ...
+    s.reward[:], terms = self.compute_reward(scale=self.control_dt)
+    info = self.step_info(terms, episode_rewards, episode_lengths, time_outs)
+    return self.actor_obs(s), s.reward, done, info
+
+  def track_linear_velocity(self, std):              # one method per term
+    s = self.state
+    err = torch.sum(torch.square(s.commands[:, :2] - s.base_lin_vel[:, :2]), dim=1)
+    return torch.exp(-err / std ** 2)
+
+  def action_rate_l2(self):
+    return torch.sum(torch.square(self.state.actions - self.state.last_actions), dim=1)
 ```
+
+**Variables.** `var()` is one number per environment, `var(3)` three,
+`var("joint")` as many as the `joint` dimension passed at construction, and
+`var(("x", "y"))` two with those labels. A dimension passed as a list of
+names labels that axis, so `rlmcp trace` plots `joint_pos` by joint name.
+`state.reset(env_ids)` zeroes every variable for those environments, which
+is the right start for bookkeeping and harmless for state the next read from
+the simulator overwrites. Every variable goes into the trace; the ones named
+`joint_pos`, `joint_vel`, `joint_torque`, `actions`, `base_pos`, `base_quat`,
+`base_lin_vel`, `base_ang_vel`, `projected_gravity`, `foot_contact`,
+`commands`, `reward` and `episode_length` (or their legged_gym spellings:
+`dof_pos`, `rew_buf`, ...) also feed the diagnostics and summary metrics. A
+fixed-base arm does not declare the base ones, and the channels they feed are
+dropped rather than faked.
+
+**Pipes.** A term of an `Obs` group is a source -- the name of a variable, or
+a function of the state -- followed by stages. Each stage is a small
+dataclass, so its fields are parameters served under the group's attribute
+name: `actor_obs.joint_pos.noise.half_width`. `Delay(steps, max_steps=)`
+keeps `max_steps` of history (read once) and `steps` is live within it; a
+write outside that range is refused with the range. Repeated stages in one
+pipe are numbered (`noise`, `noise_2`). A bare `Pipe(Clip(-1, 1), Scale(0.25))`
+assigned to an attribute is served the same way (`action_pipe.clip.high`).
+`Obs.slices()` says where each term sits in the concatenated vector.
+
+**Reward terms.** A `term(weight, **params)` in the table names a method of
+the environment; `compute_reward()` calls it as `method(**params)` and sums
+`weight * value` over the table. A term `rlmcp add-reward` appends carries
+its own `func(env, **params)` and goes through the same loop, so the file
+never has to know a term was added. A term with no method and no function is
+refused by name.
+
+## The contract: `SingleFileEnv`
+
+Inherit `rlmcp.adapters.single_file.SingleFileEnv`. It holds no physics and
+no task; it names what rlmcp reads and owns the reward loop.
 
 The checklist, which `wrap()` also checks at construction and refuses by name:
 
@@ -69,26 +137,20 @@ The checklist, which `wrap()` also checks at construction and refuses by name:
 | the declared config | `env.cfg`, a dataclass instance | yes |
 | batch size and device | `env.num_envs`, `env.device` | yes |
 | timing | `env.control_dt`, `env.max_episode_steps` | yes |
-| joint state and actions | `dof_pos`, `dof_vel`, `actions` (`last_actions` for the rate metric) | yes |
+| the variables | `env.state`, a `Vars` (or plain attributes under the legged_gym names) | yes |
+| joint state and actions | `joint_pos`, `joint_vel`, `actions` (`last_actions` for the rate metric) | yes |
 | base state, for a floating base | `base_pos`, `base_quat`, `base_lin_vel`, `base_ang_vel`, `projected_gravity` | no |
-| the command buffer, for a commanded task | `commands` | no |
+| the command buffer, for a commanded task | `commands`, labelled `lin_vel_*` / `ang_vel_*` when it is a plane velocity | no |
+| observation groups and pipes | any `Obs` or `Pipe` attribute | no |
 | physics | `env.sim`, with `render(env_id)` for frames | no |
-| the reward table | `cfg.reward`, a dataclass of `term(...)` fields | for reward tuning |
-
-The buffer names are legged_gym's, which is why the trace sampler and the
-summary metrics are shared with the Genesis family. A buffer that is absent
-drops its channel rather than being faked: a fixed-base hand has no
-`base_lin_vel`, and `rlmcp diagnose` simply skips the tracking section for
-it. The names are fixed; an environment that keeps its config, reward table
-or reset under other names says so with `wrap(spec=SingleFileSpec(...))`.
+| the reward table | `cfg.reward`, a dataclass of `term(...)` fields, one method per term | for reward tuning |
 
 `compute_reward()` is why the base class exists: it weights every term in the
-table, and a term the table has that `compute_reward_terms()` did not score is
-one `rlmcp add-reward` appended at runtime, carrying its own function. The
-file never has to know a term was added. `step_info()` builds the `info` dict
-the wrapper reads into per-iteration telemetry: per-term means, the totals of
-the episodes that ended this step, and which `done` envs timed out rather
-than failed.
+table, calling the method the term names, or the function a term appended at
+runtime carries. `step_info()` builds the `info` dict the wrapper reads into
+per-iteration telemetry: per-term means, the totals of the episodes that
+ended this step, and which `done` envs timed out rather than failed.
+`reset_blocks(env_ids)` clears every delay's history for those environments.
 
 A file that cannot inherit -- vendored, or a class hierarchy of its own --
 is still accepted when it has the same shape; the base class is the
@@ -169,14 +231,16 @@ The tree decides the vocabulary, so the same commands work as on mjlab:
 | --- | --- |
 | `reward.upright.weight`, `reward.upright.params.sigma` | a `term(...)` in the reward group |
 | `command.lin_vel_x` (a `[low, high]` range) | a field of the `command` group |
-| `termination.max_tilt_rad`, `noise.dof_pos` | a field of any other nested group |
+| `termination.max_tilt_rad` | a field of any other nested group |
 | `randomization.startup.foot_friction` | a field two levels down; `at_startup` if any level is `Static` |
 | `env.action_scale` | a scalar at the top level of the config |
+| `actor_obs.joint_pos.noise.half_width`, `actor_obs.joint_vel.delay.steps` | a stage field in an `Obs` group on the environment |
 | `rl.learning_rate`, `rl.entropy_coef` | the attached algorithm's `cfg` |
 
 Categories follow group names -- `reward`, `command` (curriculum),
 `termination`, `action`, `noise`/`randomization` (domain randomization),
-`sim`/`physics` -- and anything else is `other`, still fully tunable.
+`sim`/`physics` -- observation groups and pipes are `observation`, and
+anything else is `other`, still fully tunable.
 
 Two things to know when reaching for these from an agent:
 
@@ -188,10 +252,11 @@ Two things to know when reaching for these from an agent:
   `list_parameters(contains=...)`; `set_parameter` answers with the old and
   new value anyway.
 
-The `command` group has one convention: its `[low, high]` fields, in
-declaration order, are the columns of the `commands` buffer. That is how the
-trace sampler knows whether the buffer holds a plane velocity, which decides
-whether `rlmcp diagnose` may measure tracking against it.
+The `commands` variable has one convention: its labels (or, unlabelled, the
+`[low, high]` fields of the `command` group in declaration order) name its
+columns. That is how the trace sampler knows whether the buffer holds a
+plane velocity (`lin_vel_*`, `ang_vel_*`), which decides whether
+`rlmcp diagnose` may measure tracking against it.
 
 ## Declaring the algorithm
 
@@ -307,7 +372,9 @@ that knows the mjlab task's levers can drive this one: the same observations
 control, the same reward table with the same weights and widths, the same
 pushes and startup randomisation, the same termination, mjlab's solver
 settings, and rsl_rl's PPO with mjlab's Go1 runner config. What differs and
-why is in the file's own docstring and comments.
+why is in the file's own docstring and comments. Its shape is the four
+blocks above: a `State` of 30 variables, two `Obs` groups (the actor's with
+mjlab's noise widths as `Noise` stages), and one method per reward term.
 
 ### What has actually been run
 

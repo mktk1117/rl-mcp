@@ -67,7 +67,12 @@ class RlMcpEnvWrapper(_BaseWrapper):
       return
     rewards = out[1]
     if torch.is_tensor(rewards):
-      setattr(self.unwrapped, self.rlmcp.sim.spec.reward_buffer, rewards)
+      spec = self.rlmcp.sim.spec
+      state = spec.resolve(self.unwrapped, "state", None)
+      if state is not None and "reward" in state:
+        state.reward.copy_(rewards)
+      else:
+        setattr(self.unwrapped, spec.reward_buffer, rewards)
     info = out[-1] if isinstance(out[-1], dict) else {}
     log: dict[str, Any] = {}
     terms = info.get("reward_terms")
