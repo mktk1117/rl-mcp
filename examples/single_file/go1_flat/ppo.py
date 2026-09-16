@@ -1,14 +1,42 @@
 """PPO, in one file, for a single-file task to copy and edit.
 
-A port of rsl_rl's PPO (ETH Zurich / NVIDIA, BSD-3-Clause) with the same
-behaviour and no dependency on it: clipped surrogate, clipped value loss,
-GAE with timeout bootstrapping, the adaptive learning rate driven by measured
-KL, separate actor and critic MLPs with a state-independent Gaussian. It is an
-asset, not a library: a task that needs a different algorithm edits its copy.
+A port of rsl_rl's PPO with the same behaviour and no dependency on it:
+clipped surrogate, clipped value loss, GAE with timeout bootstrapping, the
+adaptive learning rate driven by measured KL, separate actor and critic MLPs
+with a state-independent Gaussian. It is an asset, not a library: a task that
+needs a different algorithm edits its copy.
 
-What rlmcp touches is small and by duck typing. Hyperparameters are the
-attributes on :class:`PPO` (``learning_rate``, ``entropy_coef``, ...), and
-checkpoints go through :meth:`PPO.save` and :meth:`PPO.load`.
+What rlmcp touches is declared. :class:`PPOConfig` on ``PPO.cfg`` is the
+tunable surface (``rl.learning_rate``, ``rl.entropy_coef``, ...); a write
+lands on the config and the mirrored attribute, then
+:meth:`PPO.on_hyperparameter_change` does what must follow it (the optimizer's
+learning rate, the schedule). :meth:`PPO.metrics` adds the policy's std to the
+telemetry; checkpoints go through :meth:`PPO.save` and :meth:`PPO.load`.
+
+rsl_rl is Copyright (c) 2021, ETH Zurich, Nikita Rudin, and Copyright (c)
+2021, NVIDIA CORPORATION, released under the BSD-3-Clause license:
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met: 1. Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+    3. Neither the name of the copyright holder nor the names of its
+    contributors may be used to endorse or promote products derived from this
+    software without specific prior written permission. THIS SOFTWARE IS
+    PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS
+    OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+    POSSIBILITY OF SUCH DAMAGE.
 """
 
 from __future__ import annotations
@@ -16,6 +44,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import chain
+from typing import Any
 
 import torch
 from torch import Tensor, nn
@@ -39,6 +68,8 @@ class ModelConfig:
 
 @dataclass
 class PPOConfig:
+  """The knobs rlmcp serves as ``rl.<name>``; every numeric field is live."""
+
   num_learning_epochs: int = 5
   num_mini_batches: int = 4
   learning_rate: float = 1e-3
@@ -99,7 +130,10 @@ class EmpiricalNormalization(nn.Module):
     delta = mean_x - self._mean
     self._mean += rate * delta
     self._var += rate * (var_x - self._var + delta * (mean_x - self._mean))
-    self._std = torch.sqrt(self._var)
+    # In place: this runs under inference mode during the rollout, and a
+    # buffer rebound here would become an inference tensor that a later
+    # load_state_dict() cannot copy into.
+    self._std.copy_(torch.sqrt(self._var))
 
 
 class Actor(nn.Module):
@@ -256,6 +290,7 @@ class PPO:
   def __init__(self, actor: Actor, critic: Critic, storage: RolloutStorage,
                cfg: PPOConfig | None = None):
     cfg = cfg or PPOConfig()
+    self.cfg = cfg
     self.actor, self.critic, self.storage = actor, critic, storage
     self.clip_param = cfg.clip_param
     self.num_learning_epochs = cfg.num_learning_epochs
@@ -376,6 +411,21 @@ class PPO:
     out = {name: total / updates for name, total in sums.items()}
     out["learning_rate"] = self.learning_rate
     return out
+
+  # What rlmcp calls.
+
+  def on_hyperparameter_change(self, name: str, value: Any) -> None:
+    """After rlmcp wrote ``name``: a new learning rate goes to the optimizer
+    and pins the schedule, or the adaptive rule would overwrite it next
+    update. Everything else is read where it is used."""
+    if name == "learning_rate":
+      for group in self.optimizer.param_groups:
+        group["lr"] = float(value)
+      if self.schedule == "adaptive":
+        self.schedule = self.cfg.schedule = "fixed"
+
+  def metrics(self) -> dict[str, float]:
+    return {"Policy/mean_std": float(self.actor.output_std.mean().item())}
 
   # Modes and checkpoints.
 

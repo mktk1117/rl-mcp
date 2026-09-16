@@ -2,11 +2,20 @@
 
 `go1_flat/env.py` is the whole task: the config dataclasses at the top, then
 `reset()`, `step()`, the observations, the rewards and the terminations, in
-the order they happen. `ppo.py` is the algorithm, copied here so a task that
-wants a different one edits its copy. `train.py` is the loop, written out.
+the order they happen. It inherits `rlmcp.adapters.single_file.SingleFileEnv`,
+which is the contract rlmcp reads it through (see
+[docs/single-file.md](../../docs/single-file.md)). `ppo.py` is the algorithm,
+copied here so a task that wants a different one edits its copy. `train.py`
+is the loop, written out.
 
-The same `env.py` runs on MuJoCo Warp, mjbatch and Genesis. `--backend` is the
-only thing that changes:
+`backends/` is the physics: one robot-level contract (`RobotSpec`,
+`SimBackend`) with MuJoCo Warp, mjbatch and Genesis behind it. It lives here,
+next to the tasks that use it, rather than in rlmcp -- the harness does not
+care what `env.sim` is. Copy the directory next to your own task, or write
+against your simulator directly.
+
+The same `env.py` runs on all three. `--backend` is the only thing that
+changes:
 
 ```bash
 export MJLAB_GO1_XML=/path/to/mjlab/src/mjlab/asset_zoo/robots/unitree_go1/xmls/go1.xml
@@ -59,7 +68,8 @@ threads, genesis-world 1.3.3, mujoco 3.13.0, mjbatch 0.1.1, mujoco_warp 3.13.0.
 | mjwarp | 4096 | 1500 | 0.87 / 0.71 | 0.87 | 1000 / 1000 | 49 min |
 | genesis | 2048 | 400 | 0.30 / 0.80 | 0.89 | 937 / 1000 | 16 min |
 
-The two MuJoCo backends trot by iteration 250. Genesis stands and turns
+The two MuJoCo backends trot by iteration 250; at 1024 envs on CPU the
+same file starts walking late and slowly. Genesis stands and turns
 under mjlab's symmetric commands and walks (0.85 by iteration 200) once the
 commands are forward-biased; the ablations behind that sentence are in the
 docs page, along with the `--set` line to start a Genesis run with.

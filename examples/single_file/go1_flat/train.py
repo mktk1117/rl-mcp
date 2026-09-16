@@ -32,8 +32,10 @@ import torch
 
 import rlmcp.adapters.single_file as rlmcp_single_file
 
-# env.py and ppo.py live next to this script, not on the path.
+# env.py and ppo.py live next to this script and backends/ one directory up;
+# neither is on the path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from env import EnvConfig, Go1FlatEnv
 from ppo import PPO, Actor, Critic, ModelConfig, PPOConfig, RolloutStorage
 

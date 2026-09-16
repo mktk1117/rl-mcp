@@ -3,8 +3,8 @@
 This file *is* the task. Every number an agent might tune is in the config
 dataclasses at the top; the physics loop, observations, rewards and
 terminations are inline below them, in the order they happen. Nothing is
-inherited and nothing is registered: read it top to bottom and you know the
-whole environment.
+registered and the base class holds only the contract: read it top to bottom
+and you know the whole environment.
 
 The task is mjlab's ``Mjlab-Velocity-Flat-Unitree-Go1``, term for term: the
 same observations (and the critic's extra ones), the same command generator
@@ -13,13 +13,17 @@ same disturbances and startup randomisation, the same termination. Where
 this file differs it says so in a comment. A number here means what it means
 there, so an agent that learned the mjlab task's levers can drive this one.
 
-Two things make it steerable from another shell with ``rlmcp``:
+Three things make it steerable from another shell with ``rlmcp``:
 
 * the config is declared with :mod:`rlmcp.declare` -- ``Static[...]`` marks a
   value read once at construction, ``term(...)`` declares a reward term -- so
   rlmcp knows what it may change live and what would need a restart;
-* the simulator is behind :mod:`rlmcp.backends`, so ``cfg.backend`` swaps
-  MuJoCo Warp, mjbatch or Genesis without touching anything else here.
+* the environment is a :class:`~rlmcp.adapters.single_file.SingleFileEnv`,
+  which names the buffers rlmcp reads and owns the reward loop, so a term an
+  agent adds at runtime is scored without this file knowing about it;
+* the simulator is behind ``backends/`` (one directory up, copied next to the
+  task), so ``cfg.backend`` swaps MuJoCo Warp, mjbatch or Genesis without
+  touching anything else here.
 
 Run it with ``train.py`` next to this file.
 """
@@ -28,21 +32,26 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
 from torch import Tensor
 
-from rlmcp.backends import RobotSpec, SimOptions, make_backend
-from rlmcp.backends.base import gain_for
-from rlmcp.backends.frames import (
+from rlmcp.adapters.single_file import SingleFileEnv
+from rlmcp.declare import Static, Term, term
+
+# backends/ sits next to the tasks that use it, one directory up.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backends import RobotSpec, SimOptions, make_backend
+from backends.base import gain_for
+from backends.frames import (
     projected_gravity,
     quat_from_euler_xyz,
     quat_rotate_inverse,
     wrap_to_pi,
 )
-from rlmcp.declare import Static, Term, term, terms
 
 
 def find_go1_xml() -> str:
@@ -229,7 +238,7 @@ def _uniform(n: int, lo_hi: tuple[float, float], device: torch.device) -> Tensor
   return torch.empty(n, device=device).uniform_(*lo_hi)
 
 
-class Go1FlatEnv:
+class Go1FlatEnv(SingleFileEnv):
   """Velocity tracking on flat ground. ``step()`` is the whole story."""
 
   def __init__(self, cfg: EnvConfig | None = None):
@@ -420,7 +429,8 @@ class Go1FlatEnv:
 
     # 5. Observe, score, terminate.
     obs = self._compute_observations()
-    self.rew_buf, reward_terms = self._compute_rewards()
+    # Every term is multiplied by the control timestep, as mjlab's manager does.
+    self.rew_buf, reward_terms = self.compute_reward(scale=self.control_dt)
     time_out = self.episode_length_buf >= self.max_episode_steps - 1
     tilt = torch.acos(torch.clamp(-self.projected_gravity[:, 2], -1.0, 1.0))
     fell = tilt > math.radians(cfg.termination.fell_over_deg)
@@ -430,12 +440,12 @@ class Go1FlatEnv:
     self.episode_length_buf += 1
     self.episode_reward += self.rew_buf
     done_ids = dones.nonzero(as_tuple=False).squeeze(-1)
-    info = {
-        "reward_terms": {name: float(v.mean()) for name, v in reward_terms.items()},
-        "episode_rewards": self.episode_reward[done_ids].clone(),
-        "episode_lengths": self.episode_length_buf[done_ids].float().clone(),
-        "time_outs": time_out,
-    }
+    info = self.step_info(
+        reward_terms,
+        episode_rewards=self.episode_reward[done_ids].clone(),
+        episode_lengths=self.episode_length_buf[done_ids].float().clone(),
+        time_outs=time_out,
+    )
     if len(done_ids) > 0:
       obs = self.reset(done_ids)
     return obs, self.rew_buf, dones, info
@@ -516,12 +526,10 @@ class Go1FlatEnv:
 
   # -- Rewards --------------------------------------------------------------
 
-  def _compute_rewards(self) -> tuple[Tensor, dict[str, Tensor]]:
-    """Every term, scored inline; the table at the top weights them.
-
-    A term the table has that this method does not compute is one rlmcp
-    appended at runtime, and it carries its own function.
-    """
+  def compute_reward_terms(self) -> dict[str, Tensor]:
+    """Every term this file computes, unweighted; the table at the top weights
+    them in :meth:`SingleFileEnv.compute_reward`, which also scores any term
+    rlmcp appended at runtime."""
     r = self.cfg.reward
     cmd, speed = self.commands, self.command_speed
     lin_err = torch.sum(torch.square(cmd[:, :2] - self.base_lin_vel[:, :2]), dim=1)
@@ -561,7 +569,7 @@ class Go1FlatEnv:
     swing_cost = torch.sum(swing_err * self.first_contact.float(), dim=1)
     self.foot_peak_height[self.first_contact] = 0.0
 
-    computed = {
+    return {
         "track_linear_velocity": torch.exp(-lin_err / r.track_linear_velocity.std ** 2),
         "track_angular_velocity": torch.exp(-ang_err / r.track_angular_velocity.std ** 2),
         "upright": torch.exp(-tilt_sq / r.upright.std ** 2),
@@ -579,14 +587,6 @@ class Go1FlatEnv:
         * moving(r.soft_landing.command_threshold),
         "body_ang_vel": torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1),
     }
-
-    total = torch.zeros(self.num_envs, device=self.device)
-    scored: dict[str, Tensor] = {}
-    for name, t in terms(r).items():
-      value = computed[name] if name in computed else t.func(self, **t.params)
-      scored[name] = value
-      total += t.weight * value * self.control_dt
-    return total, scored
 
   # -- Sizes ----------------------------------------------------------------
 

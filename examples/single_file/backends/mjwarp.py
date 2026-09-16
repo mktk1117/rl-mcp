@@ -27,8 +27,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from rlmcp.backends import frames
-from rlmcp.backends.base import RobotSpec, SimBackend, SimOptions, compile_model
+from . import frames
+from .base import RobotSpec, SimBackend, SimOptions, compile_model
 
 
 class MjWarpBackend(SimBackend):
@@ -307,7 +307,7 @@ class MjWarpBackend(SimBackend):
   def render(self, env_id: int = 0, width: int = 640, height: int = 480) -> np.ndarray:
     import mujoco
 
-    from rlmcp.backends.mjbatch import _tracking_camera
+    from .mjbatch import _tracking_camera
 
     if self._renderer is None or self._renderer.width != width or self._renderer.height != height:
       self._renderer = mujoco.Renderer(self._model, height, width)

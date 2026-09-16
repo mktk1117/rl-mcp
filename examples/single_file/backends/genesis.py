@@ -25,8 +25,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from rlmcp.backends import frames
-from rlmcp.backends.base import (
+from . import frames
+from .base import (
     RobotSpec,
     SimBackend,
     SimOptions,

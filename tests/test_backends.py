@@ -1,6 +1,6 @@
 """The physics backends, against a two-joint hopper nobody has to install.
 
-The contract in :mod:`rlmcp.backends.base` is what a single-file environment
+The contract in ``examples/single_file/backends/base.py`` is what the Go1 example
 relies on to run unchanged on MuJoCo Warp, mjbatch and Genesis, so it is
 tested once, in one place, against every backend the machine has. The robot
 is a small MJCF written by the test -- a floating box on one leg with a wide
@@ -15,6 +15,7 @@ minute to compile, so it runs only when ``RLMCP_TEST_GENESIS=1``.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,8 +23,9 @@ import pytest
 torch = pytest.importorskip("torch")
 mujoco = pytest.importorskip("mujoco")
 
-from rlmcp.backends import BACKENDS, RobotSpec, SimOptions, available, make_backend  # noqa: E402
-from rlmcp.backends.base import compile_model, gain_for  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "single_file"))
+from backends import BACKENDS, RobotSpec, SimOptions, available, make_backend  # noqa: E402
+from backends.base import compile_model, gain_for  # noqa: E402
 
 HOPPER = """
 <mujoco model="hopper">
@@ -105,6 +107,7 @@ def test_compile_adds_pd_actuators_touch_sensors_and_a_floor(spec):
   # The file had no floor, so one was added, and the layout says so.
   assert layout.ground_added
   assert model.geom("rlmcp_ground").type == mujoco.mjtGeom.mjGEOM_PLANE
+  assert model.nlight == 1, "a light comes with the floor, so frames are lit"
   assert layout.base_qpos == 0 and layout.base_qvel == 0
 
 

@@ -27,7 +27,7 @@ Frames, so nobody guesses: ``root_lin_vel`` and ``root_ang_vel`` are world
 frame. MuJoCo stores the free joint's angular velocity in the body frame, so
 the MuJoCo backends rotate it; Genesis reports world frame natively. An
 environment that wants body-frame velocities rotates them with
-:func:`rlmcp.backends.frames.quat_rotate_inverse`, once, itself.
+:func:`backends.frames.quat_rotate_inverse`, once, itself.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ from torch import Tensor
 
 Gains = float | dict[str, float]
 """One number for every joint, or ``{pattern: number}`` matched against joint
-names with :func:`fnmatch.fnmatch` -- ``{"*_calf_joint": 35.0, "*": 20.0}``.
+names with :func:`fnmatch.fnmatch` -- ``{"*_knee": 35.0, "*": 20.0}``.
 The first matching pattern wins, so put the specific ones first."""
 
 
@@ -88,7 +88,7 @@ class RobotSpec:
   contact_sites: tuple[str, ...] = ()
   """Names whose contact force the backend reports, in this order. Each is a
   site in the MJCF, or a body: a body gets a box site around its collision
-  geoms so a touch sensor can watch the whole body (``"trunk"`` for an
+  geoms so a touch sensor can watch the whole body (the base body, for an
   illegal-contact check)."""
 
   base_body: str = ""
@@ -135,7 +135,8 @@ class SimOptions:
   ground_plane: bool = True
   """Add a flat floor when the MJCF has no plane or height field of its own.
   Robot descriptions usually ship without one (mjlab's do), and a robot with
-  nothing under it falls forever."""
+  nothing under it falls forever. A directional light comes with it when the
+  file has none, so frames are not a silhouette on a grey floor."""
   extra: dict[str, Any] = field(default_factory=dict)
   """Anything backend-specific that has no field above."""
 
@@ -339,6 +340,12 @@ def compile_model(spec: RobotSpec, options: SimOptions | None = None) -> tuple[A
         name="rlmcp_ground", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[0.0, 0.0, 0.05],
         contype=1, conaffinity=1, rgba=[0.5, 0.5, 0.55, 1.0],
     )
+  if options.ground_plane and plain.nlight == 0:
+    light = mjspec.worldbody.add_light(pos=[0.0, 0.0, 4.0], dir=[0.0, 0.0, -1.0])
+    try:
+      light.type = mujoco.mjtLightType.mjLIGHT_DIRECTIONAL
+    except AttributeError:  # MuJoCo < 3.3 spells it as a flag.
+      light.directional = True
 
   model = mjspec.compile()
   apply_options(model, options)

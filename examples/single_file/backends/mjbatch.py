@@ -21,8 +21,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from rlmcp.backends import frames
-from rlmcp.backends.base import RobotSpec, SimBackend, SimOptions, compile_model
+from . import frames
+from .base import RobotSpec, SimBackend, SimOptions, compile_model
 
 
 class MjBatchBackend(SimBackend):

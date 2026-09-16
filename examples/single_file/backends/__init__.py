@@ -2,10 +2,10 @@
 
 ::
 
-    from rlmcp.backends import RobotSpec, make_backend
+    from backends import RobotSpec, make_backend
 
-    robot = RobotSpec(xml="go1.xml", stiffness=20.0, damping=0.5,
-                      contact_sites=("FR", "FL", "RR", "RL", "trunk"))
+    robot = RobotSpec(xml="robot.xml", stiffness=20.0, damping=0.5,
+                      contact_sites=("foot_left", "foot_right", "base"))
     sim = make_backend("mjwarp", robot, num_envs=4096, dt=0.005, decimation=4)
 
     sim.reset(ids, root_pos, root_quat, dof_pos)
@@ -14,7 +14,7 @@
     sim.root_pos, sim.dof_pos, sim.contact_forces, ...
 
 ``"mjwarp"`` (MuJoCo Warp, GPU), ``"mjbatch"`` (C MuJoCo on CPU threads) and
-``"genesis"`` answer to the same :class:`~rlmcp.backends.base.SimBackend`
+``"genesis"`` answer to the same :class:`~backends.base.SimBackend`
 contract; see that module for the vocabulary and the frame conventions.
 Nothing here imports a simulator until a backend is constructed, so the
 name of one you do not have is a reason, not a traceback.
@@ -24,14 +24,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from rlmcp.backends.base import RobotSpec, SimBackend, SimOptions
+from .base import RobotSpec, SimBackend, SimOptions
 
 BACKENDS: dict[str, tuple[str, str]] = {
-    "mjwarp": ("rlmcp.backends.mjwarp", "MjWarpBackend"),
-    "mjbatch": ("rlmcp.backends.mjbatch", "MjBatchBackend"),
-    "genesis": ("rlmcp.backends.genesis", "GenesisBackend"),
+    "mjwarp": (".mjwarp", "MjWarpBackend"),
+    "mjbatch": (".mjbatch", "MjBatchBackend"),
+    "genesis": (".genesis", "GenesisBackend"),
 }
-"""Backend name -> (module, class). Adding one is a line here."""
+"""Backend name -> (module, class), relative to this package so it can be
+copied next to any task. Adding one is a line here."""
 
 
 def backend_class(name: str) -> type[SimBackend]:
@@ -45,7 +46,7 @@ def backend_class(name: str) -> type[SimBackend]:
     raise KeyError(
         f"No backend '{name}'. Available: {sorted(BACKENDS)}"
     ) from None
-  module = importlib.import_module(module_name)
+  module = importlib.import_module(module_name, package=__package__)
   return getattr(module, class_name)
 
 
