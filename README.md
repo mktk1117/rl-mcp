@@ -113,12 +113,13 @@ in [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab
 
 Not every task is manager-based. A single-file environment keeps its config
 in one dataclass at the top of `env.py` and writes `step()` out below it — the
-shape an agent can read top to bottom. Declare the config with two markers and
-rlmcp drives it the same way, on whichever physics backend the file names:
-MuJoCo Warp, mjbatch or Genesis, from the same `env.py`.
+shape an agent can read top to bottom. Declare the config with two markers,
+inherit one base class, and rlmcp drives it the same way, on whatever physics
+the file uses.
 
 ```python
 from rlmcp.declare import Static, Term, term
+from rlmcp.adapters.single_file import SingleFileEnv
 import rlmcp.adapters.single_file as rlmcp_single_file
 
 @dataclass
@@ -128,21 +129,24 @@ class Rewards:
 
 @dataclass
 class EnvConfig:
-  backend: Static[str] = "mjwarp"                  # mjwarp | mjbatch | genesis
   num_envs: Static[int] = 4096                     # refused live, with the reason
   action_scale: float = 0.25                       # env.action_scale, live
   reward: Rewards = field(default_factory=Rewards)
 
-env = rlmcp_single_file.wrap(Go1FlatEnv(EnvConfig()), session_dir=log_dir / "rlmcp")
-env.attach_algorithm(ppo)                          # rl.* knobs, checkpoints
+class MyEnv(SingleFileEnv):                        # reset, step, compute_reward_terms
+  ...
+
+env = rlmcp_single_file.wrap(MyEnv(EnvConfig()), session_dir=log_dir / "rlmcp")
+env.attach_algorithm(ppo)                          # rl.* knobs from ppo.cfg, checkpoints
 for iteration in range(1, max_iterations + 1):
   ...                                              # your loop, written out
   env.service(iteration, metrics=losses)           # edits land here
 ```
 
 The worked example is
-[examples/single_file/go1_flat/](examples/single_file/go1_flat/), trained on
-all three backends; the page is
+[examples/single_file/go1_flat/](examples/single_file/go1_flat/), mjlab's flat
+Go1 task written out flat and trained on MuJoCo Warp, mjbatch and Genesis
+through the swappable backends that ship next to it; the page is
 [docs/single-file.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/single-file.md).
 
 ## What you get
@@ -262,7 +266,7 @@ afterwards.
 | [docs/curriculum.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/curriculum.md) | Writing the stage ladder. |
 | [docs/extensions.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
 | [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab.md) | Driving an IsaacLab run: the one line, cameras, what differs from mjlab. |
-| [docs/single-file.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/single-file.md) | Driving a single-file `env.py`: the declared config, the loop's two lines, and the swappable physics backends (MuJoCo Warp, mjbatch, Genesis). |
+| [docs/single-file.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/single-file.md) | Writing and driving a single-file `env.py`: when to choose it, the `SingleFileEnv` contract, the declared config and algorithm, the loop's two lines. |
 | [docs/records.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/records.md) | Hypotheses, verdicts, feedback, code snapshots, the record graph. |
 | [docs/design.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/design.md) | How it fits together, how parameters are found, other simulators. |
 | [docs/style.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/style.md) | The style guide: two spaces, what ruff checks, and why each rule is on or off. |
