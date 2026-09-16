@@ -1,24 +1,26 @@
 """The base class of a single-file environment: the contract, written down once.
 
 A single-file environment is one ``env.py``, built from the blocks in
-:mod:`rlmcp.blocks`: the config is a dataclass at the top of the file,
+:mod:`rlmcp.adapters.single_file.blocks`: the config is a dataclass at the top of the file,
 declared with :mod:`rlmcp.declare`; the variables ``step()`` writes are a
-:class:`~rlmcp.blocks.Vars` container; the observations are
-:class:`~rlmcp.blocks.Obs` groups; and each reward term is a method named in
+:class:`~rlmcp.adapters.single_file.blocks.Variables` container; the observations are
+:class:`~rlmcp.adapters.single_file.blocks.Obs` groups; and each reward term is a method named in
 the config's reward table. rlmcp needs to know four things about such a
 file, and this class is where they are said:
 
 * **the config** -- ``self.cfg``, the declared dataclass. Every numeric leaf
   of it is a parameter an agent can list and set; ``Static[...]`` marks the
   ones read once at construction; ``term(...)`` declares a reward term.
-* **the variables** -- ``self.state``, a :class:`~rlmcp.blocks.Vars` with one
-  tensor per name and a leading ``num_envs`` axis. Every variable is
-  sampled into a trace; the ones under conventional names (``joint_pos``,
-  ``joint_vel``, ``actions``, ``base_lin_vel``, ``base_ang_vel``,
-  ``base_pos``, ``projected_gravity``, ``foot_contact``, ``commands``,
-  ``reward``, ``episode_length``) also feed the diagnostics. A fixed-base
-  arm simply does not declare the base ones, and the channels they feed
-  are dropped rather than faked.
+* **the variables** -- ``self.state``, a
+  :class:`~rlmcp.adapters.single_file.blocks.Variables` with one tensor per
+  name and a leading ``num_envs`` axis. Every variable is sampled into a
+  trace under its own name. The library attaches no meaning to a name: a
+  variable named after a trace channel of :mod:`rlmcp.adapters.base`
+  (``joint_pos``, ``joint_vel``, ``action``, ``base_lin_vel``,
+  ``base_ang_vel``, ``base_pos``, ``projected_gravity``, ``foot_contact``,
+  ``command``, ``reward``) also feeds the diagnostics that read it. A
+  fixed-base arm simply does not declare the base ones, and the channels
+  they feed are dropped rather than faked.
 * **the boundaries** -- ``reset(env_ids)`` restarts episodes and ``step()``
   returns ``(obs, reward, done, info)``, with ``info`` carrying the keys
   :meth:`step_info` builds.
@@ -35,9 +37,10 @@ for two optional things only: ``render(env_id)`` for frames, and ``mj_model``
 for the live view when it has one.
 
 The observation groups and pipes are found by looking: any
-:class:`~rlmcp.blocks.Obs` or :class:`~rlmcp.blocks.Pipe` assigned to an
+:class:`~rlmcp.adapters.single_file.blocks.Obs` or
+:class:`~rlmcp.adapters.single_file.blocks.Pipe` assigned to an
 attribute of the environment is served under that attribute's name
-(``actor_obs.joint_vel.noise.half_width``), and :meth:`reset_blocks` clears
+(``actor_obs.joint_vel.uniform_noise.half_width``), and :meth:`reset_blocks` clears
 their history on an episode reset.
 
 Inheriting is the documented path. The wrapper also accepts any object of
@@ -53,7 +56,8 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from rlmcp import blocks, declare
+from rlmcp import declare
+from rlmcp.adapters.single_file import blocks
 
 
 class SingleFileEnv(ABC):
@@ -62,7 +66,8 @@ class SingleFileEnv(ABC):
   cfg: Any
   """The declared config dataclass."""
   state: Any = None
-  """The :class:`~rlmcp.blocks.Vars` holding every variable ``step()`` writes."""
+  """The :class:`~rlmcp.adapters.single_file.blocks.Variables` holding every
+  variable ``step()`` writes."""
   num_envs: int
   device: torch.device
   control_dt: float
@@ -90,12 +95,13 @@ class SingleFileEnv(ABC):
   # The blocks.
 
   def blocks(self) -> dict[str, blocks.Block]:
-    """The :class:`~rlmcp.blocks.Obs` and :class:`~rlmcp.blocks.Pipe`
+    """The :class:`~rlmcp.adapters.single_file.blocks.Obs` and
+    :class:`~rlmcp.adapters.single_file.blocks.Pipe`
     attributes of this environment, by attribute name."""
     return blocks.blocks(self)
 
   def reset_blocks(self, env_ids: Tensor | None = None) -> None:
-    """Tell every pipe stage with history (a :class:`~rlmcp.blocks.Delay`)
+    """Tell every pipe stage with history (a :class:`~rlmcp.adapters.single_file.blocks.Delay`)
     that ``env_ids`` start over. Call it from ``reset()``."""
     for block in self.blocks().values():
       block.reset(env_ids)

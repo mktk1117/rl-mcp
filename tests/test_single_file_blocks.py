@@ -1,4 +1,4 @@
-"""The building blocks in :mod:`rlmcp.blocks`: variables, pipes, groups.
+"""The building blocks in :mod:`rlmcp.adapters.single_file.blocks`: variables, pipes, groups.
 
 No simulator. What these pin is the behaviour an env.py relies on: a
 declared variable is allocated with the right shape and labels, a delay
@@ -14,17 +14,27 @@ import pytest
 import torch
 from torch import Tensor
 
-from rlmcp import blocks
-from rlmcp.blocks import Clip, Delay, Noise, Obs, Offset, Pipe, Scale, Vars, var
+from rlmcp.adapters.single_file import blocks
+from rlmcp.adapters.single_file.blocks import (
+  Clip,
+  Delay,
+  Obs,
+  Offset,
+  Pipe,
+  Scale,
+  UniformNoise,
+  Variables,
+  variable,
+)
 
 
-class State(Vars):
-  base_lin_vel: Tensor = var(3)
-  joint_pos: Tensor = var("joint")
-  foot_pos: Tensor = var("foot", 3)
-  foot_contact: Tensor = var("foot", dtype=torch.bool)
-  commands: Tensor = var(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
-  episode_length: Tensor = var(dtype=torch.long)
+class State(Variables):
+  base_lin_vel: Tensor = variable(3)
+  joint_pos: Tensor = variable("joint")
+  foot_pos: Tensor = variable("foot", 3)
+  foot_contact: Tensor = variable("foot", dtype=torch.bool)
+  commands: Tensor = variable(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
+  episode_length: Tensor = variable(dtype=torch.long)
 
 
 def state(n: int = 4) -> State:
@@ -72,7 +82,7 @@ def test_reset_zeroes_only_the_given_envs():
 
 def test_a_subclass_inherits_the_declarations():
   class More(State):
-    extra: Tensor = var(2)
+    extra: Tensor = variable(2)
 
   s = More(2, "cpu", joint=1, foot=1)
   assert "joint_pos" in s and s.extra.shape == (2, 2)
@@ -115,8 +125,8 @@ def test_delay_steps_is_live_within_its_history():
 
 def test_noise_scale_clip_offset():
   x = torch.zeros(2, 3)
-  assert torch.equal(Noise(0.0)(x), x)
-  noisy = Noise(0.5)(x)
+  assert torch.equal(UniformNoise(0.0)(x), x)
+  noisy = UniformNoise(0.5)(x)
   assert noisy.abs().max() <= 0.5 and not torch.equal(noisy, x)
   assert torch.equal(Scale(2.0)(x + 1), x + 2)
   assert torch.equal(Clip(-1.0, 1.0)(x + 5), x + 1)
@@ -125,8 +135,8 @@ def test_noise_scale_clip_offset():
 
 
 def test_a_pipe_names_repeated_stages():
-  p = Pipe(Noise(0.1), Scale(2.0), Noise(0.2))
-  assert list(p.named_stages()) == ["noise", "scale", "noise_2"]
+  p = Pipe(UniformNoise(0.1), Scale(2.0), UniformNoise(0.2))
+  assert list(p.named_stages()) == ["uniform_noise", "scale", "uniform_noise_2"]
   assert float(p(torch.zeros(1, 1)).abs()) <= 0.6
 
 
@@ -173,7 +183,7 @@ def test_blocks_are_found_on_the_env_and_their_leaves_walked():
   class Env:
     def __init__(self):
       self.state = state()
-      self.actor_obs = Obs(joint_pos=("joint_pos", Delay(1, max_steps=4), Noise(0.01)),
+      self.actor_obs = Obs(joint_pos=("joint_pos", Delay(1, max_steps=4), UniformNoise(0.01)),
                            commands="commands")
       self.action_pipe = Pipe(Clip(-1.0, 1.0), Scale(0.25))
       self.not_a_block = 3
@@ -183,6 +193,6 @@ def test_blocks_are_found_on_the_env_and_their_leaves_walked():
   leaves = [(path, f, static) for path, _, f, static in blocks.block_leaves(env.actor_obs)]
   assert leaves == [(("joint_pos", "delay"), "steps", False),
                     (("joint_pos", "delay"), "max_steps", True),
-                    (("joint_pos", "noise"), "half_width", False)]
+                    (("joint_pos", "uniform_noise"), "half_width", False)]
   leaves = [(path, f) for path, _, f, _ in blocks.block_leaves(env.action_pipe)]
   assert leaves == [(("clip",), "low"), (("clip",), "high"), (("scale",), "factor")]

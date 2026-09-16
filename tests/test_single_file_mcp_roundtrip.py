@@ -44,9 +44,13 @@ pytest.importorskip("mcp", reason="the MCP server needs the optional 'mcp' packa
 
 from test_single_file_env import FakePPO, FakeSingleFileEnv  # noqa: E402
 
-from rlmcp import blocks, declare  # noqa: E402
+from rlmcp import declare  # noqa: E402
 from rlmcp.adapters.access import paths  # noqa: E402
-from rlmcp.adapters.single_file import AlgorithmAdapter, wrap  # noqa: E402
+from rlmcp.adapters.single_file import (  # noqa: E402
+  AlgorithmAdapter,
+  blocks,
+  wrap,
+)
 from rlmcp.server.mcp_server import create_mcp_server  # noqa: E402
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples/single_file/go1_flat/env.py"

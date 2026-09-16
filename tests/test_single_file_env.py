@@ -1,7 +1,7 @@
 """The single-file family, against a fake env of that shape.
 
 No simulator, no GPU. The fake is the shape ``docs/single-file.md`` describes:
-one declared dataclass on ``env.cfg``, the variables in a ``Vars`` on
+one declared dataclass on ``env.cfg``, the variables in a ``Variables`` on
 ``env.state``, an observation group with a pipe, a ``reset(env_ids)``, one
 method per reward term, and a physics object on ``env.sim``. What these pin
 is the promise the family makes -- that every declared value is found, that a
@@ -31,8 +31,8 @@ from rlmcp.adapters.single_file import (
   TrainingStopped,
   wrap,
 )
+from rlmcp.adapters.single_file.blocks import Delay, Obs, UniformNoise, Variables, variable
 from rlmcp.adapters.single_file.spec import detect
-from rlmcp.blocks import Delay, Noise, Obs, Vars, var
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
 from rlmcp.declare import Static, Term, term
 
@@ -73,18 +73,18 @@ class EnvConfig:
   termination: Termination = field(default_factory=Termination)
 
 
-class State(Vars):
-  joint_pos: torch.Tensor = var("joint")
-  joint_vel: torch.Tensor = var("joint")
-  actions: torch.Tensor = var("joint")
-  last_actions: torch.Tensor = var("joint")
-  base_pos: torch.Tensor = var(3)
-  base_lin_vel: torch.Tensor = var(3)
-  base_ang_vel: torch.Tensor = var(3)
-  projected_gravity: torch.Tensor = var(3)
-  commands: torch.Tensor = var(("lin_vel_x", "lin_vel_y", "ang_vel_yaw"))
-  reward: torch.Tensor = var()
-  episode_length: torch.Tensor = var(dtype=torch.long)
+class State(Variables):
+  joint_pos: torch.Tensor = variable("joint")
+  joint_vel: torch.Tensor = variable("joint")
+  action: torch.Tensor = variable("joint")
+  last_action: torch.Tensor = variable("joint")
+  base_pos: torch.Tensor = variable(3)
+  base_lin_vel: torch.Tensor = variable(3)
+  base_ang_vel: torch.Tensor = variable(3)
+  projected_gravity: torch.Tensor = variable(3)
+  command: torch.Tensor = variable(("lin_vel_x", "lin_vel_y", "ang_vel_yaw"))
+  reward: torch.Tensor = variable()
+  episode_length: torch.Tensor = variable(dtype=torch.long)
 
 
 class FakeBackend:
@@ -110,12 +110,12 @@ class FakeSingleFileEnv(SingleFileEnv):
     if with_sim:
       self.sim = FakeBackend()
     self.state = State(self.num_envs, "cpu", joint=FakeBackend.joint_names)
-    self.state.last_actions[:] = 1.0
+    self.state.last_action[:] = 1.0
     self.state.projected_gravity[:, 2] = -1.0
     self.actor_obs = Obs(
-        joint_pos=("joint_pos", Delay(1, max_steps=3), Noise(0.01)),
-        joint_vel=("joint_vel", Noise(1.5)),
-        commands="commands",
+        joint_pos=("joint_pos", Delay(1, max_steps=3), UniformNoise(0.01)),
+        joint_vel=("joint_vel", UniformNoise(1.5)),
+        command="command",
     )
     self.resets: list = []
     self.steps = 0
@@ -125,9 +125,9 @@ class FakeSingleFileEnv(SingleFileEnv):
     ids = torch.arange(self.num_envs) if env_ids is None else env_ids
     self.reset_blocks(env_ids)
     c, s = self.cfg.command, self.state
-    s.commands[ids, 0] = torch.empty(len(ids)).uniform_(*c.lin_vel_x)
-    s.commands[ids, 1] = torch.empty(len(ids)).uniform_(*c.lin_vel_y)
-    s.commands[ids, 2] = torch.empty(len(ids)).uniform_(*c.ang_vel_yaw)
+    s.command[ids, 0] = torch.empty(len(ids)).uniform_(*c.lin_vel_x)
+    s.command[ids, 1] = torch.empty(len(ids)).uniform_(*c.lin_vel_y)
+    s.command[ids, 2] = torch.empty(len(ids)).uniform_(*c.ang_vel_yaw)
     return self.actor_obs(s)
 
   # One method per term in the table, its params as arguments.
@@ -144,7 +144,7 @@ class FakeSingleFileEnv(SingleFileEnv):
   def step(self, actions):
     self.steps += 1
     s = self.state
-    s.actions[:] = actions * self.cfg.action_scale
+    s.action[:] = actions * self.cfg.action_scale
     s.reward[:], terms = self.compute_reward(scale=self.control_dt)
     s.episode_length += 1
     info = self.step_info(
@@ -326,9 +326,9 @@ def test_every_declared_value_is_found_under_the_shared_vocabulary(sim):
           "command.lin_vel_x",
           "command.resample_time_s",
           "termination.max_tilt_rad",
-          "actor_obs.joint_pos.noise.half_width",
+          "actor_obs.joint_pos.uniform_noise.half_width",
           "actor_obs.joint_pos.delay.steps",
-          "actor_obs.joint_vel.noise.half_width",
+          "actor_obs.joint_vel.uniform_noise.half_width",
           "env.action_scale",
           "env.num_envs"} <= set(found)
   assert found["command.lin_vel_x"].data_type == "range"
@@ -340,7 +340,8 @@ def test_categories_come_from_the_group_names(sim):
   assert found["reward.upright.weight"].category is ParameterCategory.REWARD
   assert found["command.lin_vel_x"].category is ParameterCategory.CURRICULUM
   assert found["termination.max_tilt_rad"].category is ParameterCategory.TERMINATION
-  assert found["actor_obs.joint_pos.noise.half_width"].category is ParameterCategory.OBSERVATION
+  noise = found["actor_obs.joint_pos.uniform_noise.half_width"]
+  assert noise.category is ParameterCategory.OBSERVATION
   assert found["env.action_scale"].category is ParameterCategory.OTHER
 
 
@@ -362,7 +363,7 @@ def test_strings_are_not_offered_as_parameters(sim):
 
 
 def test_a_stage_field_write_reaches_the_pipe(sim, env):
-  sim.set_parameter("actor_obs.joint_vel.noise.half_width", 0.0)
+  sim.set_parameter("actor_obs.joint_vel.uniform_noise.half_width", 0.0)
   assert env.actor_obs.terms["joint_vel"].pipe.stages[0].half_width == 0.0
   env.state.joint_vel[:] = 3.0
   obs = env.actor_obs(env.state)
@@ -383,14 +384,14 @@ def test_a_delay_is_live_within_the_history_it_was_built_with(sim, env):
 
 def test_a_negative_noise_width_is_refused(sim, env):
   with pytest.raises(ValueError) as excinfo:
-    sim.set_parameter("actor_obs.joint_vel.noise.half_width", -1.0)
+    sim.set_parameter("actor_obs.joint_vel.uniform_noise.half_width", -1.0)
   assert "at least 0.0" in str(excinfo.value)
   assert env.actor_obs.terms["joint_vel"].pipe.stages[0].half_width == 1.5
 
 
 def test_an_unknown_stage_key_names_the_terms(sim):
   with pytest.raises(KeyError) as excinfo:
-    sim.set_parameter("actor_obs.torque.noise.half_width", 1.0)
+    sim.set_parameter("actor_obs.torque.uniform_noise.half_width", 1.0)
   assert "joint_pos" in str(excinfo.value) and "<term>.<stage>.<field>" in str(excinfo.value)
 
 
@@ -425,7 +426,7 @@ def test_a_command_range_keeps_the_tuple_the_config_declared(sim, env):
   assert env.cfg.command.lin_vel_x == (1.0, 2.0)
   assert isinstance(env.cfg.command.lin_vel_x, tuple)
   env.reset(torch.tensor([0, 1]))
-  assert (env.state.commands[:2, 0] >= 1.0).all()
+  assert (env.state.command[:2, 0] >= 1.0).all()
 
 
 def test_a_bad_range_is_refused_before_anything_changes(sim, env):
@@ -514,34 +515,20 @@ def test_an_env_that_keeps_plain_attributes_is_still_sampled():
   assert sample["command"].tolist() == [1.0, 1.0, 1.0]
 
 
-def test_a_command_that_is_not_a_velocity_is_not_published_as_one():
-  @dataclass
-  class Goals:
-    goal_x: tuple[float, float] = (0.0, 1.0)
-    goal_y: tuple[float, float] = (0.0, 1.0)
-    goal_yaw: tuple[float, float] = (0.0, 1.0)
+def test_a_command_that_is_not_a_velocity_goes_under_another_name():
+  """``command`` is a plane velocity by the trace vocabulary's definition; a
+  goal is declared under its own name and traced under it, so the tracking
+  diagnostics never subtract it from the base velocity. The library reads
+  nothing into the labels."""
+  class Goals(State):
+    goal: torch.Tensor = variable(("goal_x", "goal_y", "goal_yaw"))
 
-  @dataclass
-  class Cfg(EnvConfig):
-    command: Goals = field(default_factory=Goals)
-
-  class GoalState(State):
-    commands: torch.Tensor = var(("goal_x", "goal_y", "goal_yaw"))
-
-  env = FakeSingleFileEnv(Cfg())
-  env.state = GoalState(4, "cpu", joint=2)
-  sample = SingleFileSimAdapter(env).sample_state(0)
-  assert "command" not in sample and "command_raw" in sample
-
-  class UnlabelledState(State):
-    commands: torch.Tensor = var(3)  # The config's ranges decide instead.
-
-  env.state = UnlabelledState(4, "cpu", joint=2)
-  sample = SingleFileSimAdapter(env).sample_state(0)
-  assert "command" not in sample and "command_raw" in sample
-  env.cfg = EnvConfig()
-  sample = SingleFileSimAdapter(env).sample_state(0)
-  assert "command" in sample
+  env = FakeSingleFileEnv()
+  env.state = Goals(4, "cpu", joint=2)
+  sim = SingleFileSimAdapter(env)
+  sample = sim.sample_state(0)
+  assert "goal" in sample and "command" in sample
+  assert sim.trace_labels()["goal"] == ["goal_x", "goal_y", "goal_yaw"]
 
 
 def test_summary_metrics_read_the_variables(sim, env):
@@ -550,8 +537,18 @@ def test_summary_metrics_read_the_variables(sim, env):
   metrics = sim.summary_metrics()
   assert all(k.startswith("rlmcp/") for k in metrics)
   assert metrics["rlmcp/tilt_deg_mean"] == pytest.approx(0.0)
-  assert "rlmcp/lin_vel_error_mean" in metrics and "rlmcp/action_rate_rms" in metrics
-  assert metrics["rlmcp/episode_progress_mean"] == pytest.approx(1 / 1000)
+  assert "rlmcp/lin_vel_error_mean" in metrics and "rlmcp/joint_vel_rms" in metrics
+  assert metrics["rlmcp/achieved_speed_mean"] == pytest.approx(0.0)
+
+
+def test_summary_metrics_skip_what_the_state_does_not_declare(env):
+  class Arm(Variables):
+    joint_pos: torch.Tensor = variable(2)
+    joint_vel: torch.Tensor = variable(2)
+
+  env.state = Arm(4, "cpu")
+  metrics = SingleFileSimAdapter(env).summary_metrics()
+  assert set(metrics) == {"rlmcp/joint_vel_rms"}
 
 
 def test_resetting_goes_through_the_environment(sim, env):

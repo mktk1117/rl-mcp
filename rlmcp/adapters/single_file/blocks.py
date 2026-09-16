@@ -3,17 +3,19 @@
 An ``env.py`` has three kinds of things in it, and rlmcp wants to reach all
 three without the file listing them by hand:
 
-* **variables** -- the tensors ``step()`` writes, one row per environment:
-  joint positions, the base velocity, foot contacts, the command, the
-  reward. Declared once as a :class:`Vars` subclass, so they can be listed,
+* **variables** -- the tensors ``step()`` writes, one row per environment.
+  Declared once as a :class:`Variables` subclass, so they can be listed,
   sampled into a trace and labelled without the environment knowing which
-  of its attributes rlmcp reads::
+  of its attributes rlmcp reads. The library attaches no meaning to a name;
+  a variable named after one of the trace channels in
+  :mod:`rlmcp.adapters.base` (``joint_pos``, ``base_lin_vel``, ``command``,
+  ``foot_contact``, ``reward``, ...) also feeds the diagnostics::
 
-      class State(Vars):
-        base_lin_vel: Tensor = var(3)
-        joint_pos: Tensor = var("joint")
-        foot_contact: Tensor = var("foot", dtype=torch.bool)
-        commands: Tensor = var(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
+      class State(Variables):
+        base_lin_vel: Tensor = variable(3)
+        joint_pos: Tensor = variable("joint")
+        foot_contact: Tensor = variable("foot", dtype=torch.bool)
+        command: Tensor = variable(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
 
       self.state = State(num_envs, device, joint=joint_names, foot=("FR", "FL"))
 
@@ -24,17 +26,18 @@ three without the file listing them by hand:
 
 * **pipes** -- what sits between a variable and whoever consumes it. An
   :class:`Obs` group names its terms, each a *source* (a variable, or a
-  function of the state) followed by *stages* (:class:`Noise`,
-  :class:`Delay`, :class:`Scale`, :class:`Clip`, :class:`Offset`), and
-  concatenates the results. A stage is a small dataclass, so its fields are
-  parameters like any other: ``actor_obs.joint_pos.noise.half_width``,
+  function of the state) followed by *stages* (:class:`UniformNoise`,
+  :class:`GaussianNoise`, :class:`Delay`, :class:`Scale`, :class:`Clip`,
+  :class:`Offset`), and concatenates the results. A stage is a small
+  dataclass, so its fields are parameters like any other:
+  ``actor_obs.joint_pos.uniform_noise.half_width``,
   ``actor_obs.joint_vel.delay.steps``::
 
       self.actor_obs = Obs(
-          base_lin_vel=("base_lin_vel", Noise(0.5)),
-          joint_pos=(self.joint_pos_rel, Offset(self.encoder_bias), Noise(0.01)),
-          joint_vel=("joint_vel", Delay(2), Noise(1.5)),
-          commands="commands",
+          base_lin_vel=("base_lin_vel", UniformNoise(0.5)),
+          joint_pos=(self.joint_pos_rel, Offset(self.encoder_bias), UniformNoise(0.01)),
+          joint_vel=("joint_vel", Delay(2), GaussianNoise(0.5)),
+          command="command",
       )
       obs = self.actor_obs(self.state)
 
@@ -53,6 +56,7 @@ attribute, so a block is served the moment it is assigned.
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -72,7 +76,7 @@ construction (``"joint"``), or the labels of the axis themselves."""
 
 
 @dataclass(frozen=True)
-class VarSpec:
+class VariableSpec:
   """How one variable is declared: its shape after the env axis, its dtype."""
 
   shape: tuple[Dim, ...]
@@ -80,22 +84,23 @@ class VarSpec:
   doc: str = ""
 
 
-def var(*shape: Dim, dtype: torch.dtype = torch.float32, doc: str = "") -> Any:
-  """Declare one variable on a :class:`Vars` subclass.
+def variable(*shape: Dim, dtype: torch.dtype = torch.float32, doc: str = "") -> Any:
+  """Declare one variable on a :class:`Variables` subclass.
 
-  ``var()`` is one number per environment, ``var(3)`` three, ``var("joint")``
+  ``variable()`` is one number per environment, ``variable(3)`` three,
+  ``variable("joint")``
   as many as the ``joint`` dimension passed at construction, and
-  ``var(("x", "y"))`` two with those labels. The annotation on the field is
+  ``variable(("x", "y"))`` two with those labels. The annotation on the field is
   ``Tensor``, which is what the instance holds.
   """
-  return VarSpec(tuple(shape), dtype, doc)
+  return VariableSpec(tuple(shape), dtype, doc)
 
 
-class Vars:
+class Variables:
   """Named per-environment tensors, declared on the class, allocated on the
   instance.
 
-  Subclass and declare each variable with :func:`var`; construct with the
+  Subclass and declare each variable with :func:`variable`; construct with the
   batch size, the device and every named dimension the declarations use,
   as a size or as the labels of that axis. Every variable starts at zero.
   ``reset(env_ids)`` zeroes every variable for those environments, which is
@@ -130,12 +135,12 @@ class Vars:
   # Declaration.
 
   @classmethod
-  def specs(cls) -> dict[str, VarSpec]:
+  def specs(cls) -> dict[str, VariableSpec]:
     """``{name: spec}`` for every declared variable, base classes first."""
-    out: dict[str, VarSpec] = {}
+    out: dict[str, VariableSpec] = {}
     for klass in reversed(cls.__mro__):
       for name, value in vars(klass).items():
-        if isinstance(value, VarSpec):
+        if isinstance(value, VariableSpec):
           out[name] = value
     return out
 
@@ -218,7 +223,7 @@ class Vars:
 
 
 @dataclass
-class Noise:
+class UniformNoise:
   """Uniform noise of ``+-half_width`` in the signal's own units. 0 is clean."""
 
   half_width: float
@@ -230,6 +235,21 @@ class Noise:
     if self.half_width <= 0.0:
       return x
     return x + (torch.rand_like(x) * 2.0 - 1.0) * self.half_width
+
+
+@dataclass
+class GaussianNoise:
+  """Zero-mean Gaussian noise of standard deviation ``std``. 0 is clean."""
+
+  std: float
+
+  def bounds(self) -> dict[str, tuple[float, float | None]]:
+    return {"std": (0.0, None)}
+
+  def __call__(self, x: Tensor) -> Tensor:
+    if self.std <= 0.0:
+      return x
+    return x + torch.randn_like(x) * self.std
 
 
 @dataclass
@@ -312,6 +332,11 @@ class Offset:
     return x + self.value
 
 
+def stage_name(stage: Any) -> str:
+  """The key a stage is served under: its class name in snake case."""
+  return re.sub(r"(?<!^)(?=[A-Z])", "_", type(stage).__name__).lower()
+
+
 class Pipe:
   """A sequence of stages applied in order. Stages with a ``reset`` are told
   about episode resets."""
@@ -331,10 +356,11 @@ class Pipe:
         reset(env_ids)
 
   def named_stages(self) -> dict[str, Any]:
-    """``{name: stage}``: the class name in lower case, numbered on repeats."""
+    """``{name: stage}``: the class name in snake case (``UniformNoise`` is
+    ``uniform_noise``), numbered on repeats (``uniform_noise_2``)."""
     out: dict[str, Any] = {}
     for stage in self.stages:
-      base = type(stage).__name__.lower()
+      base = stage_name(stage)
       name, n = base, 1
       while name in out:
         n += 1
@@ -386,9 +412,9 @@ class ObsTerm:
 class Obs:
   """A named group of observation terms, concatenated in declaration order.
 
-  Each keyword is a term: a source alone (``commands="commands"``) or a
+  Each keyword is a term: a source alone (``command="command"``) or a
   tuple of the source and its stages
-  (``joint_vel=("joint_vel", Delay(2), Noise(1.5))``). Calling the group with
+  (``joint_vel=("joint_vel", Delay(2), UniformNoise(1.5))``). Calling the group with
   the state returns the ``(num_envs, dim)`` tensor; :attr:`dim` and
   :meth:`slices` are known after the first call.
   """
@@ -476,7 +502,7 @@ def block_leaves(block: Block) -> Iterator[tuple[tuple[str, ...], Any, str, bool
 __all__ = [
     "Clip",
     "Delay",
-    "Noise",
+    "GaussianNoise",
     "Obs",
     "ObsTerm",
     "Offset",
@@ -484,14 +510,16 @@ __all__ = [
     "Scale",
     "Static",
     "Term",
-    "VarSpec",
-    "Vars",
+    "UniformNoise",
+    "VariableSpec",
+    "Variables",
     "block_leaves",
     "blocks",
     "is_static",
     "stage_leaves",
+    "stage_name",
     "static_fields",
     "term",
     "terms",
-    "var",
+    "variable",
 ]

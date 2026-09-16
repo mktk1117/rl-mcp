@@ -125,7 +125,7 @@ extend-exclude = [
 [tool.ruff.lint]
 # `term(...)` returns a dataclass field (default_factory), so it is a legal
 # dataclass default; RUF009 cannot see that through the call.
-flake8-bugbear.extend-immutable-calls = ["rlmcp.declare.term", "rlmcp.blocks.term", "term"]
+flake8-bugbear.extend-immutable-calls = ["rlmcp.declare.term", "rlmcp.adapters.single_file.blocks.term", "term"]
 # E1 (indentation) is absent on purpose: those rules assume four spaces.
 select = [
   "F",      # pyflakes — undefined names, unused imports, redefinitions

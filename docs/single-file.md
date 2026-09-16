@@ -32,7 +32,7 @@ robot and the terrain and observation machinery it brings is what you need.
 Both routes get the same rlmcp surface once wrapped; nothing in the tools
 knows which family is underneath.
 
-## The blocks: `rlmcp.blocks`
+## The blocks: `rlmcp.adapters.single_file.blocks`
 
 An `env.py` is built from four kinds of thing, and rlmcp reaches all four
 without the file listing them by hand:
@@ -40,20 +40,20 @@ without the file listing them by hand:
 | block | what it is | how rlmcp uses it |
 | --- | --- | --- |
 | **config** | a dataclass tree on `env.cfg`, declared with `Static[...]` and `term(...)` | every numeric leaf is a parameter: listed, set live, refused with the reason when static |
-| **variables** | a `Vars` subclass on `env.state`: every tensor `step()` writes, with a name, a shape and labels | every one is sampled into a trace; the conventional names feed the diagnostics |
-| **observations** | `Obs` groups: each term a source and a pipe of stages (`Noise`, `Delay`, `Scale`, `Clip`, `Offset`) | a stage's fields are parameters: `actor_obs.joint_vel.noise.half_width`, `actor_obs.joint_vel.delay.steps` |
+| **variables** | a `Variables` subclass on `env.state`: every tensor `step()` writes, with a name, a shape and labels | every one is sampled into a trace; the conventional names feed the diagnostics |
+| **observations** | `Obs` groups: each term a source and a pipe of stages (`Noise`, `Delay`, `Scale`, `Clip`, `Offset`) | a stage's fields are parameters: `actor_obs.joint_vel.uniform_noise.half_width`, `actor_obs.joint_vel.delay.steps` |
 | **reward terms** | a `term(weight, **params)` per row of `cfg.reward`, each naming a method of the environment | `weight` and `params.<p>` are parameters; a term added at runtime is scored by the same loop |
 
 ```python
-from rlmcp.blocks import Delay, Noise, Obs, Offset, Static, Term, Vars, term, var
+from rlmcp.adapters.single_file.blocks import Delay, Noise, Obs, Offset, Static, Term, Variables, term, variable
 
-class State(Vars):                                   # the variables
-  base_lin_vel: Tensor = var(3)
-  joint_pos: Tensor = var("joint")
-  foot_contact: Tensor = var("foot", dtype=torch.bool)
-  commands: Tensor = var(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
-  reward: Tensor = var()
-  episode_length: Tensor = var(dtype=torch.long)
+class State(Variables):                                   # the variables
+  base_lin_vel: Tensor = variable(3)
+  joint_pos: Tensor = variable("joint")
+  foot_contact: Tensor = variable("foot", dtype=torch.bool)
+  command: Tensor = variable(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
+  reward: Tensor = variable()
+  episode_length: Tensor = variable(dtype=torch.long)
 
 @dataclass
 class Rewards:                                       # the reward table
@@ -65,10 +65,10 @@ class MyEnv(SingleFileEnv):
     self.cfg = cfg
     self.state = State(cfg.num_envs, cfg.device, joint=joint_names, foot=("FR", "FL"))
     self.actor_obs = Obs(                            # the observations
-        base_lin_vel=("base_lin_vel", Noise(0.5)),
-        joint_pos=(lambda s: s.joint_pos - default_pos, Offset(encoder_bias), Noise(0.01)),
-        joint_vel=("joint_vel", Delay(2), Noise(1.5)),
-        commands="commands",
+        base_lin_vel=("base_lin_vel", UniformNoise(0.5)),
+        joint_pos=(lambda s: s.joint_pos - default_pos, Offset(encoder_bias), UniformNoise(0.01)),
+        joint_vel=("joint_vel", Delay(2), GaussianNoise(0.5)),
+        command="command",
     )
     ...
 
@@ -87,31 +87,37 @@ class MyEnv(SingleFileEnv):
 
   def track_linear_velocity(self, std):              # one method per term
     s = self.state
-    err = torch.sum(torch.square(s.commands[:, :2] - s.base_lin_vel[:, :2]), dim=1)
+    err = torch.sum(torch.square(s.command[:, :2] - s.base_lin_vel[:, :2]), dim=1)
     return torch.exp(-err / std ** 2)
 
   def action_rate_l2(self):
-    return torch.sum(torch.square(self.state.actions - self.state.last_actions), dim=1)
+    return torch.sum(torch.square(self.state.action - self.state.last_action), dim=1)
 ```
 
-**Variables.** `var()` is one number per environment, `var(3)` three,
-`var("joint")` as many as the `joint` dimension passed at construction, and
-`var(("x", "y"))` two with those labels. A dimension passed as a list of
-names labels that axis, so `rlmcp trace` plots `joint_pos` by joint name.
-`state.reset(env_ids)` zeroes every variable for those environments, which
-is the right start for bookkeeping and harmless for state the next read from
-the simulator overwrites. Every variable goes into the trace; the ones named
-`joint_pos`, `joint_vel`, `joint_torque`, `actions`, `base_pos`, `base_quat`,
-`base_lin_vel`, `base_ang_vel`, `projected_gravity`, `foot_contact`,
-`commands`, `reward` and `episode_length` (or their legged_gym spellings:
-`dof_pos`, `rew_buf`, ...) also feed the diagnostics and summary metrics. A
-fixed-base arm does not declare the base ones, and the channels they feed are
-dropped rather than faked.
+**Variables.** `variable()` is one number per environment, `variable(3)`
+three, `variable("joint")` as many as the `joint` dimension passed at
+construction, and `variable(("x", "y"))` two with those labels. A dimension
+passed as a list of names labels that axis, so `rlmcp trace` plots
+`joint_pos` by joint name. `state.reset(env_ids)` zeroes every variable for
+those environments, which is the right start for bookkeeping and harmless
+for state the next read from the simulator overwrites. Every variable goes
+into the trace under its own name, and the library attaches no meaning to
+a name. The one convention is the trace vocabulary in
+`rlmcp/adapters/base.py`: a variable named `joint_pos`, `joint_vel`,
+`joint_torque`, `action`, `base_pos`, `base_lin_vel`, `base_ang_vel`,
+`projected_gravity`, `foot_contact`, `command` or `reward` also feeds the
+diagnostics and summary metrics that read that channel. `command` is a
+plane velocity `[vx, vy(, wz)]` by that definition; a goal pose or a
+motion target goes under another name and is traced under it. A fixed-base
+arm does not declare the base ones, and the channels they feed are dropped
+rather than faked.
 
 **Pipes.** A term of an `Obs` group is a source -- the name of a variable, or
-a function of the state -- followed by stages. Each stage is a small
-dataclass, so its fields are parameters served under the group's attribute
-name: `actor_obs.joint_pos.noise.half_width`. `Delay(steps, max_steps=)`
+a function of the state -- followed by stages: `UniformNoise(half_width)`,
+`GaussianNoise(std)`, `Delay`, `Scale`, `Clip`, `Offset`. Each stage is a
+small dataclass, so its fields are parameters served under the group's
+attribute name and the stage's class name in snake case:
+`actor_obs.joint_pos.uniform_noise.half_width`. `Delay(steps, max_steps=)`
 keeps `max_steps` of history (read once) and `steps` is live within it; a
 write outside that range is refused with the range. Repeated stages in one
 pipe are numbered (`noise`, `noise_2`). A bare `Pipe(Clip(-1, 1), Scale(0.25))`
@@ -137,10 +143,10 @@ The checklist, which `wrap()` also checks at construction and refuses by name:
 | the declared config | `env.cfg`, a dataclass instance | yes |
 | batch size and device | `env.num_envs`, `env.device` | yes |
 | timing | `env.control_dt`, `env.max_episode_steps` | yes |
-| the variables | `env.state`, a `Vars` (or plain attributes under the legged_gym names) | yes |
-| joint state and actions | `joint_pos`, `joint_vel`, `actions` (`last_actions` for the rate metric) | yes |
-| base state, for a floating base | `base_pos`, `base_quat`, `base_lin_vel`, `base_ang_vel`, `projected_gravity` | no |
-| the command buffer, for a commanded task | `commands`, labelled `lin_vel_*` / `ang_vel_*` when it is a plane velocity | no |
+| the variables | `env.state`, a `Variables` (or plain attributes under the legged_gym names) | yes |
+| joint state and actions | variables `joint_pos`, `joint_vel`, `action` | yes |
+| base state, for a floating base | variables `base_pos`, `base_quat`, `base_lin_vel`, `base_ang_vel`, `projected_gravity` | no |
+| the command, for a commanded task | a variable `command` holding `[vx, vy(, wz)]` | no |
 | observation groups and pipes | any `Obs` or `Pipe` attribute | no |
 | physics | `env.sim`, with `render(env_id)` for frames | no |
 | the reward table | `cfg.reward`, a dataclass of `term(...)` fields, one method per term | for reward tuning |
@@ -234,7 +240,7 @@ The tree decides the vocabulary, so the same commands work as on mjlab:
 | `termination.max_tilt_rad` | a field of any other nested group |
 | `randomization.startup.foot_friction` | a field two levels down; `at_startup` if any level is `Static` |
 | `env.action_scale` | a scalar at the top level of the config |
-| `actor_obs.joint_pos.noise.half_width`, `actor_obs.joint_vel.delay.steps` | a stage field in an `Obs` group on the environment |
+| `actor_obs.joint_pos.uniform_noise.half_width`, `actor_obs.joint_vel.delay.steps` | a stage field in an `Obs` group on the environment |
 | `rl.learning_rate`, `rl.entropy_coef` | the attached algorithm's `cfg` |
 
 Categories follow group names -- `reward`, `command` (curriculum),
@@ -252,11 +258,10 @@ Two things to know when reaching for these from an agent:
   `list_parameters(contains=...)`; `set_parameter` answers with the old and
   new value anyway.
 
-The `commands` variable has one convention: its labels (or, unlabelled, the
-`[low, high]` fields of the `command` group in declaration order) name its
-columns. That is how the trace sampler knows whether the buffer holds a
-plane velocity (`lin_vel_*`, `ang_vel_*`), which decides whether
-`rlmcp diagnose` may measure tracking against it.
+The `command` variable has one convention: it is a plane velocity, because
+that is what the trace channel of that name means to `rlmcp diagnose`,
+which measures tracking against it. A goal or a motion target is declared
+under another name.
 
 ## Declaring the algorithm
 
@@ -374,7 +379,7 @@ pushes and startup randomisation, the same termination, mjlab's solver
 settings, and rsl_rl's PPO with mjlab's Go1 runner config. What differs and
 why is in the file's own docstring and comments. Its shape is the four
 blocks above: a `State` of 30 variables, two `Obs` groups (the actor's with
-mjlab's noise widths as `Noise` stages), and one method per reward term.
+mjlab's noise widths as `UniformNoise` stages), and one method per reward term.
 
 ### What has actually been run
 

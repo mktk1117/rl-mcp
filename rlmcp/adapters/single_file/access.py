@@ -10,10 +10,10 @@ The tree decides the domains. Each nested dataclass directly under ``cfg`` is
 a domain named after its field (``command.lin_vel_x``, ``termination.max_tilt``);
 the reward group is served as terms (``reward.<name>.weight``,
 ``reward.<name>.params.<p>``); the scalars left at the top level are
-``env.<name>``; and every :class:`~rlmcp.blocks.Obs` or
-:class:`~rlmcp.blocks.Pipe` assigned to an attribute of the environment is a
+``env.<name>``; and every :class:`~rlmcp.adapters.single_file.blocks.Obs` or
+:class:`~rlmcp.adapters.single_file.blocks.Pipe` assigned to an attribute of the environment is a
 domain of its own, its stage fields served as
-``<attr>.<term>.<stage>.<field>`` (``actor_obs.joint_vel.noise.half_width``).
+``<attr>.<term>.<stage>.<field>`` (``actor_obs.joint_vel.uniform_noise.half_width``).
 Nothing here is hand-listed by parameter name, so a knob added to the config
 or a stage added to a pipe is tunable the moment it is declared.
 
@@ -30,10 +30,11 @@ import dataclasses
 from collections.abc import Sequence
 from typing import Any
 
-from rlmcp import blocks, declare
+from rlmcp import declare
 from rlmcp.adapters.access import paths
 from rlmcp.adapters.access.base import AccessProvider, Synthetic, Term
 from rlmcp.adapters.access.registry import ParameterAccess as _ParameterAccess
+from rlmcp.adapters.single_file import blocks
 from rlmcp.adapters.single_file.spec import SingleFileSpec, detect
 from rlmcp.core.parameters.spec import Liveness, ParameterCategory
 
@@ -289,11 +290,12 @@ class RewardAccess(AccessProvider):
 
 
 class BlockAccess(AccessProvider):
-  """One :class:`~rlmcp.blocks.Obs` or :class:`~rlmcp.blocks.Pipe` on the
+  """One :class:`~rlmcp.adapters.single_file.blocks.Obs` or
+  :class:`~rlmcp.adapters.single_file.blocks.Pipe` on the
   environment, served under its attribute name.
 
   A stage is a dataclass, so its numeric fields are the parameters:
-  ``actor_obs.joint_pos.noise.half_width``, ``actor_obs.joint_vel.delay.steps``,
+  ``actor_obs.joint_pos.uniform_noise.half_width``, ``actor_obs.joint_vel.delay.steps``,
   or ``action_pipe.clip.high`` for a bare pipe. ``Static[...]`` on a stage
   field is honoured; a stage that declares ``bounds()`` has its writes
   checked against them before anything is changed.

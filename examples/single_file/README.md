@@ -3,11 +3,11 @@
 `go1_flat/env.py` is the whole task: the config dataclasses at the top, the
 `State` of every variable `step()` writes, then `reset()`, `step()`, the
 observation groups, one method per reward term and the terminations, in the
-order they happen. It is built from `rlmcp.blocks` and inherits
+order they happen. It is built from `rlmcp.adapters.single_file.blocks` and inherits
 `rlmcp.adapters.single_file.SingleFileEnv`, which is the contract rlmcp reads
 it through (see [docs/single-file.md](../../docs/single-file.md)): every
 config leaf and every observation-pipe stage is a parameter
-(`actor_obs.joint_vel.noise.half_width`), every variable is traced. `ppo.py` is the algorithm,
+(`actor_obs.joint_vel.uniform_noise.half_width`), every variable is traced. `ppo.py` is the algorithm,
 copied here so a task that wants a different one edits its copy. `train.py`
 is the loop, written out.
 
