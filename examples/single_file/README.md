@@ -8,11 +8,12 @@ which is the contract rlmcp reads it through (see
 copied here so a task that wants a different one edits its copy. `train.py`
 is the loop, written out.
 
-`backends/` is the physics: one robot-level contract (`RobotSpec`,
-`SimBackend`) with MuJoCo Warp, mjbatch and Genesis behind it. It lives here,
-next to the tasks that use it, rather than in rlmcp -- the harness does not
-care what `env.sim` is. Copy the directory next to your own task, or write
-against your simulator directly.
+The physics is `rlmcp.backends`: one robot-level contract (`RobotSpec`,
+`SimBackend`) with MuJoCo Warp, mjbatch and Genesis behind it, which finds
+the joints, gains, default pose, base and contacts in the MJCF and reports
+what it found. It knows nothing about legs; this task tells it which sites
+are feet and asks for mjlab's foot contact tuning, and that is the whole of
+what is Go1-shaped outside `env.py`.
 
 The same `env.py` runs on all three. `--backend` is the only thing that
 changes:

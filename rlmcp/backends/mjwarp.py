@@ -27,8 +27,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from . import frames
-from .base import RobotSpec, SimBackend, SimOptions, compile_model
+from rlmcp.backends import frames
+from rlmcp.backends.base import RobotSpec, SimBackend, SimOptions, compile_model
 
 
 class MjWarpBackend(SimBackend):
@@ -102,15 +102,18 @@ class MjWarpBackend(SimBackend):
         self._layout.contact_sensor_adr, device=self.device, dtype=torch.long)
     self._site_ids = torch.as_tensor(
         self._layout.contact_site_ids, device=self.device, dtype=torch.long)
-    self._foot_geoms = torch.as_tensor(
-        self._layout.foot_geom_ids, device=self.device, dtype=torch.long)
+    self._contact_geoms = torch.as_tensor(
+        self._layout.contact_geom_ids, device=self.device, dtype=torch.long)
     self._limits = torch.as_tensor(self._layout.limits, dtype=torch.float32, device=self.device)
+    self._default = torch.as_tensor(
+        self._layout.default_dof_pos, dtype=torch.float32, device=self.device)
 
     self._graphs: dict[str, Any] = {}
     self._capture_graphs()
     self._renderer: Any = None
     self._render_data: Any = None
     self._snapshot()
+    self.announce(self._layout)
 
   # Streams.
 
@@ -163,10 +166,11 @@ class MjWarpBackend(SimBackend):
     q, v = layout.base_qpos, layout.base_qvel
     with self._on_warp_stream():
       qpos, qvel = self._qpos, self._qvel
-      self._s_root_pos = qpos[:, q:q + 3].clone()
-      self._s_root_quat = qpos[:, q + 3:q + 7].clone()
-      self._s_root_lin_vel = qvel[:, v:v + 3].clone()
-      self._s_root_ang_vel_body = qvel[:, v + 3:v + 6].clone()
+      if layout.floating:
+        self._s_root_pos = qpos[:, q:q + 3].clone()
+        self._s_root_quat = qpos[:, q + 3:q + 7].clone()
+        self._s_root_lin_vel = qvel[:, v:v + 3].clone()
+        self._s_root_ang_vel_body = qvel[:, v + 3:v + 6].clone()
       self._s_dof_pos = qpos[:, self._qpos_adr].clone()
       self._s_dof_vel = qvel[:, self._qvel_adr].clone()
       self._s_dof_torque = self._actuator_force[:, self._act_ids].clone()
@@ -183,6 +187,18 @@ class MjWarpBackend(SimBackend):
     return self._limits
 
   @property
+  def default_dof_pos(self) -> Tensor:
+    return self._default
+
+  @property
+  def floating_base(self) -> bool:
+    return self._layout.floating
+
+  @property
+  def contact_names(self) -> list[str]:
+    return list(self._layout.contact_names)
+
+  @property
   def mj_model(self) -> Any:
     return self._model
 
@@ -196,18 +212,22 @@ class MjWarpBackend(SimBackend):
 
   @property
   def root_pos(self) -> Tensor:
+    self._require_floating("root_pos")
     return self._s_root_pos
 
   @property
   def root_quat(self) -> Tensor:
+    self._require_floating("root_quat")
     return self._s_root_quat
 
   @property
   def root_lin_vel(self) -> Tensor:
+    self._require_floating("root_lin_vel")
     return self._s_root_lin_vel
 
   @property
   def root_ang_vel(self) -> Tensor:
+    self._require_floating("root_ang_vel")
     return frames.quat_rotate(self._s_root_quat, self._s_root_ang_vel_body)
 
   @property
@@ -233,6 +253,7 @@ class MjWarpBackend(SimBackend):
   # Control.
 
   def push(self, env_ids: Tensor, lin_vel: Tensor, ang_vel: Tensor) -> None:
+    self._require_floating("push")
     ids = torch.as_tensor(self._ids(env_ids), device=self.device, dtype=torch.long)
     if ids.numel() == 0:
       return
@@ -259,10 +280,10 @@ class MjWarpBackend(SimBackend):
   def reset(
       self,
       env_ids: Tensor,
-      root_pos: Tensor,
-      root_quat: Tensor,
       dof_pos: Tensor,
       dof_vel: Tensor | None = None,
+      root_pos: Tensor | None = None,
+      root_quat: Tensor | None = None,
       root_lin_vel: Tensor | None = None,
       root_ang_vel: Tensor | None = None,
   ) -> None:
@@ -274,20 +295,22 @@ class MjWarpBackend(SimBackend):
     with self._on_warp_stream():
       self._reset_mask_t.fill_(False)
       self._reset_mask_t[ids] = True
-    self._launch("reset")
+    self._launch("reset")  # Back to the model's spawn pose, velocities zero.
     with self._on_warp_stream():
       qpos, qvel = self._qpos, self._qvel
-      qpos[ids, q:q + 3] = root_pos.to(dev, torch.float32)
-      qpos[ids, q + 3:q + 7] = root_quat.to(dev, torch.float32)
       qpos[ids[:, None], self._qpos_adr[None, :]] = dof_pos.to(dev, torch.float32)
-      qvel[ids] = 0.0
       if dof_vel is not None:
         qvel[ids[:, None], self._qvel_adr[None, :]] = dof_vel.to(dev, torch.float32)
-      if root_lin_vel is not None:
-        qvel[ids, v:v + 3] = root_lin_vel.to(dev, torch.float32)
-      if root_ang_vel is not None:
-        body = frames.quat_rotate_inverse(root_quat.to(dev), root_ang_vel.to(dev))
-        qvel[ids, v + 3:v + 6] = body.to(torch.float32)
+      if self._layout.floating:
+        if root_pos is not None:
+          qpos[ids, q:q + 3] = root_pos.to(dev, torch.float32)
+        if root_quat is not None:
+          qpos[ids, q + 3:q + 7] = root_quat.to(dev, torch.float32)
+        if root_lin_vel is not None:
+          qvel[ids, v:v + 3] = root_lin_vel.to(dev, torch.float32)
+        if root_ang_vel is not None:
+          body = frames.quat_rotate_inverse(qpos[ids, q + 3:q + 7], root_ang_vel.to(dev))
+          qvel[ids, v + 3:v + 6] = body.to(torch.float32)
       self._ctrl[ids[:, None], self._act_ids[None, :]] = dof_pos.to(dev, torch.float32)
     self._launch("forward")
     self._snapshot()
@@ -298,8 +321,8 @@ class MjWarpBackend(SimBackend):
     ids = torch.as_tensor(self._ids(env_ids), device=self.device, dtype=torch.long)
     value = coefficient.to(self.device, torch.float32).reshape(-1, 1)
     with self._on_warp_stream():
-      if self._foot_geoms.numel():
-        self._geom_friction[ids[:, None], self._foot_geoms[None, :], 0] = value
+      if self._contact_geoms.numel():
+        self._geom_friction[ids[:, None], self._contact_geoms[None, :], 0] = value
       else:
         self._geom_friction[ids, :, 0] = value
     self._back_to_torch()
@@ -307,7 +330,7 @@ class MjWarpBackend(SimBackend):
   def render(self, env_id: int = 0, width: int = 640, height: int = 480) -> np.ndarray:
     import mujoco
 
-    from .mjbatch import _tracking_camera
+    from rlmcp.backends.mjbatch import _tracking_camera
 
     if self._renderer is None or self._renderer.width != width or self._renderer.height != height:
       self._renderer = mujoco.Renderer(self._model, height, width)
@@ -320,7 +343,7 @@ class MjWarpBackend(SimBackend):
     data.qpos[:] = qpos
     data.qvel[:] = qvel
     mujoco.mj_forward(self._model, data)
-    camera = _tracking_camera(self._model, data, self._layout.base_body)
+    camera = _tracking_camera(self._model, data)
     self._renderer.update_scene(data, camera=camera)
     return np.asarray(self._renderer.render(), dtype=np.uint8)
 

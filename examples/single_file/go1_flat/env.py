@@ -21,9 +21,9 @@ Three things make it steerable from another shell with ``rlmcp``:
 * the environment is a :class:`~rlmcp.adapters.single_file.SingleFileEnv`,
   which names the buffers rlmcp reads and owns the reward loop, so a term an
   agent adds at runtime is scored without this file knowing about it;
-* the simulator is behind ``backends/`` (one directory up, copied next to the
-  task), so ``cfg.backend`` swaps MuJoCo Warp, mjbatch or Genesis without
-  touching anything else here.
+* the simulator is behind :mod:`rlmcp.backends`, one robot-level contract
+  with three simulators behind it, so ``cfg.backend`` swaps MuJoCo Warp,
+  mjbatch or Genesis without touching anything else here.
 
 Run it with ``train.py`` next to this file.
 """
@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,18 +39,14 @@ import torch
 from torch import Tensor
 
 from rlmcp.adapters.single_file import SingleFileEnv
-from rlmcp.declare import Static, Term, term
-
-# backends/ sits next to the tasks that use it, one directory up.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from backends import RobotSpec, SimOptions, make_backend
-from backends.base import gain_for
-from backends.frames import (
-    projected_gravity,
-    quat_from_euler_xyz,
-    quat_rotate_inverse,
-    wrap_to_pi,
+from rlmcp.backends import RobotSpec, SimOptions, make_backend
+from rlmcp.backends.frames import (
+  projected_gravity,
+  quat_from_euler_xyz,
+  quat_rotate_inverse,
+  wrap_to_pi,
 )
+from rlmcp.declare import Static, Term, term
 
 
 def find_go1_xml() -> str:
@@ -93,11 +88,18 @@ class Robot:
       "*_thigh_joint": 0.9, "*_calf_joint": -1.8,
   })
   feet: tuple[str, ...] = ("FR", "FL", "RR", "RL")
-  """Sites at the foot centres: contact force, height and slip are read here."""
+  """Sites at the foot centres: contact force, height and slip are read here.
+  (The backend's own answer would be the four calf bodies, the leaves of the
+  tree; the sites sit at the ball of each foot, which is what the clearance
+  and slip terms want.)"""
   foot_geoms: tuple[str, ...] = (
       "FR_foot_collision", "FL_foot_collision", "RR_foot_collision", "RL_foot_collision")
-  """The geoms that get the foot friction and contact priority."""
-  base: str = "trunk"
+  """The geoms that get mjlab's foot contact tuning and the friction draw."""
+  foot_friction: tuple[float, float, float] = (1.0, 0.005, 0.0001)
+  """mjlab's foot friction (sliding, torsional, rolling), with contact
+  priority so it wins against the floor's."""
+  geom_solref: tuple[float, float] = (0.01, 1.0)
+  """mjlab hardens every collision geom to this."""
   standing_height: float = 0.278
   soft_limit_factor: float = 0.9
   """Joint limits are shrunk to this fraction of their range for the limit
@@ -254,8 +256,13 @@ class Go1FlatEnv(SingleFileEnv):
         stiffness=cfg.robot.stiffness,
         damping=cfg.robot.damping,
         effort_limit=cfg.robot.effort_limit,
-        contact_sites=tuple(cfg.robot.feet),
-        foot_geoms=cfg.robot.foot_geoms,
+        default_joint_pos=cfg.robot.default_joint_pos,
+        contacts=tuple(cfg.robot.feet),
+        contact_geoms=cfg.robot.foot_geoms,
+        contact_friction=cfg.robot.foot_friction,
+        contact_condim=3,
+        contact_priority=1,
+        geom_solref=cfg.robot.geom_solref,
     )
     self.sim = make_backend(
         cfg.backend, robot, cfg.num_envs, dt=cfg.sim.dt,
@@ -268,9 +275,7 @@ class Go1FlatEnv(SingleFileEnv):
     self.num_critic_obs = self.num_obs + 3 * self.num_feet
 
     dev = self.device
-    self.default_dof_pos = torch.tensor(
-        [gain_for(cfg.robot.default_joint_pos, n) for n in self.joint_names],
-        dtype=torch.float32, device=dev)
+    self.default_dof_pos = self.sim.default_dof_pos.to(dev)
     limits = self.sim.dof_limits.to(dev)
     mid, half = (limits[:, 0] + limits[:, 1]) / 2, (limits[:, 1] - limits[:, 0]) / 2
     self.soft_limits = torch.stack(
@@ -343,7 +348,8 @@ class Go1FlatEnv(SingleFileEnv):
     root_pos[:, 2] = cfg.robot.standing_height + _uniform(n, r.reset_z, dev)
     yaw = _uniform(n, (-math.pi, math.pi), dev)
     root_quat = quat_from_euler_xyz(torch.zeros_like(yaw), torch.zeros_like(yaw), yaw)
-    self.sim.reset(env_ids, root_pos, root_quat, self.default_dof_pos.expand(n, -1))
+    self.sim.reset(env_ids, self.default_dof_pos.expand(n, -1),
+                   root_pos=root_pos, root_quat=root_quat)
 
     self.actions[env_ids] = 0.0
     self.last_actions[env_ids] = 0.0

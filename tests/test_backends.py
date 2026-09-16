@@ -15,7 +15,6 @@ minute to compile, so it runs only when ``RLMCP_TEST_GENESIS=1``.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -23,9 +22,15 @@ import pytest
 torch = pytest.importorskip("torch")
 mujoco = pytest.importorskip("mujoco")
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "single_file"))
-from backends import BACKENDS, RobotSpec, SimOptions, available, make_backend  # noqa: E402
-from backends.base import compile_model, gain_for  # noqa: E402
+from rlmcp.backends import (  # noqa: E402
+  BACKENDS,
+  FixedBase,
+  RobotSpec,
+  SimOptions,
+  available,
+  make_backend,
+)
+from rlmcp.backends.base import compile_model, gain_for  # noqa: E402
 
 HOPPER = """
 <mujoco model="hopper">
@@ -66,8 +71,12 @@ def spec(hopper_xml) -> RobotSpec:
       stiffness={"knee": 40.0, "*": 20.0},
       damping=1.0,
       effort_limit=30.0,
-      contact_sites=("foot", "base"),
-      foot_geoms=("foot_geom",),
+      contacts=("foot", "base"),
+      contact_geoms=("foot_geom",),
+      contact_friction=(1.0, 0.005, 0.0001),
+      contact_condim=3,
+      contact_priority=1,
+      geom_solref=(0.01, 1.0),
   )
 
 
@@ -102,7 +111,7 @@ def test_compile_adds_pd_actuators_touch_sensors_and_a_floor(spec):
   assert int(foot.priority[0]) == 1
   assert list(foot.friction) == pytest.approx([1.0, 0.005, 0.0001])
   assert list(foot.solref) == pytest.approx([0.01, 1.0])
-  assert list(layout.foot_geom_ids) == [foot.id]
+  assert list(layout.contact_geom_ids) == [foot.id]
   assert len(layout.contact_site_ids) == 2
   # The file had no floor, so one was added, and the layout says so.
   assert layout.ground_added
@@ -115,7 +124,7 @@ def test_compile_leaves_an_existing_floor_alone(spec, tmp_path):
   with_floor = HOPPER.replace("<worldbody>", '<worldbody><geom type="plane" size="0 0 1"/>')
   path = tmp_path / "floored.xml"
   path.write_text(with_floor)
-  model, layout = compile_model(RobotSpec(xml=str(path), contact_sites=("foot",)))
+  model, layout = compile_model(RobotSpec(xml=str(path), stiffness=20.0, contacts=("foot",)))
   assert not layout.ground_added
   assert sum(int(model.geom_type[g]) == int(mujoco.mjtGeom.mjGEOM_PLANE)
              for g in range(model.ngeom)) == 1
@@ -123,11 +132,131 @@ def test_compile_leaves_an_existing_floor_alone(spec, tmp_path):
 
 def test_a_missing_joint_or_site_is_named(hopper_xml):
   with pytest.raises(KeyError) as excinfo:
-    compile_model(RobotSpec(xml=hopper_xml, joints=("hip", "ankle")))
+    compile_model(RobotSpec(xml=hopper_xml, stiffness=20.0, joints=("hip", "ankle")))
   assert "ankle" in str(excinfo.value)
   with pytest.raises(KeyError) as excinfo:
-    compile_model(RobotSpec(xml=hopper_xml, contact_sites=("toe",)))
+    compile_model(RobotSpec(xml=hopper_xml, stiffness=20.0, contacts=("toe",)))
   assert "toe" in str(excinfo.value)
+
+
+# What is found in the file when the spec says nothing.
+
+ARM = """
+<mujoco model="arm">
+  <compiler angle="radian"/>
+  <option timestep="0.005"/>
+  <worldbody>
+    <light pos="0 0 3"/>
+    <geom type="plane" size="0 0 1"/>
+    <body name="pedestal" pos="0 0 0.1">
+      <geom type="cylinder" size="0.05 0.1" contype="0" conaffinity="0"/>
+      <body name="upper" pos="0 0 0.1">
+        <joint name="shoulder" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.3" size="0.02" mass="0.5"/>
+        <body name="lower" pos="0 0 0.3">
+          <joint name="elbow" type="hinge" axis="0 1 0" range="-2.0 0.0"/>
+          <geom type="capsule" fromto="0 0 0 0 0 0.25" size="0.02" mass="0.3"/>
+          <body name="tip" pos="0 0 0.25">
+            <geom name="tip_geom" type="sphere" size="0.025" mass="0.05"/>
+          </body>
+          <body name="sensor_mount" pos="0.05 0 0.1">
+            <geom type="box" size="0.01 0.01 0.01" contype="0" conaffinity="0"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="shoulder_act" joint="shoulder" kp="30" kv="1.5"
+              forcelimited="true" forcerange="-10 10"/>
+    <position name="elbow_act" joint="elbow" kp="20" kv="1.0"/>
+  </actuator>
+  <keyframe>
+    <key name="home" qpos="0.3 -0.6"/>
+  </keyframe>
+</mujoco>
+"""
+
+
+@pytest.fixture(scope="module")
+def arm_xml(tmp_path_factory) -> str:
+  path = tmp_path_factory.mktemp("arm") / "arm.xml"
+  path.write_text(ARM)
+  return str(path)
+
+
+def test_a_bare_spec_reads_everything_off_the_file(arm_xml):
+  """An arm with its own actuators and a home keyframe needs no declarations."""
+  model, layout = compile_model(RobotSpec(xml=arm_xml))
+  assert layout.joint_names == ["shoulder", "elbow"]
+  assert not layout.floating
+  assert layout.base_qpos == -1
+  # Gains are the file's actuators, not new ones.
+  assert model.nu == 2
+  assert [model.actuator(i).name for i in layout.actuator_ids] == ["shoulder_act", "elbow_act"]
+  # The default pose is the keyframe.
+  assert list(layout.default_dof_pos) == pytest.approx([0.3, -0.6])
+  # The contact is the one leaf body that can collide; the sensor mount cannot.
+  assert layout.contact_names == ["tip"]
+  assert layout.contact_bodies == ["tip"]
+  assert [model.geom(g).name for g in layout.contact_geom_ids] == ["tip_geom"]
+  # The file had a floor, so none was added, and every answer names its source.
+  assert not layout.ground_added
+  told = layout.describe()
+  for phrase in ("every single-dof joint", "from the file's actuators", "keyframe 'home'",
+                 "fixed base", "leaf bodies that can collide"):
+    assert phrase in told, told
+
+
+def test_a_spec_field_overrides_the_file_and_says_so(arm_xml):
+  model, layout = compile_model(RobotSpec(
+      xml=arm_xml, joints=("elbow",), stiffness=50.0, damping=2.0,
+      default_joint_pos={"elbow": -1.0}, contacts=("lower",)))
+  assert layout.joint_names == ["elbow"]
+  assert model.nu == 3, "a new actuator, since the spec's gains win over the file's"
+  assert model.actuator(layout.actuator_ids[0]).gainprm[0] == pytest.approx(50.0)
+  assert list(layout.default_dof_pos) == pytest.approx([-1.0])
+  assert layout.contact_names == ["lower"] and layout.contact_bodies == ["lower"]
+  assert model.site("lower_contact") is not None
+  told = layout.describe()
+  assert "from spec" in told and "1 joints" in told
+
+
+def test_a_joint_without_gains_anywhere_is_refused_by_name(hopper_xml):
+  with pytest.raises(ValueError) as excinfo:
+    compile_model(RobotSpec(xml=hopper_xml))
+  assert "hip" in str(excinfo.value) and "stiffness" in str(excinfo.value)
+
+
+def test_a_missing_keyframe_is_named(arm_xml):
+  with pytest.raises(KeyError) as excinfo:
+    compile_model(RobotSpec(xml=arm_xml, keyframe="standing"))
+  assert "standing" in str(excinfo.value) and "home" in str(excinfo.value)
+
+
+@pytest.mark.skipif(bool(available()["mjbatch"]), reason="needs mjbatch")
+def test_a_fixed_base_robot_runs_without_a_root(arm_xml):
+  sim = make_backend("mjbatch", RobotSpec(xml=arm_xml), num_envs=2, dt=0.005, decimation=4,
+                     device="cpu")
+  try:
+    assert not sim.floating_base
+    assert sim.contact_names == ["tip"]
+    ids = torch.arange(2)
+    sim.reset(ids, sim.default_dof_pos.expand(2, -1))
+    assert torch.allclose(sim.dof_pos, torch.tensor([[0.3, -0.6]] * 2), atol=1e-5)
+    for _ in range(20):
+      sim.set_dof_targets(sim.default_dof_pos.expand(2, -1))
+      sim.step()
+    assert sim.contact_site_pos.shape == (2, 1, 3)
+    assert torch.isfinite(sim.dof_torque).all()
+    with pytest.raises(FixedBase):
+      sim.root_pos  # noqa: B018 - the access is the assertion.
+    with pytest.raises(FixedBase):
+      sim.push(ids, torch.zeros(2, 3), torch.zeros(2, 3))
+    if os.environ.get("MUJOCO_GL"):
+      assert sim.render(0, width=64, height=48).shape == (48, 64, 3)
+  finally:
+    sim.close()
 
 
 def test_the_registry_names_every_backend():
@@ -183,12 +312,14 @@ def test_the_robot_is_described_the_same_way_everywhere(backend):
   assert backend.dof_limits.shape == (2, 2)
   assert backend.dof_limits[1].tolist() == pytest.approx([-1.5, 0.0])
   assert backend.contact_names == ["foot", "base"]
+  assert backend.floating_base
+  assert list(backend.default_dof_pos.cpu()) == pytest.approx([0.0, 0.0])
   assert backend.control_dt == pytest.approx(0.02)
 
 
 def test_reset_puts_the_robot_where_it_was_told(backend):
   ids, pos, quat, dof = _standing(backend, knee=-0.1)
-  backend.reset(ids, pos, quat, dof)
+  backend.reset(ids, dof, root_pos=pos, root_quat=quat)
   assert torch.allclose(backend.root_pos, pos, atol=1e-5)
   assert torch.allclose(backend.root_quat, quat, atol=1e-5)
   assert torch.allclose(backend.dof_pos, dof, atol=1e-5)
@@ -198,7 +329,7 @@ def test_reset_puts_the_robot_where_it_was_told(backend):
 
 def test_stepping_lands_the_foot_and_reports_the_contact(backend):
   ids, pos, quat, dof = _standing(backend)
-  backend.reset(ids, pos, quat, dof)
+  backend.reset(ids, dof, root_pos=pos, root_quat=quat)
   for _ in range(60):
     backend.set_dof_targets(dof)
     backend.step()
@@ -215,13 +346,14 @@ def test_stepping_lands_the_foot_and_reports_the_contact(backend):
 
 def test_a_partial_reset_touches_only_its_envs(backend):
   ids, pos, quat, dof = _standing(backend)
-  backend.reset(ids, pos, quat, dof)
+  backend.reset(ids, dof, root_pos=pos, root_quat=quat)
   for _ in range(20):
     backend.set_dof_targets(dof)
     backend.step()
   settled = backend.root_pos[:, 2].clone()
-  backend.reset(ids[:1], pos[:1] + torch.tensor([0.0, 0.0, 0.3], device=backend.device),
-                quat[:1], dof[:1])
+  backend.reset(ids[:1], dof[:1],
+                root_pos=pos[:1] + torch.tensor([0.0, 0.0, 0.3], device=backend.device),
+                root_quat=quat[:1])
   after = backend.root_pos[:, 2]
   assert after[0].item() == pytest.approx(0.88, abs=1e-4)
   assert torch.allclose(after[1:], settled[1:], atol=1e-6)
@@ -229,7 +361,7 @@ def test_a_partial_reset_touches_only_its_envs(backend):
 
 def test_sites_and_pushes_are_available(backend):
   ids, pos, quat, dof = _standing(backend)
-  backend.reset(ids, pos, quat, dof)
+  backend.reset(ids, dof, root_pos=pos, root_quat=quat)
   feet = backend.contact_site_pos
   assert feet.shape == (3, 2, 3)
   # The foot site hangs 0.55 m under a base at 0.58: just above the floor.
@@ -242,7 +374,7 @@ def test_sites_and_pushes_are_available(backend):
 
 def test_friction_and_frames_are_available(backend):
   ids, pos, quat, dof = _standing(backend)
-  backend.reset(ids, pos, quat, dof)
+  backend.reset(ids, dof, root_pos=pos, root_quat=quat)
   backend.set_friction(ids, torch.full((3,), 0.7, device=backend.device))
   if backend.name != "genesis" and os.environ.get("MUJOCO_GL", "") == "":
     pytest.skip("MuJoCo rendering needs MUJOCO_GL set for this machine")
@@ -264,15 +396,16 @@ def test_mjbatch_and_mjwarp_agree_on_the_go1_if_it_is_here(spec):
     pytest.skip("set MJLAB_GO1_XML to mjlab's go1.xml")
   robot = RobotSpec(xml=xml, stiffness={"*_calf_joint": 35.0, "*": 20.0}, damping=0.5,
                     effort_limit={"*_calf_joint": 35.55, "*": 23.7},
-                    contact_sites=("FR", "FL", "RR", "RL", "trunk"))
+                    contacts=("FR", "FL", "RR", "RL", "trunk"))
   results = {}
   for name, device in (("mjbatch", "cpu"), ("mjwarp", "cuda")):
     sim = make_backend(name, robot, 2, dt=0.005, decimation=4, device=device,
                        options=SimOptions())
     dev = sim.device
     default = torch.tensor([0.1, 0.9, -1.8] * 4, device=dev).expand(2, -1)
-    sim.reset(torch.arange(2, device=dev), torch.tensor([[0.0, 0.0, 0.32]] * 2, device=dev),
-              torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2, device=dev), default)
+    sim.reset(torch.arange(2, device=dev), default,
+              root_pos=torch.tensor([[0.0, 0.0, 0.32]] * 2, device=dev),
+              root_quat=torch.tensor([[1.0, 0.0, 0.0, 0.0]] * 2, device=dev))
     for _ in range(50):
       sim.set_dof_targets(default)
       sim.step()

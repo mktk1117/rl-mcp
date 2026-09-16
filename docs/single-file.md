@@ -233,23 +233,70 @@ Nothing is hand-listed in rlmcp, so a knob added to the config is tunable the
 moment it is declared. An algorithm with no `cfg` declares nothing, and a
 write says so.
 
-## Physics is the file's business
+## Physics: `rlmcp.backends`, or your own
 
 The environment builds whatever simulator it wants and keeps the handle on
-`env.sim`. rlmcp asks it for `render(env_id)` when a frame is wanted, and for
-nothing else; a backend without it gets "frames are not available on it"
-rather than a crash. The live 3-D view (`rlmcp view`) is not offered on this
-family today; clips and screenshots are.
+`env.sim`. The family asks it for `render(env_id)` when a frame is wanted
+and for nothing else; a backend without it gets "frames are not available on
+it" rather than a crash.
 
-The Go1 example runs on three simulators from one file because its physics
-sits behind a small robot-level contract -- root pose and velocity, joint
-state and torque, contact force and position per named site, position
-targets, reset, push -- with MuJoCo Warp, mjbatch and Genesis behind it.
-That contract and those three backends live next to the example, in
-[`examples/single_file/backends/`](../examples/single_file/backends/), as a
-thing a task copies. They are locomotion-shaped (a floating base, feet with
-their own friction) and are not part of rlmcp; a manipulation task writes its
-own or talks to its simulator directly.
+What rlmcp ships for that slot is `rlmcp.backends`: one contract for an
+articulated robot, with MuJoCo Warp, mjbatch and Genesis behind it, so one
+`env.py` runs on all three. The contract knows joints, an optional floating
+base, and contacts -- not legs. A quadruped, an arm on a table and a hand
+are the same thing to it.
+
+```python
+from rlmcp.backends import RobotSpec, make_backend
+
+sim = make_backend("mjwarp", RobotSpec(xml="robot.xml"), num_envs=4096, dt=0.005, decimation=4)
+# [mjwarp] robot.xml: 7 joints (every single-dof joint in the file); gains from the
+# file's actuators; effort limit the file's actuator force ranges; default pose
+# keyframe 'home'; fixed base (no free joint in the file); contacts lf_down, rf_down
+# (leaf bodies that can collide); 22 contact geoms (collision geoms of the contact
+# bodies); floor added
+
+sim.reset(ids, dof_pos=sim.default_dof_pos.expand(n, -1))   # root pose too, on a floating base
+sim.set_dof_targets(targets); sim.step()
+sim.dof_pos, sim.dof_vel, sim.dof_torque
+sim.contact_forces, sim.contact_site_pos                      # (N, n_contacts), (N, n_contacts, 3)
+sim.root_pos, sim.root_quat, sim.root_lin_vel, sim.root_ang_vel   # floating base only
+sim.push(ids, lin_vel, ang_vel)                               # floating base only
+sim.set_friction(ids, coefficient)                            # the contact geoms
+```
+
+Only the MJCF is required. Everything else is found in the file when it is
+there and declared only when it is not, or when the task wants otherwise --
+and the line printed at construction says which was which, so a wrong guess
+is a sentence to read rather than a run to debug:
+
+| what | found as | declare with |
+| --- | --- | --- |
+| actuated joints | every single-dof joint, in model order | `joints=` |
+| PD gains and effort limits | the file's position actuators | `stiffness=`, `damping=`, `effort_limit=` (a number, or `{pattern: number}` by joint name) |
+| default pose | a keyframe named `home`/`init`/`default`/`standing`/`rest`, else the first, else `qpos0` | `default_joint_pos=`, `keyframe=` |
+| floating base | the body carrying the free joint; none means a fixed base | `base_body=` |
+| contacts | the leaf bodies of the tree that can collide: feet, fingertips | `contacts=` (sites or bodies) |
+| contact geoms | the collision geoms of the contact bodies | `contact_geoms=` |
+| a floor | added when the file has no plane or height field | `SimOptions(ground_plane=False)` |
+
+Contact tuning -- `contact_friction`, `contact_condim`, `contact_priority`,
+`geom_solref` -- is left at what the file says unless the task asks; the
+Go1 example asks for mjlab's values. A joint with no gains in either place
+is refused by name with the two ways to supply them. A fixed-base robot
+gets no root state and no pushes; asking raises `FixedBase` with the file's
+name in it.
+
+The MuJoCo backends compile the spec into the model with `MjSpec` -- a
+position actuator per joint the file does not drive, a touch sensor per
+contact, a box site around a body named as a contact -- and Genesis reads
+the same gains and limits off that compiled model, so the three agree by
+construction. `mjbatch` and `mjwarp` are the same physics and agree to
+floating-point noise; Genesis is a different engine. Frames come from
+`mujoco.Renderer` on a CPU copy of one environment for the MuJoCo backends
+(set `MUJOCO_GL`) and from the observing camera the Genesis backend adds
+before it builds its scene. The live 3-D view (`rlmcp view`) is not offered
+on this family today; clips and screenshots are.
 
 ## The example is mjlab's flat Go1 task, term for term
 
@@ -312,7 +359,8 @@ Two findings from earlier versions worth carrying:
 
 ```
 rlmcp/declare.py                     Static, Term, term, terms -- stdlib only
-rlmcp/adapters/single_file/          SingleFileEnv, spec, access, sim adapter,
+rlmcp/adapters/single_file/      the family: SingleFileEnv, providers built from the config tree,
+                                 the adapter, the wrapper with attach_algorithm/service
                                      wrapper, algorithm adapter
 examples/single_file/backends/       RobotSpec, SimBackend, mjwarp, mjbatch, genesis
 examples/single_file/go1_flat/       env.py, ppo.py, train.py -- the worked example

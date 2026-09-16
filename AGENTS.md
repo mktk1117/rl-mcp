@@ -69,6 +69,7 @@ without the variable set; it is a scratch directory, not the records.
 rlmcp/core/          parameters, telemetry, traces, curriculum, controller — no backend
 rlmcp/adapters/      SimAdapter / RunnerAdapter; mjlab/ is the reference implementation;
                      single_file/ is the family for an env.py an agent writes (docs/single-file.md)
+rlmcp/backends/      the physics such an env.py runs on: one robot contract, mjwarp / mjbatch / genesis
 rlmcp/extensions/    capabilities the core does not know about; terrain.py is the model
 rlmcp/records/           the records: plans, outcomes, ancestry, the rendered tree
 rlmcp/server/        the MCP server (imports no simulator, by design)

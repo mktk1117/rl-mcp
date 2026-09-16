@@ -146,7 +146,7 @@ for iteration in range(1, max_iterations + 1):
 The worked example is
 [examples/single_file/go1_flat/](examples/single_file/go1_flat/), mjlab's flat
 Go1 task written out flat and trained on MuJoCo Warp, mjbatch and Genesis
-through the swappable backends that ship next to it; the page is
+through `rlmcp.backends`, one robot contract with three simulators behind it; the page is
 [docs/single-file.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/single-file.md).
 
 ## What you get

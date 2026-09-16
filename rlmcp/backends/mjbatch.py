@@ -21,8 +21,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from . import frames
-from .base import RobotSpec, SimBackend, SimOptions, compile_model
+from rlmcp.backends import frames
+from rlmcp.backends.base import RobotSpec, SimBackend, SimOptions, compile_model
 
 
 class MjBatchBackend(SimBackend):
@@ -57,10 +57,13 @@ class MjBatchBackend(SimBackend):
     self._actuator_force = self._batch.bind("actuator_force")
     self._site_xpos = self._batch.bind("site_xpos")
     self._limits = torch.as_tensor(self._layout.limits, dtype=torch.float32, device=self.device)
+    self._default = torch.as_tensor(
+        self._layout.default_dof_pos, dtype=torch.float32, device=self.device)
     self._renderer: Any = None
     self._render_data: Any = None
     # Every simulation starts at the model's neutral pose; derived fields current.
     self._batch.reset()
+    self.announce(self._layout)
 
   # What the robot is.
 
@@ -71,6 +74,18 @@ class MjBatchBackend(SimBackend):
   @property
   def dof_limits(self) -> Tensor:
     return self._limits
+
+  @property
+  def default_dof_pos(self) -> Tensor:
+    return self._default
+
+  @property
+  def floating_base(self) -> bool:
+    return self._layout.floating
+
+  @property
+  def contact_names(self) -> list[str]:
+    return list(self._layout.contact_names)
 
   @property
   def mj_model(self) -> Any:
@@ -89,21 +104,25 @@ class MjBatchBackend(SimBackend):
 
   @property
   def root_pos(self) -> Tensor:
+    self._require_floating("root_pos")
     q = self._layout.base_qpos
     return self._t(self._qpos[:, q:q + 3])
 
   @property
   def root_quat(self) -> Tensor:
+    self._require_floating("root_quat")
     q = self._layout.base_qpos
     return self._t(self._qpos[:, q + 3:q + 7])
 
   @property
   def root_lin_vel(self) -> Tensor:
+    self._require_floating("root_lin_vel")
     v = self._layout.base_qvel
     return self._t(self._qvel[:, v:v + 3])
 
   @property
   def root_ang_vel(self) -> Tensor:
+    self._require_floating("root_ang_vel")
     v = self._layout.base_qvel
     return frames.quat_rotate(self.root_quat, self._t(self._qvel[:, v + 3:v + 6]))
 
@@ -133,6 +152,7 @@ class MjBatchBackend(SimBackend):
     self._ctrl[:, self._layout.actuator_ids] = targets.detach().cpu().numpy()
 
   def push(self, env_ids: Tensor, lin_vel: Tensor, ang_vel: Tensor) -> None:
+    self._require_floating("push")
     ids = self._ids(env_ids)
     if ids.size == 0:
       return
@@ -151,29 +171,32 @@ class MjBatchBackend(SimBackend):
   def reset(
       self,
       env_ids: Tensor,
-      root_pos: Tensor,
-      root_quat: Tensor,
       dof_pos: Tensor,
       dof_vel: Tensor | None = None,
+      root_pos: Tensor | None = None,
+      root_quat: Tensor | None = None,
       root_lin_vel: Tensor | None = None,
       root_ang_vel: Tensor | None = None,
   ) -> None:
     ids = self._ids(env_ids)
     if ids.size == 0:
       return
-    self._batch.reset(ids)
-    q, v = self._layout.base_qpos, self._layout.base_qvel
-    self._qpos[ids, q:q + 3] = root_pos.detach().cpu().numpy()
-    self._qpos[ids, q + 3:q + 7] = root_quat.detach().cpu().numpy()
+    self._batch.reset(ids)  # Back to the model's spawn pose, velocities zero.
     self._qpos[np.ix_(ids, self._layout.qpos_adr)] = dof_pos.detach().cpu().numpy()
-    self._qvel[ids] = 0.0
     if dof_vel is not None:
       self._qvel[np.ix_(ids, self._layout.qvel_adr)] = dof_vel.detach().cpu().numpy()
-    if root_lin_vel is not None:
-      self._qvel[ids, v:v + 3] = root_lin_vel.detach().cpu().numpy()
-    if root_ang_vel is not None:
-      body = frames.quat_rotate_inverse(root_quat, root_ang_vel)
-      self._qvel[ids, v + 3:v + 6] = body.detach().cpu().numpy()
+    if self._layout.floating:
+      q, v = self._layout.base_qpos, self._layout.base_qvel
+      if root_pos is not None:
+        self._qpos[ids, q:q + 3] = root_pos.detach().cpu().numpy()
+      if root_quat is not None:
+        self._qpos[ids, q + 3:q + 7] = root_quat.detach().cpu().numpy()
+      if root_lin_vel is not None:
+        self._qvel[ids, v:v + 3] = root_lin_vel.detach().cpu().numpy()
+      if root_ang_vel is not None:
+        quat = torch.as_tensor(self._qpos[ids, q + 3:q + 7], dtype=torch.float32, device="cpu")
+        body = frames.quat_rotate_inverse(quat, root_ang_vel.detach().to("cpu", torch.float32))
+        self._qvel[ids, v + 3:v + 6] = body.numpy()
     self._ctrl[np.ix_(ids, self._layout.actuator_ids)] = dof_pos.detach().cpu().numpy()
     self._batch.forward(ids)
 
@@ -182,7 +205,7 @@ class MjBatchBackend(SimBackend):
   def set_friction(self, env_ids: Tensor, coefficient: Tensor) -> None:
     ids = self._ids(env_ids)
     friction = self._batch.expand("geom_friction")
-    geoms = self._layout.foot_geom_ids if self._layout.foot_geom_ids.size \
+    geoms = self._layout.contact_geom_ids if self._layout.contact_geom_ids.size \
         else np.arange(friction.shape[1])
     friction[ids[:, None], geoms[None, :], 0] = coefficient.detach().cpu().numpy().reshape(-1, 1)
     self._batch.set_const(ids)
@@ -197,7 +220,7 @@ class MjBatchBackend(SimBackend):
     data.qpos[:] = self._qpos[int(env_id)]
     data.qvel[:] = self._qvel[int(env_id)]
     mujoco.mj_forward(self._model, data)
-    camera = _tracking_camera(self._model, data, self._layout.base_body)
+    camera = _tracking_camera(self._model, data)
     self._renderer.update_scene(data, camera=camera)
     return np.asarray(self._renderer.render(), dtype=np.uint8)
 
@@ -207,14 +230,13 @@ class MjBatchBackend(SimBackend):
     self._renderer = None
 
 
-def _tracking_camera(model: Any, data: Any, base_body: str) -> Any:
-  """A free camera looking at the base from a little behind and above."""
+def _tracking_camera(model: Any, data: Any) -> Any:
+  """A free camera looking at the robot's centre of mass from behind and above."""
   import mujoco
 
   camera = mujoco.MjvCamera()
   camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-  base = data.xpos[model.body(base_body).id]
-  camera.lookat[:] = base
+  camera.lookat[:] = data.subtree_com[0]
   camera.distance = 1.6
   camera.azimuth = 135.0
   camera.elevation = -20.0

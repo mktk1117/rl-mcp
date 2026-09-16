@@ -218,11 +218,13 @@ rlmcp/adapters/single_file/      SingleFileEnv, providers built from the config
                                  attach_algorithm/service, the algorithm adapter
 ```
 
-The physics is not the family's business: `env.sim` is whatever the file
-built, and rlmcp asks it only for `render(env_id)`. The swappable MuJoCo Warp
-/ mjbatch / Genesis backends the Go1 example runs on live next to it under
-`examples/single_file/backends/`, as a thing a task copies, not a thing this
-package ships.
+`rlmcp/backends/` is the physics an `env.py` can run on: `RobotSpec` plus
+one robot-level contract -- joints, an optional floating base, contacts --
+with MuJoCo Warp, mjbatch and Genesis behind it. Only the MJCF is required;
+joints, gains, the default pose, the base and the contacts are read off the
+file and reported at construction, and a spec field overrides any of them.
+It knows nothing about legs, which is what makes it a library component
+rather than a thing a task copies.
 
 ## Tests
 

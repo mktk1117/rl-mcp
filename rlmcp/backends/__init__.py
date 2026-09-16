@@ -1,38 +1,42 @@
-"""Physics backends a single-file environment can run on, interchangeably.
+"""Physics backends an articulated robot can run on, interchangeably.
 
 ::
 
-    from backends import RobotSpec, make_backend
+    from rlmcp.backends import RobotSpec, make_backend
 
-    robot = RobotSpec(xml="robot.xml", stiffness=20.0, damping=0.5,
-                      contact_sites=("foot_left", "foot_right", "base"))
-    sim = make_backend("mjwarp", robot, num_envs=4096, dt=0.005, decimation=4)
+    sim = make_backend("mjwarp", RobotSpec(xml="robot.xml"),
+                       num_envs=4096, dt=0.005, decimation=4)
+    # [mjwarp] robot.xml: 7 joints (every single-dof joint in the file); gains
+    # from the file's actuators; ... contacts lf_down, rf_down (leaf bodies
+    # that can collide); ...
 
-    sim.reset(ids, root_pos, root_quat, dof_pos)
+    sim.reset(ids, dof_pos=sim.default_dof_pos.expand(n, -1))
     sim.set_dof_targets(targets)
     sim.step()
-    sim.root_pos, sim.dof_pos, sim.contact_forces, ...
+    sim.dof_pos, sim.contact_forces, sim.root_pos (floating base only), ...
 
-``"mjwarp"`` (MuJoCo Warp, GPU), ``"mjbatch"`` (C MuJoCo on CPU threads) and
-``"genesis"`` answer to the same :class:`~backends.base.SimBackend`
-contract; see that module for the vocabulary and the frame conventions.
-Nothing here imports a simulator until a backend is constructed, so the
-name of one you do not have is a reason, not a traceback.
+Only the MJCF is required: joints, gains, the default pose, the base and
+the contacts are read off the file and reported, and a spec field overrides
+any of them. ``"mjwarp"`` (MuJoCo Warp, GPU), ``"mjbatch"`` (C MuJoCo on CPU
+threads) and ``"genesis"`` answer to the same
+:class:`~rlmcp.backends.base.SimBackend` contract; see that module for the
+vocabulary and the frame conventions. Nothing here imports a simulator until
+a backend is constructed, so the name of one you do not have is a reason,
+not a traceback.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .base import RobotSpec, SimBackend, SimOptions
+from rlmcp.backends.base import FixedBase, RobotSpec, SimBackend, SimOptions
 
 BACKENDS: dict[str, tuple[str, str]] = {
-    "mjwarp": (".mjwarp", "MjWarpBackend"),
-    "mjbatch": (".mjbatch", "MjBatchBackend"),
-    "genesis": (".genesis", "GenesisBackend"),
+    "mjwarp": ("rlmcp.backends.mjwarp", "MjWarpBackend"),
+    "mjbatch": ("rlmcp.backends.mjbatch", "MjBatchBackend"),
+    "genesis": ("rlmcp.backends.genesis", "GenesisBackend"),
 }
-"""Backend name -> (module, class), relative to this package so it can be
-copied next to any task. Adding one is a line here."""
+"""Backend name -> (module, class). Adding one is a line here."""
 
 
 def backend_class(name: str) -> type[SimBackend]:
@@ -46,7 +50,7 @@ def backend_class(name: str) -> type[SimBackend]:
     raise KeyError(
         f"No backend '{name}'. Available: {sorted(BACKENDS)}"
     ) from None
-  module = importlib.import_module(module_name, package=__package__)
+  module = importlib.import_module(module_name)
   return getattr(module, class_name)
 
 
@@ -74,6 +78,7 @@ def available() -> dict[str, str]:
 
 __all__ = [
     "BACKENDS",
+    "FixedBase",
     "RobotSpec",
     "SimBackend",
     "SimOptions",
