@@ -109,6 +109,62 @@ configs, the same walk it uses on mjlab. The example script is
 differ — cameras, the robot's name, which Isaac Sim goes with which driver — are
 in [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab.md).
 
+### The same one call on a single-file `env.py`
+
+Not every task is manager-based. A single-file environment keeps its config
+in one dataclass at the top of `env.py` and writes `step()` out below it — the
+shape an agent can read top to bottom. It is built from four blocks
+(`rlmcp.adapters.single_file.blocks`): the declared config, the variables `step()` writes, the
+observation pipes, and one method per reward term. rlmcp serves every
+parameter in the first and third, traces every variable in the second, and
+weights the fourth, on whatever physics the file uses.
+
+```python
+from rlmcp.adapters.single_file.blocks import Noise, Obs, Static, Term, Variables, term, variable
+from rlmcp.adapters.single_file import SingleFileEnv
+import rlmcp.adapters.single_file as rlmcp_single_file
+
+@dataclass
+class Rewards:
+  tracking_lin_vel: Term = term(2.0, sigma=0.5)   # reward.tracking_lin_vel.weight
+  action_rate: Term = term(-0.1)
+
+@dataclass
+class EnvConfig:
+  num_envs: Static[int] = 4096                     # refused live, with the reason
+  action_scale: float = 0.25                       # env.action_scale, live
+  reward: Rewards = field(default_factory=Rewards)
+
+class State(Variables):                                 # every variable step() writes: traced
+  base_lin_vel: Tensor = variable(3)
+  joint_pos: Tensor = variable("joint")
+  command: Tensor = variable(("lin_vel_x", "lin_vel_y", "ang_vel_z"))
+
+class MyEnv(SingleFileEnv):
+  def __init__(self, cfg):
+    self.state = State(cfg.num_envs, "cuda", joint=joint_names)
+    self.actor_obs = Obs(                          # actor_obs.joint_pos.uniform_noise.half_width
+        base_lin_vel=("base_lin_vel", UniformNoise(0.5)),
+        joint_pos=("joint_pos", UniformNoise(0.01)),
+        command="command")
+  def tracking_lin_vel(self, sigma): ...           # one method per reward term
+  def action_rate(self): ...
+  def reset(self, env_ids=None): ...
+  def step(self, actions): ...
+
+env = rlmcp_single_file.wrap(MyEnv(EnvConfig()), session_dir=log_dir / "rlmcp")
+env.attach_algorithm(ppo)                          # rl.* knobs from ppo.cfg, checkpoints
+for iteration in range(1, max_iterations + 1):
+  ...                                              # your loop, written out
+  env.service(iteration, metrics=losses)           # edits land here
+```
+
+The worked example is
+[examples/single_file/go1_flat/](examples/single_file/go1_flat/), mjlab's flat
+Go1 task written out flat and trained on MuJoCo Warp, mjbatch and Genesis
+through `rlmcp.backends`, one robot contract with three simulators behind it; the page is
+[docs/single-file.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/single-file.md).
+
 ## What you get
 
 | | |
@@ -226,6 +282,7 @@ afterwards.
 | [docs/curriculum.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/curriculum.md) | Writing the stage ladder. |
 | [docs/extensions.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/extensions.md) | Teaching rlmcp your task's vocabulary. |
 | [docs/isaaclab.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/isaaclab.md) | Driving an IsaacLab run: the one line, cameras, what differs from mjlab. |
+| [docs/single-file.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/single-file.md) | Writing and driving a single-file `env.py`: when to choose it, the `SingleFileEnv` contract, the declared config and algorithm, the loop's two lines. |
 | [docs/records.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/records.md) | Hypotheses, verdicts, feedback, code snapshots, the record graph. |
 | [docs/design.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/design.md) | How it fits together, how parameters are found, other simulators. |
 | [docs/style.md](https://github.com/mktk1117/rl-mcp/blob/main/docs/style.md) | The style guide: two spaces, what ruff checks, and why each rule is on or off. |

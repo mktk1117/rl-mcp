@@ -192,7 +192,8 @@ def test_the_real_backend_table_covers_every_simulator():
   general rule against the adapter packages on disk; this pins the order and
   the exact membership.
   """
-  assert [spec["backend"] for spec in tasks.BACKENDS] == ["mjlab", "isaaclab", "genesis"]
+  assert [spec["backend"] for spec in tasks.BACKENDS] == [
+      "mjlab", "isaaclab", "genesis", "single_file"]
   for spec in tasks.BACKENDS:
     assert callable(spec["ids"]) and callable(spec["describe"])
 

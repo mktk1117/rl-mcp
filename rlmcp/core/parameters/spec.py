@@ -16,6 +16,7 @@ class ParameterCategory(str, Enum):
   PHYSICS = "physics"
   ACTION = "action"
   TERMINATION = "termination"
+  OBSERVATION = "observation"
   OTHER = "other"
 
 

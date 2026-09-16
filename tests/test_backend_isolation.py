@@ -24,7 +24,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 SIMULATORS = ("mjlab", "genesis", "isaaclab", "isaacsim", "viser", "mjviser")
-"""Everything rlmcp can drive or draw with, and nothing it requires."""
+"""Everything rlmcp can drive or draw with, and nothing it requires. The
+single-file family's physics is not here: it is the script's own business,
+and the family needs torch and nothing else."""
 
 BLOCKER = f"""
 import sys
@@ -139,9 +141,17 @@ def test_an_absent_backend_is_a_reason_not_a_crash():
   done = in_a_bare_install("""
       from rlmcp.tasks import registered
       reply = registered()
+      import importlib.util
       rows = {row["backend"]: row for row in reply["backends"]}
       assert rows, "no backend rows at all"
+      have_torch = importlib.util.find_spec("torch") is not None
       for name, row in rows.items():
+        if name == "single_file":
+          # Needs torch and nothing else: the physics is the script's own.
+          assert row["available"] is have_torch, (row, have_torch)
+          if not have_torch:
+            assert "not installed" in row["reason"], row["reason"]
+          continue
         assert row["available"] is False, f"{name} claims to be available"
         assert "not installed" in row["reason"], (name, row["reason"])
       assert reply["tasks"] == []

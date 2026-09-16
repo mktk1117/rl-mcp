@@ -200,6 +200,36 @@ which is the number to expect for a third.
 Anything your simulator has and others do not belongs in an
 [Extension](extensions.md), not in the adapter contract.
 
+### The single-file family
+
+A third family is not manager-based at all: an `env.py` whose config is one
+dataclass at the top of the file and whose `step()` is written out below it.
+It is driven the same way because the file is built from blocks that
+*declare* what the managers would otherwise have told us -- `Static[...]`
+for a value read once at construction, `term(...)` for a reward term named
+after a method, a `Variables` container for every variable `step()` writes, `Obs`
+groups whose pipe stages (`UniformNoise`, `Delay`, ...) are dataclasses and so
+parameters, a `cfg` dataclass on the algorithm for its knobs -- and inherits
+`SingleFileEnv`, which owns the reward loop. [single-file.md](single-file.md)
+is the page for it.
+
+```
+rlmcp/declare.py                 the two config markers; stdlib only, detected by shape
+rlmcp/adapters/single_file/blocks.py   Variables, Obs and the pipe stages, Pipe; torch only
+rlmcp/adapters/single_file/      SingleFileEnv, providers built from the config
+                                 tree and the blocks, the state sampler, the
+                                 adapter, the wrapper with attach_algorithm/service,
+                                 the algorithm adapter
+```
+
+`rlmcp/backends/` is the physics an `env.py` can run on: `RobotSpec` plus
+one robot-level contract -- joints, an optional floating base, contacts --
+with MuJoCo Warp, mjbatch and Genesis behind it. Only the MJCF is required;
+joints, gains, the default pose, the base and the contacts are read off the
+file and reported at construction, and a spec field overrides any of them.
+It knows nothing about legs, which is what makes it a library component
+rather than a thing a task copies.
+
 ## Tests
 
 ```bash
